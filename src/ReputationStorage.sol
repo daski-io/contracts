@@ -1,0 +1,490 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {IdentityRegistry} from "./IdentityRegistry.sol";
+import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
+import {IEAS, Attestation} from "./interfaces/IEAS.sol";
+import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
+
+/// @notice Daski-specific bilateral reputation aggregator. Rather than store
+///         per-transaction signals in this contract directly (as an earlier
+///         version did), this contract now lives as an **EAS schema resolver**.
+///         EAS is the source of truth for every individual outcome /
+///         confirmation attestation, and this contract maintains the
+///         aggregate counters (per-provider, per-buyer) the rest of the Daski
+///         stack reads for discovery ranking.
+///
+/// Per the Daski whitepaper §Reputation: "Per-transaction signals are stored
+/// as attestations via the Ethereum Attestation Service (EAS)." EAS calls
+/// `onAttest`/`onRevoke` on this resolver for every attestation against the
+/// Daski schemas; the resolver decodes the payload, enforces Daski-specific
+/// auth (provider agent vs. buyer agent from the IdentityRegistry), and
+/// updates counters. The resolver still exposes `recordRefund` so the
+/// PaymentRouter's best-effort refund mirror keeps working unchanged.
+///
+/// Two schemas are registered against this resolver:
+///   * `outcome`:        (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime)
+///                       — provider-attested, one-shot per paymentId.
+///   * `confirmation`:   (uint256 paymentId, uint8 confirmation)
+///                       — buyer-attested, revisions allowed via EAS refUID;
+///                         resolver rebalances counters on each revision.
+///
+/// Reads (`getRecord`, `getProviderStats`, `getBuyerStats`, `getRefundedAmount`)
+/// preserve the exact shape the pre-EAS version exposed so the off-chain
+/// gateway / provider read paths remain a drop-in.
+contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
+    enum TransactionOutcome {
+        Completed,
+        Failed,
+        Canceled
+    }
+
+    /// @notice Binary confirmation (Pending was removed in the EAS migration —
+    ///         absence of an attestation IS pending). Kept at the same ordinal
+    ///         values as before so downstream callers don't have to re-map.
+    enum BuyerConfirmation {
+        Pending,
+        Confirmed,
+        NotConfirmed
+    }
+
+    struct ReputationRecord {
+        uint256 paymentId;
+        uint256 providerAgentId;
+        uint256 buyerAgentId;
+        TransactionOutcome outcome;
+        BuyerConfirmation confirmation;
+        uint256 fulfillmentTime;
+        uint256 outcomeTimestamp;
+        uint256 confirmationTimestamp;
+        bool outcomeRecorded;
+    }
+
+    // ── Storage layout (preserved order — UUPS upgrade safety) ──────────
+
+    mapping(uint256 => ReputationRecord) public _records;
+    uint256[] public recordIds;
+
+    // Per-provider aggregate counters
+    mapping(uint256 => uint256) public completedCount;
+    mapping(uint256 => uint256) public failedCount;
+    mapping(uint256 => uint256) public canceledCount;
+    mapping(uint256 => uint256) public confirmedCount;
+    mapping(uint256 => uint256) public notConfirmedCount;
+
+    // Per-buyer aggregate counters
+    mapping(uint256 => uint256) public buyerConfirmedCount;
+    mapping(uint256 => uint256) public buyerNotConfirmedCount;
+    mapping(uint256 => uint256) public buyerTransactionCount;
+
+    address public admin;
+    address public pendingAdmin;
+    IdentityRegistry public identity;
+    IPaymentRouter public paymentRouter;
+
+    /// @notice Cumulative refund amount per paymentId, recorded by the
+    ///         PaymentRouter when a provider issues a refund.
+    mapping(uint256 => uint256) public refundedAmount;
+
+    // ── EAS wiring (appended at the end to preserve storage slots) ──────
+
+    /// @notice The EAS contract authorized to invoke `attest` / `revoke`
+    ///         on this resolver. On Base (and Base Sepolia) this is the
+    ///         canonical deploy at 0x4200000000000000000000000000000000000021.
+    IEAS public eas;
+
+    /// @notice EAS schema UID for the outcome schema
+    ///         (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime).
+    bytes32 public outcomeSchema;
+
+    /// @notice EAS schema UID for the buyer confirmation schema
+    ///         (uint256 paymentId, uint8 confirmation).
+    bytes32 public confirmationSchema;
+
+    /// @notice Maps a confirmation attestation UID to the confirmation value
+    ///         the resolver credited to the counters. Used when a later
+    ///         revision references this UID via `refUID` so we can decrement
+    ///         the old counter before incrementing the new one.
+    mapping(bytes32 => BuyerConfirmation) public confirmationByUid;
+
+    /// @notice Maps a confirmation attestation UID to the paymentId it was
+    ///         credited against. Required so a revision (refUID-linked
+    ///         attestation) can be bound to the same paymentId — without
+    ///         this, a malicious buyer could reference an unrelated
+    ///         confirmation UID and corrupt another provider's counters
+    ///         while orphaning the legitimate UID.
+    mapping(bytes32 => uint256) public paymentIdByUid;
+
+    // ── Events ──────────────────────────────────────────────────────────
+
+    event OutcomeRecorded(
+        uint256 indexed paymentId,
+        uint256 indexed providerAgentId,
+        uint256 indexed buyerAgentId,
+        TransactionOutcome outcome,
+        uint256 fulfillmentTime,
+        bytes32 attestationUid
+    );
+
+    event BuyerConfirmationSubmitted(
+        uint256 indexed paymentId,
+        uint256 indexed providerAgentId,
+        uint256 indexed buyerAgentId,
+        BuyerConfirmation confirmation,
+        bytes32 attestationUid,
+        bytes32 refUid
+    );
+
+    event ReputationRefunded(uint256 indexed paymentId, uint256 amountToBuyer, uint256 cumulativeRefunded);
+
+    event PaymentRouterUpdated(address indexed oldRouter, address indexed newRouter);
+    event EASUpdated(address indexed oldEAS, address indexed newEAS);
+    event OutcomeSchemaUpdated(bytes32 indexed oldSchema, bytes32 indexed newSchema);
+    event ConfirmationSchemaUpdated(bytes32 indexed oldSchema, bytes32 indexed newSchema);
+
+    // ── Modifiers ───────────────────────────────────────────────────────
+
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "not admin");
+        _;
+    }
+
+    modifier onlyPaymentRouter() {
+        require(msg.sender == address(paymentRouter), "not payment router");
+        _;
+    }
+
+    modifier onlyEAS() {
+        require(msg.sender == address(eas), "not EAS");
+        _;
+    }
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _identity, address _paymentRouter, address _admin) external initializer {
+        require(_identity != address(0), "zero identity");
+        require(_paymentRouter != address(0), "zero router");
+        require(_admin != address(0), "zero admin");
+        identity = IdentityRegistry(_identity);
+        paymentRouter = IPaymentRouter(_paymentRouter);
+        admin = _admin;
+    }
+
+    // ── ISchemaResolver ─────────────────────────────────────────────────
+
+    /// @inheritdoc ISchemaResolver
+    function isPayable() external pure override returns (bool) {
+        return false;
+    }
+
+    /// @inheritdoc ISchemaResolver
+    function attest(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
+        _handleAttest(attestation);
+        return true;
+    }
+
+    /// @inheritdoc ISchemaResolver
+    function multiAttest(
+        Attestation[] calldata attestations,
+        uint256[] calldata /* values */
+    )
+        external
+        payable
+        override
+        onlyEAS
+        returns (bool)
+    {
+        for (uint256 i = 0; i < attestations.length; i++) {
+            _handleAttest(attestations[i]);
+        }
+        return true;
+    }
+
+    /// @inheritdoc ISchemaResolver
+    function revoke(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
+        _handleRevoke(attestation);
+        return true;
+    }
+
+    /// @inheritdoc ISchemaResolver
+    function multiRevoke(
+        Attestation[] calldata attestations,
+        uint256[] calldata /* values */
+    )
+        external
+        payable
+        override
+        onlyEAS
+        returns (bool)
+    {
+        for (uint256 i = 0; i < attestations.length; i++) {
+            _handleRevoke(attestations[i]);
+        }
+        return true;
+    }
+
+    // ── Internal routing ────────────────────────────────────────────────
+
+    function _handleAttest(Attestation calldata a) internal {
+        if (a.schema == outcomeSchema) {
+            _onOutcomeAttest(a);
+        } else if (a.schema == confirmationSchema) {
+            _onConfirmationAttest(a);
+        } else {
+            revert("unknown schema");
+        }
+    }
+
+    function _handleRevoke(Attestation calldata a) internal {
+        if (a.schema == confirmationSchema) {
+            _onConfirmationRevoke(a);
+        } else if (a.schema == outcomeSchema) {
+            // Outcomes are one-shot and historically final. Reject revocation
+            // to preserve monotonic counters and deter accidental state loss.
+            revert("outcomes are not revocable");
+        } else {
+            revert("unknown schema");
+        }
+    }
+
+    // ── Outcome logic ───────────────────────────────────────────────────
+
+    function _onOutcomeAttest(Attestation calldata a) internal {
+        (uint256 paymentId, uint8 outcomeRaw, uint256 fulfillmentTime) = abi.decode(a.data, (uint256, uint8, uint256));
+        require(outcomeRaw <= uint8(TransactionOutcome.Canceled), "bad outcome");
+        TransactionOutcome outcome = TransactionOutcome(outcomeRaw);
+
+        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+
+        uint256 attesterAgentId = identity.agentOfWallet(a.attester);
+        require(attesterAgentId != 0, "no identity");
+        require(attesterAgentId == payment.providerAgentId, "not provider for this payment");
+
+        ReputationRecord storage record = _records[paymentId];
+        require(!record.outcomeRecorded, "outcome already recorded");
+
+        // Lazy record creation — may have been partially created by buyer.
+        if (record.paymentId == 0) {
+            record.paymentId = paymentId;
+            record.providerAgentId = payment.providerAgentId;
+            record.buyerAgentId = payment.buyerAgentId;
+            recordIds.push(paymentId);
+        }
+
+        record.outcome = outcome;
+        record.fulfillmentTime = fulfillmentTime;
+        record.outcomeTimestamp = block.timestamp;
+        record.outcomeRecorded = true;
+
+        if (outcome == TransactionOutcome.Completed) {
+            completedCount[payment.providerAgentId]++;
+        } else if (outcome == TransactionOutcome.Failed) {
+            failedCount[payment.providerAgentId]++;
+        } else {
+            canceledCount[payment.providerAgentId]++;
+        }
+
+        buyerTransactionCount[payment.buyerAgentId]++;
+
+        emit OutcomeRecorded(paymentId, payment.providerAgentId, payment.buyerAgentId, outcome, fulfillmentTime, a.uid);
+    }
+
+    // ── Confirmation logic (with revision rebalance) ────────────────────
+
+    function _onConfirmationAttest(Attestation calldata a) internal {
+        (uint256 paymentId, uint8 confirmationRaw) = abi.decode(a.data, (uint256, uint8));
+        require(
+            confirmationRaw == uint8(BuyerConfirmation.Confirmed)
+                || confirmationRaw == uint8(BuyerConfirmation.NotConfirmed),
+            "binary confirmation only"
+        );
+        BuyerConfirmation confirmation = BuyerConfirmation(confirmationRaw);
+
+        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+
+        uint256 attesterAgentId = identity.agentOfWallet(a.attester);
+        require(attesterAgentId != 0, "no identity");
+        require(attesterAgentId == payment.buyerAgentId, "not buyer for this payment");
+
+        ReputationRecord storage record = _records[paymentId];
+        if (record.paymentId == 0) {
+            record.paymentId = paymentId;
+            record.providerAgentId = payment.providerAgentId;
+            record.buyerAgentId = payment.buyerAgentId;
+            recordIds.push(paymentId);
+        }
+
+        // Revision path: if `refUID` is set, it MUST point at a confirmation
+        // we previously credited *for the same paymentId*. Without the
+        // paymentId binding, a malicious buyer could reference an unrelated
+        // confirmation UID — the resolver would then decrement the wrong
+        // provider/buyer counters and orphan the referenced UID, blocking
+        // legitimate revisions and revocations.
+        if (a.refUID != bytes32(0)) {
+            require(a.refUID != a.uid, "self refUID");
+            BuyerConfirmation old = confirmationByUid[a.refUID];
+            require(old != BuyerConfirmation.Pending, "refUID is not a tracked confirmation");
+            require(paymentIdByUid[a.refUID] == paymentId, "refUID belongs to different payment");
+            if (old == BuyerConfirmation.Confirmed) {
+                confirmedCount[payment.providerAgentId]--;
+                buyerConfirmedCount[payment.buyerAgentId]--;
+            } else {
+                notConfirmedCount[payment.providerAgentId]--;
+                buyerNotConfirmedCount[payment.buyerAgentId]--;
+            }
+            // Clear the mapping so the old UID can't be used as a refUID
+            // again (prevents a double-decrement attack via a chain that
+            // branches off an already-superseded confirmation).
+            delete confirmationByUid[a.refUID];
+            delete paymentIdByUid[a.refUID];
+        } else {
+            // First-time confirmation — require there is no confirmation yet.
+            require(record.confirmation == BuyerConfirmation.Pending, "must ref prior confirmation");
+        }
+
+        record.confirmation = confirmation;
+        record.confirmationTimestamp = block.timestamp;
+
+        if (confirmation == BuyerConfirmation.Confirmed) {
+            confirmedCount[payment.providerAgentId]++;
+            buyerConfirmedCount[payment.buyerAgentId]++;
+        } else {
+            notConfirmedCount[payment.providerAgentId]++;
+            buyerNotConfirmedCount[payment.buyerAgentId]++;
+        }
+
+        confirmationByUid[a.uid] = confirmation;
+        paymentIdByUid[a.uid] = paymentId;
+
+        emit BuyerConfirmationSubmitted(
+            paymentId, payment.providerAgentId, payment.buyerAgentId, confirmation, a.uid, a.refUID
+        );
+    }
+
+    function _onConfirmationRevoke(Attestation calldata a) internal {
+        // Revocation of a confirmation without a superseding attestation: if
+        // we still credit this UID, decrement. If the UID was already
+        // superseded by a revision, nothing to do.
+        BuyerConfirmation old = confirmationByUid[a.uid];
+        if (old == BuyerConfirmation.Pending) return;
+
+        // Use the paymentId we recorded for this UID rather than re-decoding
+        // a.data — the recorded mapping is authoritative for what we
+        // credited, and using it keeps the revoke handler symmetric with the
+        // attest handler.
+        uint256 paymentId = paymentIdByUid[a.uid];
+        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+
+        if (old == BuyerConfirmation.Confirmed) {
+            confirmedCount[payment.providerAgentId]--;
+            buyerConfirmedCount[payment.buyerAgentId]--;
+        } else {
+            notConfirmedCount[payment.providerAgentId]--;
+            buyerNotConfirmedCount[payment.buyerAgentId]--;
+        }
+        delete confirmationByUid[a.uid];
+        delete paymentIdByUid[a.uid];
+
+        ReputationRecord storage record = _records[paymentId];
+        // If the revoked attestation was the *current* confirmation on the
+        // record, roll back the record too so `getRecord` reflects reality.
+        if (record.confirmation == old) {
+            record.confirmation = BuyerConfirmation.Pending;
+            record.confirmationTimestamp = 0;
+        }
+    }
+
+    // ── Refund mirror (unchanged external shape) ────────────────────────
+
+    /// @notice Called by the PaymentRouter when a provider refunds (partial
+    ///         or full). Aggregates into `refundedAmount[paymentId]`.
+    function recordRefund(uint256 paymentId, uint256 amountToBuyer) external onlyPaymentRouter {
+        uint256 cumulative = refundedAmount[paymentId] + amountToBuyer;
+        refundedAmount[paymentId] = cumulative;
+        emit ReputationRefunded(paymentId, amountToBuyer, cumulative);
+    }
+
+    // ── Views (preserved signatures) ────────────────────────────────────
+
+    function getRecord(uint256 paymentId) external view returns (ReputationRecord memory) {
+        return _records[paymentId];
+    }
+
+    function getRefundedAmount(uint256 paymentId) external view returns (uint256) {
+        return refundedAmount[paymentId];
+    }
+
+    function getProviderStats(uint256 providerAgentId)
+        external
+        view
+        returns (uint256 completed, uint256 failed, uint256 canceled, uint256 confirmed, uint256 notConfirmed_)
+    {
+        completed = completedCount[providerAgentId];
+        failed = failedCount[providerAgentId];
+        canceled = canceledCount[providerAgentId];
+        confirmed = confirmedCount[providerAgentId];
+        notConfirmed_ = notConfirmedCount[providerAgentId];
+    }
+
+    function getBuyerStats(uint256 buyerAgentId)
+        external
+        view
+        returns (uint256 transactions, uint256 confirmed, uint256 notConfirmed_)
+    {
+        transactions = buyerTransactionCount[buyerAgentId];
+        confirmed = buyerConfirmedCount[buyerAgentId];
+        notConfirmed_ = buyerNotConfirmedCount[buyerAgentId];
+    }
+
+    // ── Admin ───────────────────────────────────────────────────────────
+
+    function transferAdmin(address newAdmin) external onlyAdmin {
+        pendingAdmin = newAdmin;
+    }
+
+    function acceptAdmin() external {
+        require(msg.sender == pendingAdmin, "not pending admin");
+        admin = pendingAdmin;
+        pendingAdmin = address(0);
+    }
+
+    function setPaymentRouter(address newRouter) external onlyAdmin {
+        require(newRouter != address(0), "zero router");
+        address oldRouter = address(paymentRouter);
+        paymentRouter = IPaymentRouter(newRouter);
+        emit PaymentRouterUpdated(oldRouter, newRouter);
+    }
+
+    function setEAS(address newEAS) external onlyAdmin {
+        require(newEAS != address(0), "zero eas");
+        address oldEAS = address(eas);
+        eas = IEAS(newEAS);
+        emit EASUpdated(oldEAS, newEAS);
+    }
+
+    function setOutcomeSchema(bytes32 newSchema) external onlyAdmin {
+        require(newSchema != bytes32(0), "zero schema");
+        bytes32 oldSchema = outcomeSchema;
+        outcomeSchema = newSchema;
+        emit OutcomeSchemaUpdated(oldSchema, newSchema);
+    }
+
+    function setConfirmationSchema(bytes32 newSchema) external onlyAdmin {
+        require(newSchema != bytes32(0), "zero schema");
+        bytes32 oldSchema = confirmationSchema;
+        confirmationSchema = newSchema;
+        emit ConfirmationSchemaUpdated(oldSchema, newSchema);
+    }
+
+    function _authorizeUpgrade(address) internal override onlyAdmin {}
+
+    // @dev receive() for EAS `isPayable` legacy — we return false from
+    //      isPayable() so EAS won't forward value, but leaving this absent
+    //      means any accidental value-carrying attest() reverts on the
+    //      resolver's `payable` call. That's fine.
+}
