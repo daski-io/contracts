@@ -208,14 +208,20 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         return identityRegistry.ownerOf(agentId);
     }
 
+    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
     function transferAdmin(address newAdmin) external onlyAdmin {
         pendingAdmin = newAdmin;
+        emit AdminTransferStarted(admin, newAdmin);
     }
 
     function acceptAdmin() external {
         require(msg.sender == pendingAdmin, "not pending admin");
+        address oldAdmin = admin;
         admin = pendingAdmin;
         pendingAdmin = address(0);
+        emit AdminTransferred(oldAdmin, admin);
     }
 
     function _authorizeUpgrade(address) internal override onlyAdmin {}

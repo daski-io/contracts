@@ -415,6 +415,12 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         return _records[paymentId];
     }
 
+    /// @notice Number of paymentIds that have a reputation record. Pair with
+    ///         the auto-generated `recordIds(uint256)` getter to enumerate.
+    function getRecordCount() external view returns (uint256) {
+        return recordIds.length;
+    }
+
     function getRefundedAmount(uint256 paymentId) external view returns (uint256) {
         return refundedAmount[paymentId];
     }
@@ -443,14 +449,20 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
     // ── Admin ───────────────────────────────────────────────────────────
 
+    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
     function transferAdmin(address newAdmin) external onlyAdmin {
         pendingAdmin = newAdmin;
+        emit AdminTransferStarted(admin, newAdmin);
     }
 
     function acceptAdmin() external {
         require(msg.sender == pendingAdmin, "not pending admin");
+        address oldAdmin = admin;
         admin = pendingAdmin;
         pendingAdmin = address(0);
+        emit AdminTransferred(oldAdmin, admin);
     }
 
     function setPaymentRouter(address newRouter) external onlyAdmin {

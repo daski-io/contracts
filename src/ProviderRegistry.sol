@@ -19,6 +19,9 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
 
     mapping(uint256 => Provider) public _providers;
     uint256[] public providerIds;
+    /// @dev DEPRECATED — set during register() in earlier versions but never
+    ///      consumed. Slot retained to preserve UUPS upgrade safety; new
+    ///      code does not write here.
     mapping(uint256 => uint256) public providerIndex;
 
     address public admin;
@@ -27,6 +30,12 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
     IERC20 public usdc;
     IERC721 public identity;
     uint256 public listingFee;
+
+    /// @dev Wallet → agentId reverse index. Populated on register() and
+    ///      updateWalletAddress() so getProviderByAddress is O(1) instead of
+    ///      a linear scan over providerIds. Appended at the end of storage
+    ///      so existing slot order is preserved across UUPS upgrades.
+    mapping(address => uint256) private _agentIdByWallet;
 
     event ProviderRegistered(uint256 indexed agentId, address indexed wallet);
     event ProviderWalletUpdated(uint256 indexed agentId, address indexed newWallet);
@@ -68,8 +77,8 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         _providers[agentId] =
             Provider({walletAddress: msg.sender, agentId: agentId, registrationTime: block.timestamp, isActive: true});
 
-        providerIndex[agentId] = providerIds.length;
         providerIds.push(agentId);
+        _agentIdByWallet[msg.sender] = agentId;
 
         emit ProviderRegistered(agentId, msg.sender);
     }
@@ -78,6 +87,18 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         _requireAgentOwner(agentId);
         require(_isRegistered(agentId), "not registered");
         require(newWallet != address(0), "zero wallet");
+
+        address oldWallet = _providers[agentId].walletAddress;
+        if (oldWallet != newWallet) {
+            // Only clear if the index still points at THIS agent — a later
+            // registration with the same wallet may have overwritten it,
+            // and we must not erase that newer entry.
+            if (_agentIdByWallet[oldWallet] == agentId) {
+                delete _agentIdByWallet[oldWallet];
+            }
+            _agentIdByWallet[newWallet] = agentId;
+        }
+
         _providers[agentId].walletAddress = newWallet;
         emit ProviderWalletUpdated(agentId, newWallet);
     }
@@ -95,16 +116,9 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
     }
 
     function getProviderByAddress(address wallet) external view returns (Provider memory) {
-        // Linear scan across providerIds — fine for the whitelist-scale catalog
-        // Daski operates at. If we ever grow past ~1k providers, replace with
-        // a mapping(address => agentId) maintained in register/updateWallet.
-        for (uint256 i = 0; i < providerIds.length; i++) {
-            uint256 agentId = providerIds[i];
-            if (_providers[agentId].walletAddress == wallet) {
-                return _providers[agentId];
-            }
-        }
-        revert("not registered");
+        uint256 agentId = _agentIdByWallet[wallet];
+        require(agentId != 0, "not registered");
+        return _providers[agentId];
     }
 
     function getProviderCount() external view returns (uint256) {
@@ -130,14 +144,20 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         emit TreasuryUpdated(oldTreasury, newTreasury);
     }
 
+    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
     function transferAdmin(address newAdmin) external onlyAdmin {
         pendingAdmin = newAdmin;
+        emit AdminTransferStarted(admin, newAdmin);
     }
 
     function acceptAdmin() external {
         require(msg.sender == pendingAdmin, "not pending admin");
+        address oldAdmin = admin;
         admin = pendingAdmin;
         pendingAdmin = address(0);
+        emit AdminTransferred(oldAdmin, admin);
     }
 
     // Internal
