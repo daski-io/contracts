@@ -97,7 +97,7 @@ contract IdentityRegistry is
 
     function initialize(address _admin) external initializer {
         require(_admin != address(0), "zero admin");
-        __ERC721_init("Daski Agent", "DSKI-AGT");
+        __ERC721_init("Daski Identity", "DASKI-ID");
         __ERC721URIStorage_init();
         __EIP712_init("Daski IdentityRegistry", "1");
         admin = _admin;
