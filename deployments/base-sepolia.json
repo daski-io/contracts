@@ -3,25 +3,25 @@
   "name": "base-sepolia",
   "contracts": {
     "USDC": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    "IdentityRegistry": "0x73D487663E7E5d057539Aad7241469Cd69485278",
-    "ReputationRegistry": "0x4A95d1480E9B5C9E5f65C0806C0731cd7ce29200",
-    "ValidationRegistry": "0x8189262817F77a64A0F6FEE9609dEc6BA91858E2",
-    "ProviderRegistry": "0xBaD7997f173B65BbB5418b8834C43F4d1327696C",
-    "PaymentRouter": "0x5b2AC118ff6693F5bfaFD691D631bfbfa8520EA9",
-    "ReputationStorage": "0x3D55C21B9A1EdE835e26E387f690197ec9E2644A",
-    "X402Adapter": "0x632143C69E0ae5A947E0a1FA664e372f192c05Ca",
-    "PermitAdapter": "0x2F4Ad666C8A49d68177DA6B002eC66C1E26E6788",
-    "ApprovalAdapter": "0x65942E866C6f35EcE927bB40Db3FfB12c64BF03C",
+    "IdentityRegistry": "0xAE35470988E5179e97bB63A31C20142A3810d31a",
+    "ReputationRegistry": "0x77aE2B7afAf634Eee3daf3a18E56b71E3438614c",
+    "ValidationRegistry": "0x03Bf71eBcdc9311c8902A76d8d6abac08ce4bD3C",
+    "ProviderRegistry": "0xF88dad9670fe67f8143Ae3AeaB7d924C821de240",
+    "PaymentRouter": "0x3A851dD3dA98513F5229D08226AE1f220e3f9d9f",
+    "ReputationStorage": "0xBE4AFBa8FdBc60bFf1c54b9320D04C472fb2198B",
+    "X402Adapter": "0x8656F58e44b756EC77204Aa63f462E990b7c3be9",
+    "PermitAdapter": "0xb670B476c956EE88363Da3247E132E036A06Bf1D",
+    "ApprovalAdapter": "0xf3DFCf448651f22BcFeb5ecFf46729fd54f9C2b0",
     "EAS": "0x4200000000000000000000000000000000000021",
     "SchemaRegistry": "0x4200000000000000000000000000000000000020"
   },
   "schemas": {
     "outcome": {
-      "uid": "0x8e64155126a8b75fd98ceb36a63f5a738bb005b679b4b55cddd62f70dd6a8bd8",
+      "uid": "0x27438526b8e170e60c2db33f8ad3254ffcdf8fe21c58291eb3fbd6b1cd8f699e",
       "string": "uint256 paymentId,uint8 outcome,uint256 fulfillmentTime"
     },
     "confirmation": {
-      "uid": "0xc2bd8a22c923deea54b0b18d5f3c2c362b418b871cfc78be7d80030725a964b1",
+      "uid": "0xe8c1728d87fc0d82aa6f9ce6f9c521e7c17af7c79aec6ce1564cb4fa49100fe3",
       "string": "uint256 paymentId,uint8 confirmation"
     }
   }
