@@ -299,9 +299,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         // the attested value so legacy payments don't surface a giant bogus
         // `block.timestamp` as their fulfillment time. New payments always
         // have paidAt > 0 because settle() sets it unconditionally.
-        uint256 fulfillmentTime = payment.paidAt > 0
-            ? block.timestamp - payment.paidAt
-            : attestedFulfillmentTime;
+        uint256 fulfillmentTime = payment.paidAt > 0 ? block.timestamp - payment.paidAt : attestedFulfillmentTime;
 
         record.outcome = outcome;
         record.fulfillmentTime = fulfillmentTime;
