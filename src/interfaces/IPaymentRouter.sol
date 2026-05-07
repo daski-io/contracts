@@ -13,6 +13,13 @@ interface IPaymentRouter {
         uint256 amount; // original gross amount
         address cachedBuyerWallet; // captured at settle; fallback for refund if agent unsets
         bytes32 serviceRef; // convenience for joins
+        // Block timestamp at settlement. Used by ReputationStorage to derive
+        // fulfillment time from the outcome attestation rather than trusting
+        // the provider-supplied value. Appended at the end so existing
+        // mapping entries from earlier deployments aren't rearranged on
+        // upgrade — pre-upgrade entries read this slot as 0, which the
+        // resolver treats as "unknown, fall back to attested value".
+        uint256 paidAt;
     }
 
     /// @notice Adapter-facing settlement entry point. The adapter MUST have

@@ -180,6 +180,7 @@ contract IntegrationTest is Test {
         assertEq(record.amount, 100e6);
         assertEq(record.token, address(usdc));
         assertEq(record.cachedBuyerWallet, buyer);
+        assertEq(record.paidAt, block.timestamp, "paidAt captures settlement timestamp");
 
         // 5. Provider attests outcome via EAS (direct call; providers hold
         //    their own wallet and pay gas).

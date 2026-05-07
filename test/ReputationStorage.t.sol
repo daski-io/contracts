@@ -202,14 +202,22 @@ contract ReputationStorageTest is Test {
     // ── Outcome via EAS ─────────────────────────────────────────────────
 
     function test_recordOutcomeHappyPath() public {
+        // Advance time so the derived fulfillmentTime is non-zero. The
+        // attested value (99_999) is intentionally a sentinel that does NOT
+        // match the warp delta — the resolver MUST ignore it and derive
+        // from PaymentRouter.paidAt instead. If the test ever asserts
+        // against the attested number, the gameability fix has regressed.
+        uint256 elapsed = 600;
+        vm.warp(block.timestamp + elapsed);
+
         vm.prank(provider);
-        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 99_999));
         assertTrue(uid != bytes32(0), "uid returned");
 
         ReputationStorage.ReputationRecord memory rec = reputation.getRecord(paymentId);
         assertTrue(rec.outcomeRecorded);
         assertEq(uint256(rec.outcome), uint256(ReputationStorage.TransactionOutcome.Completed));
-        assertEq(rec.fulfillmentTime, 3600);
+        assertEq(rec.fulfillmentTime, elapsed, "fulfillmentTime is derived from paidAt, not attested");
         assertEq(rec.providerAgentId, providerAgentId);
         assertEq(rec.buyerAgentId, buyerAgentId);
         assertEq(reputation.completedCount(providerAgentId), 1);

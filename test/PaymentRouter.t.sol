@@ -141,6 +141,7 @@ contract PaymentRouterTest is Test {
         assertEq(rec.token, address(usdc));
         assertEq(rec.cachedBuyerWallet, buyer);
         assertEq(rec.serviceRef, keccak256("ref-1"));
+        assertEq(rec.paidAt, block.timestamp, "paidAt captures settlement timestamp");
 
         assertEq(router.nextPaymentId(), paymentId + 1);
         assertTrue(router.serviceRefUsed(keccak256("ref-1")));

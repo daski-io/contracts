@@ -26,7 +26,15 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 ///
 /// Two schemas are registered against this resolver:
 ///   * `outcome`:        (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime)
-///                       — provider-attested, one-shot per paymentId.
+///                       — provider-attested, one-shot per paymentId. The
+///                         `fulfillmentTime` field is preserved in the schema
+///                         for back-compat with already-registered EAS
+///                         schemas, but the resolver IGNORES it and derives
+///                         the real fulfillment time as
+///                         `block.timestamp - PaymentRouter.PaymentRecord.paidAt`.
+///                         The attested value is only used as a fallback for
+///                         pre-upgrade payments where `paidAt` was never
+///                         written (reads as 0 from the legacy mapping slot).
 ///   * `confirmation`:   (uint256 paymentId, uint8 confirmation)
 ///                       — buyer-attested, revisions allowed via EAS refUID;
 ///                         resolver rebalances counters on each revision.
@@ -97,6 +105,8 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
     /// @notice EAS schema UID for the outcome schema
     ///         (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime).
+    ///         The third field is decoded but no longer trusted — see the
+    ///         contract-level NatSpec and `_onOutcomeAttest`.
     bytes32 public outcomeSchema;
 
     /// @notice EAS schema UID for the buyer confirmation schema
@@ -255,7 +265,8 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     // ── Outcome logic ───────────────────────────────────────────────────
 
     function _onOutcomeAttest(Attestation calldata a) internal {
-        (uint256 paymentId, uint8 outcomeRaw, uint256 fulfillmentTime) = abi.decode(a.data, (uint256, uint8, uint256));
+        (uint256 paymentId, uint8 outcomeRaw, uint256 attestedFulfillmentTime) =
+            abi.decode(a.data, (uint256, uint8, uint256));
         require(outcomeRaw <= uint8(TransactionOutcome.Canceled), "bad outcome");
         TransactionOutcome outcome = TransactionOutcome(outcomeRaw);
 
@@ -275,6 +286,22 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
             record.buyerAgentId = payment.buyerAgentId;
             recordIds.push(paymentId);
         }
+
+        // Derive fulfillmentTime from on-chain timestamps rather than the
+        // attestation. The provider's claim is gameable (they can plug any
+        // number into the schema's third field); `paidAt` was set by
+        // PaymentRouter at settle and `block.timestamp` is the moment of
+        // outcome attestation, so the difference is the true wall-clock
+        // turnaround.
+        //
+        // Fallback: PaymentRouter entries written before the paidAt upgrade
+        // read as 0 (storage slot never written). For those, fall back to
+        // the attested value so legacy payments don't surface a giant bogus
+        // `block.timestamp` as their fulfillment time. New payments always
+        // have paidAt > 0 because settle() sets it unconditionally.
+        uint256 fulfillmentTime = payment.paidAt > 0
+            ? block.timestamp - payment.paidAt
+            : attestedFulfillmentTime;
 
         record.outcome = outcome;
         record.fulfillmentTime = fulfillmentTime;

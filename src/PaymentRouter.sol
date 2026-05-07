@@ -183,7 +183,8 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
             token: token,
             amount: amount,
             cachedBuyerWallet: cachedBuyer,
-            serviceRef: serviceRef
+            serviceRef: serviceRef,
+            paidAt: block.timestamp
         });
 
         emit PaymentSettled(
