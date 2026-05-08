@@ -8,6 +8,14 @@ pragma solidity ^0.8.24;
 interface IReputationRegistry {
     // -- Events -----------------------------------------------------------
 
+    /// @dev `tag1` is emitted twice on purpose, per ERC-8004:
+    ///      * `indexedTag1` is an `indexed` string parameter — the EVM
+    ///        stores indexed strings as the keccak256 hash of the value in
+    ///        the topic, so off-chain consumers filtering by topic must
+    ///        first hash the tag string they're looking for.
+    ///      * `tag1` is the same string emitted as a non-indexed parameter
+    ///        in the data payload, so consumers can read the original
+    ///        string value once a matching event is found.
     event NewFeedback(
         uint256 indexed agentId,
         address indexed clientAddress,
@@ -68,6 +76,13 @@ interface IReputationRegistry {
         returns (int128 value, uint8 valueDecimals, string memory tag1, string memory tag2, bool isRevoked);
 
     function getClients(uint256 agentId) external view returns (address[] memory);
+
+    function getClientCount(uint256 agentId) external view returns (uint256);
+
+    function getClientsPaginated(uint256 agentId, uint256 offset, uint256 limit)
+        external
+        view
+        returns (address[] memory page);
 
     function getLastIndex(uint256 agentId, address clientAddress) external view returns (uint64);
 }

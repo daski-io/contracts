@@ -125,6 +125,25 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         return providerIds.length;
     }
 
+    /// @notice Returns up to `limit` provider agentIds starting at `offset`.
+    ///         Returns an empty array if `offset >= count`. Pair with
+    ///         `getProviderCount()` to walk the full list without
+    ///         materializing it in a single call.
+    function getProviderIdsPaginated(uint256 offset, uint256 limit) external view returns (uint256[] memory page) {
+        uint256 length = providerIds.length;
+        if (offset >= length) {
+            return new uint256[](0);
+        }
+        uint256 end = offset + limit;
+        if (end > length) {
+            end = length;
+        }
+        page = new uint256[](end - offset);
+        for (uint256 i = 0; i < page.length; i++) {
+            page[i] = providerIds[offset + i];
+        }
+    }
+
     function isRegistered(uint256 agentId) external view returns (bool) {
         return _isRegistered(agentId);
     }

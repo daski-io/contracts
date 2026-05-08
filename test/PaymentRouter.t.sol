@@ -185,16 +185,46 @@ contract PaymentRouterTest is Test {
         assertEq(usdc.balanceOf(provider), oldWalletBefore, "stale wallet untouched");
     }
 
-    function test_settle_fallsBackToRegistryWallet_ifAgentWalletUnset() public {
-        // If the provider unsets their agentWallet, settle falls back to
-        // ProviderRegistry's walletAddress so that payments don't revert.
+    function test_settle_revertsWhenAgentWalletUnset() public {
+        // After audit finding H-1: if the provider unsets their agentWallet,
+        // settle MUST revert rather than fall back to ProviderRegistry's
+        // walletAddress. Falling back would route payments to a stale wallet
+        // — e.g. if the provider transferred their NFT, the agentWallet is
+        // cleared but ProviderRegistry.walletAddress still points at the
+        // former owner. Per ERC-8004 the new owner must re-bind a wallet.
         vm.prank(provider);
         identity.unsetAgentWallet(providerAgentId);
         assertEq(identity.getAgentWallet(providerAgentId), address(0));
 
-        uint256 providerBefore = usdc.balanceOf(provider);
-        _settle(100e6, keccak256("ref-fallback"));
-        assertEq(usdc.balanceOf(provider) - providerBefore, 95e6, "fallback paid");
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("no provider wallet");
+        adapter.settle(address(usdc), 100e6, keccak256("ref-fallback"), buyerAgentId, providerAgentId);
+    }
+
+    /// H-1 regression test: after the agent NFT is transferred, the new
+    /// owner has not yet bound a wallet. Settle must revert until they do —
+    /// otherwise payments leak to the former owner via ProviderRegistry's
+    /// stale walletAddress.
+    function test_settle_revertsAfterNftTransferUntilNewOwnerBindsWallet() public {
+        address newOwner = makeAddr("newOwner");
+
+        // Provider sells the NFT.
+        vm.prank(provider);
+        identity.transferFrom(provider, newOwner, providerAgentId);
+        assertEq(identity.ownerOf(providerAgentId), newOwner);
+        assertEq(identity.getAgentWallet(providerAgentId), address(0), "wallet cleared on transfer");
+        // ProviderRegistry has NOT been updated — its walletAddress still
+        // points at the former owner. Pre-fix, settle would route here.
+        assertEq(registry.getProvider(providerAgentId).walletAddress, provider);
+
+        // Buyer attempts to pay — must revert until the new owner binds a wallet.
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("no provider wallet");
+        adapter.settle(address(usdc), 100e6, keccak256("ref-h1"), buyerAgentId, providerAgentId);
     }
 
     function _signSetAgentWallet(uint256 key, uint256 agentId, address newWallet, uint256 deadline)
@@ -451,6 +481,54 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         vm.expectRevert("commission too high");
         router.setCommissionBps(10001);
+    }
+
+    // L-1: admin sweep for tokens accidentally sent to the router.
+    function test_rescueERC20_nonAcceptedToken() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 123e6);
+
+        address recipient = makeAddr("rescueRecipient");
+        vm.prank(admin);
+        router.rescueERC20(stray, recipient, 123e6);
+        assertEq(stray.balanceOf(recipient), 123e6);
+        assertEq(stray.balanceOf(address(router)), 0);
+    }
+
+    function test_rescueERC20_acceptedTokenReverts() public {
+        // Accepted token rescue is forbidden — admin must temporarily de-list
+        // first. This is the explicit defense-in-depth mentioned in the
+        // contract NatSpec.
+        usdc.mint(address(router), 50e6);
+        vm.prank(admin);
+        vm.expectRevert("accepted token");
+        router.rescueERC20(usdc, makeAddr("anywhere"), 50e6);
+
+        // Unlist → rescue → re-list flow works.
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), false);
+        address recipient = makeAddr("rescueRecipient");
+        vm.prank(admin);
+        router.rescueERC20(usdc, recipient, 50e6);
+        assertEq(usdc.balanceOf(recipient), 50e6);
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), true);
+    }
+
+    function test_rescueERC20_zeroToReverts() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 1);
+        vm.prank(admin);
+        vm.expectRevert("zero to");
+        router.rescueERC20(stray, address(0), 1);
+    }
+
+    function test_rescueERC20_onlyAdmin() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 1);
+        vm.prank(buyer);
+        vm.expectRevert("not admin");
+        router.rescueERC20(stray, buyer, 1);
     }
 
     function test_setTreasury() public {

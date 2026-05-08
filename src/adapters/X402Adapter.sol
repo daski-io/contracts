@@ -15,6 +15,18 @@ import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
 /// The signed EIP-3009 authorization must have `to = router` so USDC
 /// transfers directly into the router. After the transfer succeeds, this
 /// adapter calls `router.settle(...)`.
+///
+/// AUTH BINDING — IMPORTANT FOR OFF-CHAIN SIGNERS:
+///   The buyer's EIP-3009 signature commits only to (from, to, value,
+///   validAfter, validBefore, nonce). It does NOT cover `serviceRef` or
+///   `providerAgentId`, which are passed as separate adapter call args.
+///   Without a binding, a frontrunner could pull the buyer's funds and
+///   redirect them to a provider of their choice. To prevent this, the
+///   buyer's signer MUST set:
+///       nonce = keccak256(abi.encode(serviceRef, providerAgentId))
+///   This adapter rejects calls whose nonce does not match. The token's
+///   per-(from, nonce) replay protection then doubles as a commitment to
+///   exactly one (service, provider) pair per authorization.
 contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
     IPaymentRouter public router;
     IdentityRegistry public identity;
@@ -99,6 +111,11 @@ contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
         EIP3009Auth calldata auth,
         uint256 buyerAgentId
     ) internal returns (uint256 paymentId) {
+        // Bind serviceRef + providerAgentId into the EIP-3009 nonce. See
+        // contract-level NatSpec. Without this check, a frontrunner could
+        // re-submit the buyer's auth with substituted call args.
+        require(auth.nonce == keccak256(abi.encode(serviceRef, providerAgentId)), "auth not bound to call");
+
         // Pull funds: buyer -> router via EIP-3009. Token signature binds
         // the signer to exactly this `to=router` value.
         IERC3009(token)
@@ -116,6 +133,14 @@ contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
 
         // Router holds the funds now; delegate the split and bookkeeping.
         paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId);
+    }
+
+    /// @notice Helper for off-chain signers: returns the value the buyer
+    ///         must use as the EIP-3009 `nonce` when authorizing a payment
+    ///         for `(serviceRef, providerAgentId)`. Pure — safe to call
+    ///         off-chain via eth_call.
+    function authNonceFor(bytes32 serviceRef, uint256 providerAgentId) external pure returns (bytes32) {
+        return keccak256(abi.encode(serviceRef, providerAgentId));
     }
 
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);

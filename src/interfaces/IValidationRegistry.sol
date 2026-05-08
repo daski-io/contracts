@@ -50,5 +50,19 @@ interface IValidationRegistry {
 
     function getAgentValidations(uint256 agentId) external view returns (bytes32[] memory requestHashes);
 
+    function getAgentValidationCount(uint256 agentId) external view returns (uint256);
+
+    function getAgentValidationsPaginated(uint256 agentId, uint256 offset, uint256 limit)
+        external
+        view
+        returns (bytes32[] memory page);
+
     function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory requestHashes);
+
+    function getValidatorRequestCount(address validatorAddress) external view returns (uint256);
+
+    function getValidatorRequestsPaginated(address validatorAddress, uint256 offset, uint256 limit)
+        external
+        view
+        returns (bytes32[] memory page);
 }

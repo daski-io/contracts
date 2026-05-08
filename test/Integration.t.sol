@@ -157,6 +157,9 @@ contract IntegrationTest is Test {
         assertEq(usdc.balanceOf(treasury), 1e6);
 
         // 4. Buyer signs EIP-3009 (to=router); relayer settles via X402Adapter.
+        //    Nonce binds the auth to (serviceRef, providerAgentId) — without
+        //    this binding a frontrunner could redirect the payment.
+        bytes32 serviceRef = keccak256("service-1");
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
             vm,
             BUYER_KEY,
@@ -166,10 +169,10 @@ contract IntegrationTest is Test {
             100e6,
             0,
             block.timestamp + 1 hours,
-            keccak256("nonce-int-1")
+            keccak256(abi.encode(serviceRef, providerAgentId))
         );
         vm.prank(relayer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("service-1"), providerAgentId, auth);
+        uint256 paymentId = adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, auth);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(treasury), 6e6);

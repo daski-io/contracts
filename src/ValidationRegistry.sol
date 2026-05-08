@@ -132,6 +132,61 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
         return _validatorRequests[validatorAddress];
     }
 
+    /// @notice Length of the agent's validation-request list. Pair with
+    ///         `getAgentValidationsPaginated` to walk the list without
+    ///         materializing the full array.
+    function getAgentValidationCount(uint256 agentId) external view override returns (uint256) {
+        return _agentRequests[agentId].length;
+    }
+
+    function getAgentValidationsPaginated(uint256 agentId, uint256 offset, uint256 limit)
+        external
+        view
+        override
+        returns (bytes32[] memory page)
+    {
+        bytes32[] storage all = _agentRequests[agentId];
+        uint256 length = all.length;
+        if (offset >= length) {
+            return new bytes32[](0);
+        }
+        uint256 end = offset + limit;
+        if (end > length) {
+            end = length;
+        }
+        page = new bytes32[](end - offset);
+        for (uint256 i = 0; i < page.length; i++) {
+            page[i] = all[offset + i];
+        }
+    }
+
+    /// @notice Length of the validator's request list. Pair with
+    ///         `getValidatorRequestsPaginated`.
+    function getValidatorRequestCount(address validatorAddress) external view override returns (uint256) {
+        return _validatorRequests[validatorAddress].length;
+    }
+
+    function getValidatorRequestsPaginated(address validatorAddress, uint256 offset, uint256 limit)
+        external
+        view
+        override
+        returns (bytes32[] memory page)
+    {
+        bytes32[] storage all = _validatorRequests[validatorAddress];
+        uint256 length = all.length;
+        if (offset >= length) {
+            return new bytes32[](0);
+        }
+        uint256 end = offset + limit;
+        if (end > length) {
+            end = length;
+        }
+        page = new bytes32[](end - offset);
+        for (uint256 i = 0; i < page.length; i++) {
+            page[i] = all[offset + i];
+        }
+    }
+
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
 

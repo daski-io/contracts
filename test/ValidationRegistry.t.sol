@@ -139,4 +139,46 @@ contract ValidationRegistryTest is Test {
         assertEq(arr.length, 1);
         assertEq(arr[0], REQ_HASH);
     }
+
+    // L-2: paginated views for agent and validator request lists.
+    function test_paginatedAgentValidations() public {
+        bytes32[] memory hashes = new bytes32[](4);
+        vm.startPrank(agentOwner);
+        for (uint256 i = 0; i < 4; i++) {
+            hashes[i] = keccak256(abi.encode("h", i));
+            validation.validationRequest(validator, agentId, "u", hashes[i]);
+        }
+        vm.stopPrank();
+
+        assertEq(validation.getAgentValidationCount(agentId), 4);
+
+        bytes32[] memory page = validation.getAgentValidationsPaginated(agentId, 1, 2);
+        assertEq(page.length, 2);
+        assertEq(page[0], hashes[1]);
+        assertEq(page[1], hashes[2]);
+
+        bytes32[] memory tail = validation.getAgentValidationsPaginated(agentId, 3, 99);
+        assertEq(tail.length, 1);
+        assertEq(tail[0], hashes[3]);
+
+        bytes32[] memory past = validation.getAgentValidationsPaginated(agentId, 4, 1);
+        assertEq(past.length, 0);
+    }
+
+    function test_paginatedValidatorRequests() public {
+        bytes32[] memory hashes = new bytes32[](3);
+        vm.startPrank(agentOwner);
+        for (uint256 i = 0; i < 3; i++) {
+            hashes[i] = keccak256(abi.encode("vh", i));
+            validation.validationRequest(validator, agentId, "u", hashes[i]);
+        }
+        vm.stopPrank();
+
+        assertEq(validation.getValidatorRequestCount(validator), 3);
+
+        bytes32[] memory page = validation.getValidatorRequestsPaginated(validator, 0, 2);
+        assertEq(page.length, 2);
+        assertEq(page[0], hashes[0]);
+        assertEq(page[1], hashes[1]);
+    }
 }

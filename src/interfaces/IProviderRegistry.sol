@@ -21,5 +21,6 @@ interface IProviderRegistry {
     function getProvider(uint256 agentId) external view returns (Provider memory);
     function getProviderByAddress(address wallet) external view returns (Provider memory);
     function getProviderCount() external view returns (uint256);
+    function getProviderIdsPaginated(uint256 offset, uint256 limit) external view returns (uint256[] memory page);
     function isRegistered(uint256 agentId) external view returns (bool);
 }

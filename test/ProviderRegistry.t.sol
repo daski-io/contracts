@@ -239,4 +239,30 @@ contract ProviderRegistryTest is Test {
         vm.expectRevert("not admin");
         registry.setListingFee(0);
     }
+
+    // L-2: paginated providerIds view.
+    function test_getProviderIdsPaginated() public {
+        // Seed five providers (each with their own agent).
+        uint256[] memory ids = new uint256[](5);
+        for (uint256 i = 0; i < 5; i++) {
+            address who = makeAddr(string.concat("p", vm.toString(i)));
+            ids[i] = _registerAsProvider(who);
+        }
+        assertEq(registry.getProviderCount(), 5);
+
+        uint256[] memory page = registry.getProviderIdsPaginated(1, 3);
+        assertEq(page.length, 3);
+        assertEq(page[0], ids[1]);
+        assertEq(page[1], ids[2]);
+        assertEq(page[2], ids[3]);
+
+        // Limit > remaining clamps.
+        uint256[] memory tail = registry.getProviderIdsPaginated(4, 100);
+        assertEq(tail.length, 1);
+        assertEq(tail[0], ids[4]);
+
+        // Offset past end → empty.
+        uint256[] memory past = registry.getProviderIdsPaginated(5, 1);
+        assertEq(past.length, 0);
+    }
 }

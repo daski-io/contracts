@@ -129,14 +129,17 @@ contract ReputationStorageTest is Test {
         vm.prank(buyer);
         buyerAgentId = identity.register();
         usdc.mint(buyer, 100e6);
-        paymentId = _payAsBuyer(100e6, keccak256("service-1"), keccak256("nonce-1"));
+        paymentId = _payAsBuyer(100e6, keccak256("service-1"));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    function _payAsBuyer(uint256 amount, bytes32 serviceRef, bytes32 nonce) internal returns (uint256) {
+    /// @dev EIP-3009 nonce is bound to (serviceRef, providerAgentId) per
+    ///      X402Adapter — see contract NatSpec.
+    function _payAsBuyer(uint256 amount, bytes32 serviceRef) internal returns (uint256) {
+        bytes32 boundNonce = keccak256(abi.encode(serviceRef, providerAgentId));
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, BUYER_KEY, address(usdc), buyer, address(router), amount, 0, block.timestamp + 1 hours, nonce
+            vm, BUYER_KEY, address(usdc), buyer, address(router), amount, 0, block.timestamp + 1 hours, boundNonce
         );
         vm.prank(relayer);
         return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, auth);
@@ -378,7 +381,9 @@ contract ReputationStorageTest is Test {
         identity.register();
         usdc.mint(buyer2, 100e6);
 
-        // Pay 100 USDC to provider2 from buyer2.
+        // Pay 100 USDC to provider2 from buyer2. Nonce is bound to
+        // (serviceRef, providerAgentId) per X402Adapter.
+        bytes32 attackSvc = keccak256("attack-svc");
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
             vm,
             attackerKey,
@@ -388,10 +393,10 @@ contract ReputationStorageTest is Test {
             100e6,
             0,
             block.timestamp + 1 hours,
-            keccak256("attack-nonce")
+            keccak256(abi.encode(attackSvc, provider2AgentId))
         );
         vm.prank(relayer);
-        uint256 paymentId2 = adapter.settle(address(usdc), 100e6, keccak256("attack-svc"), provider2AgentId, auth);
+        uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, auth);
 
         // Attack attempt: buyer2 attests Confirmed for paymentId2 with refUID
         // pointing at victimUid (which is for paymentId on provider1).

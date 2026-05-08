@@ -8,6 +8,7 @@ pragma solidity ^0.8.24;
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IReputationRegistry} from "./interfaces/IReputationRegistry.sol";
+import {IIdentityRegistry} from "./interfaces/IIdentityRegistry.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 /// @notice ERC-8004 Reputation Registry. Feedback is per-(agent, client)
@@ -119,6 +120,15 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         require(client != owner, "owner cannot self-review");
         require(!identityRegistry.isApprovedForAll(owner, client), "operator cannot review");
         require(identityRegistry.getApproved(agentId) != client, "approved spender cannot review");
+
+        // Daski extension: the agent's payment wallet (per ERC-8004
+        // §Identity) may differ from the NFT owner. Forbid it from
+        // self-reviewing too — otherwise an agent could leave themselves
+        // 5-star feedback simply by signing from their wallet rather than
+        // their owner key. Pending wallets (zero) are unaffected because
+        // `client` is `msg.sender`, never zero in a tx.
+        address agentWallet = IIdentityRegistry(address(identityRegistry)).getAgentWallet(agentId);
+        require(client != agentWallet, "agentWallet cannot self-review");
     }
 
     function _recordAndEmit(FeedbackInput memory input) internal {
@@ -169,6 +179,18 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         bytes32 responseHash
     ) external override {
         require(_feedback[agentId][clientAddress][feedbackIndex].exists, "no such feedback");
+
+        // Only the agent (owner / approved operator / approved spender)
+        // may respond to feedback about itself. Without this gate, anyone
+        // can append arbitrary responses, polluting the off-chain index
+        // and forging "agent acknowledged" signals.
+        address owner = identityRegistry.ownerOf(agentId);
+        require(
+            msg.sender == owner || identityRegistry.isApprovedForAll(owner, msg.sender)
+                || identityRegistry.getApproved(agentId) == msg.sender,
+            "not owner or operator"
+        );
+
         _responses[agentId][clientAddress][feedbackIndex].push(
             ResponseRecord({responder: msg.sender, responseURI: responseURI, responseHash: responseHash})
         );
@@ -192,6 +214,39 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
 
     function getClients(uint256 agentId) external view override returns (address[] memory) {
         return _clients[agentId];
+    }
+
+    /// @notice Length of the client list for `agentId`. Pair with
+    ///         `getClientsPaginated` to walk the list without materializing
+    ///         the full array — important once a popular agent accumulates
+    ///         enough distinct reviewers that `getClients` would exceed the
+    ///         eth_call return-size budget.
+    function getClientCount(uint256 agentId) external view override returns (uint256) {
+        return _clients[agentId].length;
+    }
+
+    /// @notice Returns up to `limit` clients of `agentId` starting at `offset`.
+    ///         Returns an empty array if `offset >= count`. Otherwise returns
+    ///         `min(limit, count - offset)` entries.
+    function getClientsPaginated(uint256 agentId, uint256 offset, uint256 limit)
+        external
+        view
+        override
+        returns (address[] memory page)
+    {
+        address[] storage all = _clients[agentId];
+        uint256 length = all.length;
+        if (offset >= length) {
+            return new address[](0);
+        }
+        uint256 end = offset + limit;
+        if (end > length) {
+            end = length;
+        }
+        page = new address[](end - offset);
+        for (uint256 i = 0; i < page.length; i++) {
+            page[i] = all[offset + i];
+        }
     }
 
     function getLastIndex(uint256 agentId, address clientAddress) external view override returns (uint64) {

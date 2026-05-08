@@ -3,8 +3,10 @@ pragma solidity ^0.8.24;
 
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-// NOTE: OZ v5 removed ReentrancyGuardUpgradeable. The non-upgradeable ReentrancyGuard is
-// marked @custom:stateless (uses a storage slot, no initializer) and is safe behind UUPS proxies.
+// We deliberately use the non-upgradeable ReentrancyGuard. In OZ v5 it is marked
+// @custom:stateless (no initializer required; uses a fixed namespaced-storage slot
+// per ERC-7201) and is safe behind UUPS proxies — the proxy's storage at that slot
+// defaults to 0, which the modifier treats as NOT_ENTERED.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -90,6 +92,7 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
     event ReputationStorageUpdated(address indexed oldStorage, address indexed newStorage);
+    event ERC20Rescued(address indexed token, address indexed to, uint256 amount);
 
     // ── Modifiers ────────────────────────────────────────────────────
     modifier onlyAdmin() {
@@ -138,20 +141,18 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         require(!_usedServiceRefs[serviceRef], "serviceRef used");
         require(buyerAgentId != 0, "buyer has no agent");
 
-        IProviderRegistry.Provider memory provider = registry.getProvider(providerAgentId);
-        require(provider.isActive, "provider not active");
+        require(registry.getProvider(providerAgentId).isActive, "provider not active");
 
-        // Pay the LIVE agentWallet from IdentityRegistry, not the (potentially
-        // stale) walletAddress recorded at provider registration time. Identity
-        // transfers and wallet rotations both update this; ProviderRegistry
-        // does not auto-sync. Fall back to the registry's wallet only if the
-        // provider has unset their agentWallet (so payments don't silently
-        // re-route to a freshly-cleared slot).
+        // Pay the LIVE agentWallet from IdentityRegistry. If unset (provider
+        // explicitly unset, or the agent NFT was just transferred and the
+        // new owner has not yet bound a wallet), reject the settle: per
+        // ERC-8004, agentWallet "must be re-verified by the new owner"
+        // before payments resume. We deliberately do NOT fall back to
+        // ProviderRegistry.walletAddress, which is not auto-cleared on
+        // NFT transfer and would otherwise route payments to the former
+        // owner.
         address payee = identity.getAgentWallet(providerAgentId);
-        if (payee == address(0)) {
-            payee = provider.walletAddress;
-        }
-        require(payee != address(0), "no provider payee");
+        require(payee != address(0), "no provider wallet");
 
         // Defense-in-depth: the adapter is supposed to have transferred
         // `amount` of `token` into this contract before calling settle.
@@ -298,6 +299,22 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         uint256 oldBps = commissionBps;
         commissionBps = newBps;
         emit CommissionUpdated(oldBps, newBps);
+    }
+
+    /// @notice Admin rescue for tokens accidentally sent to the router.
+    ///         Restricted to non-accepted tokens because accepted tokens
+    ///         flow through the router transiently during settle (in and
+    ///         out in the same tx, guarded by nonReentrant) — at-rest
+    ///         balance is always zero for them. To rescue an accepted
+    ///         token (e.g. someone misrouted USDC here), the admin must
+    ///         temporarily de-list it via setAcceptedToken(false), call
+    ///         this, then re-list. The unlisting also halts new settles
+    ///         for that token, so the rescue cannot race a settle.
+    function rescueERC20(IERC20 token, address to, uint256 amount) external onlyAdmin {
+        require(to != address(0), "zero to");
+        require(!acceptedTokens[address(token)], "accepted token");
+        token.safeTransfer(to, amount);
+        emit ERC20Rescued(address(token), to, amount);
     }
 
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
