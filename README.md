@@ -35,21 +35,21 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 | Contract            | Address                                      |
 |---------------------|----------------------------------------------|
 | USDC (Circle)       | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| IdentityRegistry    | `0x14987Ec55C04c6e1e80002267C778E76292879e7` |
-| ReputationRegistry  | `0xc51336a50680F1Ff562223Ad5c7E2f10382C9784` |
-| ValidationRegistry  | `0xd04BBfbc44Da7a966BA49f150E8c8e90AB1EEC59` |
-| ProviderRegistry    | `0x6a0090085E648ac2bFaf373C77C9F95e57775774` |
-| PaymentRouter       | `0xB77A7D6F920eB0B530f9Ed3F40d58E73446BF77A` |
-| ReputationStorage   | `0x731888Dcd7B3980836709759246d54Acd249974C` |
-| X402Adapter         | `0x4BBfeBf3e29cEF8a9eE4555963ee0cbe1ceb3BE1` |
-| PermitAdapter       | `0xF737f19C25FEF579589B15BE579bc4D993CAB11f` |
-| ApprovalAdapter     | `0x5aA84D37a470250674F8338AD0CaA511fA8874F5` |
+| IdentityRegistry    | `0x498CFfaF1F54C355df050098Dc40f9804F21dBAe` |
+| ReputationRegistry  | `0x7172fFaDa6850D6601D32A1034972430CC77397A` |
+| ValidationRegistry  | `0x734c8eD562c981eEB2D7544A5046144208A776a7` |
+| ProviderRegistry    | `0x80C9718CE4FF51f9B690cEEE137bE5c27874D870` |
+| PaymentRouter       | `0x2194984EFfB3596B05ECe7e7FdA09D8B21B4afF5` |
+| ReputationStorage   | `0x4107f1F86A74849c705D4758c594D9586ed9dE74` |
+| X402Adapter         | `0x24f9a2137376c131cc0054aE51F29401921FB991` |
+| PermitAdapter       | `0xF26ded83D6173649410968B7c7af58C4408E7A73` |
+| ApprovalAdapter     | `0xf15c07352B9366432B1eAFf86b199F46b83FC420` |
 | EAS                 | `0x4200000000000000000000000000000000000021` |
 | Schema Registry     | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x4e4d06cece5d5774dd420fb21f2a47792f872cd7fbdaf2eb4aed5fe68a0c987d`
-- Confirmation: `0x09eea74aa8fbeef8bf0b3dc68ad24447e8a0cbabba92f2b3b74cc700096cd0a8`
+- Outcome: `0x70b722c935f300a4e499f81ccba050252a4546c9b1368914eadab0c996616702`
+- Confirmation: `0x1b1cf50e45b670cfbfc5821e3f4e828d6a068275ef0ea3966763b54d0d3c01a5`
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
