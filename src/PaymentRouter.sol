@@ -3,8 +3,8 @@ pragma solidity ^0.8.24;
 
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-// We deliberately use the non-upgradeable ReentrancyGuard. In OZ v5 it is marked
-// @custom:stateless (no initializer required; uses a fixed namespaced-storage slot
+// We deliberately use the non-upgradeable ReentrancyGuard. In OZ v5 it is
+// marked @custom:stateless (no initializer required; uses a fixed namespaced-storage slot
 // per ERC-7201) and is safe behind UUPS proxies — the proxy's storage at that slot
 // defaults to 0, which the modifier treats as NOT_ENTERED.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -12,6 +12,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IdentityRegistry} from "./IdentityRegistry.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
+import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
 
 /// @dev Minimal reputation sink. Decoupled from the router: admin may wire
@@ -32,15 +33,27 @@ interface IReputationRefundSink {
 ///   * `settle` enforces serviceRef single-use — even though adapters may
 ///     also add their own replay protection (e.g. EIP-3009 nonces), the
 ///     contract-level uniqueness is the final line of defense.
+///   * `settle` validates the (provider, service) pair against ServiceRegistry.
+///     The serviceId is recorded on the PaymentRecord so reputation queries
+///     and refund mirrors can attribute outcomes per-service.
+///   * Payee resolution: service.serviceWallet if non-zero, else the
+///     provider's live ERC-8004 agentWallet. Per-service wallets let
+///     providers isolate accounting (regulated vs unregulated, separate
+///     jurisdictions, etc.). When unset (the common case) the existing
+///     "pay live agentWallet" semantics apply.
 ///   * The PaymentRecord caches the buyer's wallet at settle time. Refund
 ///     prefers the LIVE agentWallet (via IdentityRegistry) and only falls
 ///     back to the cached wallet if the buyer's agent has unset their
 ///     wallet. This honors ERC-8004 wallet rotation while keeping refunds
 ///     possible if the buyer abandons the wallet without updating.
 ///   * Refunds are partial, cumulative, and have no expiration. Total per
-///     paymentId is capped at the original amount. The provider is the only
-///     party who can initiate a refund — buyer recourse is reputation, not
-///     on-chain reclaim (per whitepaper §7).
+///     paymentId is capped at the original amount. Authorized refund callers
+///     are: provider NFT owner, ERC-721 operators (isApprovedForAll),
+///     per-token approved spender (getApproved), and the live agentWallet.
+///     Source of funds is `msg.sender` via safeTransferFrom — a malicious
+///     or compromised operator can only burn THEIR OWN approved balance,
+///     never drain the provider's agentWallet. Worst-case abuse is
+///     self-griefing, not theft from the provider.
 contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaymentRouter {
     using SafeERC20 for IERC20;
 
@@ -74,10 +87,15 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
     ///         provider goodwill alongside outcome/confirmation data.
     address public reputationStorage;
 
+    /// @notice ServiceRegistry. settle() validates the (provider, service)
+    ///         pair against this and reads the per-service payee override.
+    IServiceRegistry public serviceRegistry;
+
     // ── Events ───────────────────────────────────────────────────────
     event PaymentSettled(
         uint256 indexed paymentId,
         bytes32 indexed serviceRef,
+        bytes32 indexed serviceId,
         uint256 buyerAgentId,
         uint256 providerAgentId,
         address token,
@@ -92,6 +110,7 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
     event ReputationStorageUpdated(address indexed oldStorage, address indexed newStorage);
+    event ServiceRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
     event ERC20Rescued(address indexed token, address indexed to, uint256 amount);
 
     // ── Modifiers ────────────────────────────────────────────────────
@@ -110,17 +129,23 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         _disableInitializers();
     }
 
-    function initialize(address _identity, address _registry, address _treasury, uint256 _commissionBps, address _admin)
-        external
-        initializer
-    {
+    function initialize(
+        address _identity,
+        address _registry,
+        address _serviceRegistry,
+        address _treasury,
+        uint256 _commissionBps,
+        address _admin
+    ) external initializer {
         require(_identity != address(0), "zero identity");
         require(_registry != address(0), "zero registry");
+        require(_serviceRegistry != address(0), "zero service registry");
         require(_treasury != address(0), "zero treasury");
         require(_admin != address(0), "zero admin");
         require(_commissionBps <= 10000, "commission too high");
         identity = IdentityRegistry(_identity);
         registry = IProviderRegistry(_registry);
+        serviceRegistry = IServiceRegistry(_serviceRegistry);
         treasury = _treasury;
         commissionBps = _commissionBps;
         admin = _admin;
@@ -130,12 +155,14 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
     // ── Settlement (adapter-only) ────────────────────────────────────
 
     /// @inheritdoc IPaymentRouter
-    function settle(address token, uint256 amount, bytes32 serviceRef, uint256 buyerAgentId, uint256 providerAgentId)
-        external
-        onlyAdapter
-        nonReentrant
-        returns (uint256 paymentId)
-    {
+    function settle(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        uint256 providerAgentId,
+        bytes32 serviceId
+    ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
         require(amount > 0, "zero amount");
         require(acceptedTokens[token], "token not accepted");
         require(!_usedServiceRefs[serviceRef], "serviceRef used");
@@ -143,16 +170,22 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
 
         require(registry.getProvider(providerAgentId).isActive, "provider not active");
 
-        // Pay the LIVE agentWallet from IdentityRegistry. If unset (provider
-        // explicitly unset, or the agent NFT was just transferred and the
-        // new owner has not yet bound a wallet), reject the settle: per
-        // ERC-8004, agentWallet "must be re-verified by the new owner"
-        // before payments resume. We deliberately do NOT fall back to
-        // ProviderRegistry.walletAddress, which is not auto-cleared on
-        // NFT transfer and would otherwise route payments to the former
-        // owner.
-        address payee = identity.getAgentWallet(providerAgentId);
-        require(payee != address(0), "no provider wallet");
+        // Validate service belongs to this provider and is active. Reading
+        // through ServiceRegistry binds the payment to a specific catalog
+        // entry, which is what reputation queries key on downstream.
+        IServiceRegistry.Service memory svc = serviceRegistry.getService(serviceId);
+        require(svc.providerAgentId == providerAgentId, "service/provider mismatch");
+        require(svc.active, "service not active");
+
+        // Payee resolution: per-service override wins, else fall back to the
+        // provider's LIVE agentWallet from IdentityRegistry. If both are
+        // unset, reject — per ERC-8004, agentWallet "must be re-verified by
+        // the new owner" before payments resume after an NFT transfer.
+        address payee = svc.serviceWallet;
+        if (payee == address(0)) {
+            payee = identity.getAgentWallet(providerAgentId);
+        }
+        require(payee != address(0), "no payee wallet");
 
         // Defense-in-depth: the adapter is supposed to have transferred
         // `amount` of `token` into this contract before calling settle.
@@ -181,6 +214,7 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         _payments[paymentId] = PaymentRecord({
             buyerAgentId: buyerAgentId,
             providerAgentId: providerAgentId,
+            serviceId: serviceId,
             token: token,
             amount: amount,
             cachedBuyerWallet: cachedBuyer,
@@ -189,23 +223,35 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         });
 
         emit PaymentSettled(
-            paymentId, serviceRef, buyerAgentId, providerAgentId, token, amount, providerAmount, commission
+            paymentId, serviceRef, serviceId, buyerAgentId, providerAgentId, token, amount, providerAmount, commission
         );
     }
 
     // ── Provider-initiated refund ────────────────────────────────────
 
     /// @inheritdoc IPaymentRouter
+    /// @dev Authorization is decoupled from the source of funds. Authorized
+    ///      callers (NFT owner, operator, approved spender, agentWallet)
+    ///      issue refunds that pull from THEIR OWN approved USDC balance via
+    ///      safeTransferFrom — they cannot drain the provider's agentWallet.
+    ///      Worst-case abuse by a compromised operator is self-griefing
+    ///      (burning their own USDC to fake a refund), not theft.
     function refund(uint256 paymentId, uint256 amountToBuyer) external nonReentrant {
         require(amountToBuyer > 0, "zero refund");
         PaymentRecord memory rec = _payments[paymentId];
         require(rec.amount > 0, "payment not found");
 
-        // Only the CURRENT agent wallet of the original provider may refund.
-        // If the provider rotated their wallet, the new wallet is authorized;
-        // the old one is not. Using agentOfWallet keeps this live-resolved.
-        uint256 callerAgentId = identity.agentOfWallet(msg.sender);
-        require(callerAgentId == rec.providerAgentId, "not provider for payment");
+        // Auth surface mirrors IdentityRegistry / ReputationRegistry /
+        // ValidationRegistry: NFT owner OR operator OR per-token approved
+        // OR the provider's CURRENT agentWallet (back-compat). Rotated-out
+        // wallets fail because agentOfWallet resolves live.
+        address provOwner = identity.ownerOf(rec.providerAgentId);
+        require(
+            msg.sender == provOwner || identity.isApprovedForAll(provOwner, msg.sender)
+                || identity.getApproved(rec.providerAgentId) == msg.sender
+                || identity.agentOfWallet(msg.sender) == rec.providerAgentId,
+            "not authorized for provider"
+        );
 
         uint256 already = _refundedAmount[paymentId];
         uint256 newTotal = already + amountToBuyer;
@@ -222,9 +268,9 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
 
         _refundedAmount[paymentId] = newTotal;
 
-        // Direct provider → buyer transfer. The provider must have pre-approved
-        // the router. Single hop saves gas and the nonReentrant modifier
-        // already protects against any token hook misbehavior.
+        // Direct caller → buyer transfer. Caller must have approved this
+        // router for at least amountToBuyer. Single hop saves gas and
+        // nonReentrant already protects against any token hook misbehavior.
         IERC20(rec.token).safeTransferFrom(msg.sender, dest, amountToBuyer);
 
         emit Refunded(paymentId, amountToBuyer, newTotal);
@@ -292,6 +338,13 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         address oldStorage = reputationStorage;
         reputationStorage = newStorage;
         emit ReputationStorageUpdated(oldStorage, newStorage);
+    }
+
+    function setServiceRegistry(address newRegistry) external onlyAdmin {
+        require(newRegistry != address(0), "zero service registry");
+        address old = address(serviceRegistry);
+        serviceRegistry = IServiceRegistry(newRegistry);
+        emit ServiceRegistryUpdated(old, newRegistry);
     }
 
     function setCommissionBps(uint256 newBps) external onlyAdmin {

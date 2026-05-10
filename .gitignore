@@ -13,3 +13,7 @@ docs/
 
 # Local agent config
 .claude/
+
+# Local helper scripts (created on the fly to work around WSL bash -c quoting)
+.run-*.sh
+.balance-check.sh

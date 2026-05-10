@@ -46,7 +46,7 @@ contract ApprovalAdapter is Initializable, UUPSUpgradeable, IApprovalAdapter {
     }
 
     /// @inheritdoc IApprovalAdapter
-    function settle(address token, uint256 amount, bytes32 serviceRef, uint256 providerAgentId)
+    function settle(address token, uint256 amount, bytes32 serviceRef, uint256 providerAgentId, bytes32 serviceId)
         external
         returns (uint256 paymentId)
     {
@@ -57,7 +57,7 @@ contract ApprovalAdapter is Initializable, UUPSUpgradeable, IApprovalAdapter {
 
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
 
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId);
+        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
     }
 
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);

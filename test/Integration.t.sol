@@ -8,6 +8,7 @@ import {IdentityRegistry} from "../src/IdentityRegistry.sol";
 import {ReputationRegistry} from "../src/ReputationRegistry.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
+import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
@@ -24,11 +25,11 @@ import {
 } from "../src/interfaces/IEAS.sol";
 
 /// @notice End-to-end: an ERC-8004 agent registers, a Daski provider lists,
-///         x402 payment settles VIA X402Adapter, provider attests outcome
-///         via EAS, buyer attests confirmation via delegated EAS, refund
-///         mirrors into ReputationStorage, and the ERC-8004
-///         ReputationRegistry / ValidationRegistry accept independent
-///         feedback on the same agent.
+///         services are registered in ServiceRegistry, x402 payment settles
+///         through ServiceRegistry-validated route, provider attests outcome,
+///         buyer confirms via delegated EAS, refund mirrors per-service into
+///         ReputationStorage, and a final test verifies per-service vs.
+///         per-provider counters.
 contract IntegrationTest is Test {
     MockUSDC usdc;
     MockEAS eas;
@@ -36,6 +37,7 @@ contract IntegrationTest is Test {
     ReputationRegistry reputationRegistry;
     ValidationRegistry validationRegistry;
     ProviderRegistry registry;
+    ServiceRegistry services;
     PaymentRouter router;
     X402Adapter adapter;
     ReputationStorage reputation;
@@ -91,13 +93,24 @@ contract IntegrationTest is Test {
             )
         );
 
+        ServiceRegistry sregImpl = new ServiceRegistry();
+        services = ServiceRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(sregImpl),
+                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                )
+            )
+        );
+
         PaymentRouter routerImpl = new PaymentRouter();
         router = PaymentRouter(
             address(
                 new ERC1967Proxy(
                     address(routerImpl),
                     abi.encodeCall(
-                        PaymentRouter.initialize, (address(identity), address(registry), treasury, 500, admin)
+                        PaymentRouter.initialize,
+                        (address(identity), address(registry), address(services), treasury, 500, admin)
                     )
                 )
             )
@@ -135,6 +148,61 @@ contract IntegrationTest is Test {
         router.setReputationStorage(address(reputation));
     }
 
+    function _signedAuthAndSettle(
+        uint256 buyerKey,
+        address buyerAddr,
+        uint256 amount,
+        bytes32 ref,
+        uint256 providerAgentId,
+        bytes32 svcId
+    ) internal returns (uint256 paymentId) {
+        bytes32 boundNonce = keccak256(abi.encode(ref, providerAgentId, svcId));
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
+            vm, buyerKey, address(usdc), buyerAddr, address(router), amount, 0, block.timestamp + 1 hours, boundNonce
+        );
+        vm.prank(relayer);
+        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth);
+    }
+
+    function _outcomeReq(uint256 pid, ReputationStorage.TransactionOutcome o)
+        internal
+        view
+        returns (AttestationRequest memory)
+    {
+        return AttestationRequest({
+            schema: outcomeSchemaUid,
+            data: AttestationRequestData({
+                recipient: address(0),
+                expirationTime: 0,
+                revocable: false,
+                refUID: bytes32(0),
+                data: abi.encode(pid, uint8(o), uint256(3600)),
+                value: 0
+            })
+        });
+    }
+
+    function _delegatedConfirm(address attester, uint256 pid)
+        internal
+        view
+        returns (DelegatedAttestationRequest memory)
+    {
+        return DelegatedAttestationRequest({
+            schema: confirmationSchemaUid,
+            data: AttestationRequestData({
+                recipient: address(0),
+                expirationTime: 0,
+                revocable: true,
+                refUID: bytes32(0),
+                data: abi.encode(pid, uint8(ReputationStorage.BuyerConfirmation.Confirmed)),
+                value: 0
+            }),
+            signature: Signature({v: 0, r: bytes32(0), s: bytes32(0)}),
+            attester: attester,
+            deadline: type(uint64).max
+        });
+    }
+
     function test_fullProtocolFlow() public {
         usdc.mint(buyer, 1000e6);
 
@@ -143,12 +211,12 @@ contract IntegrationTest is Test {
         uint256 buyerAgentId = identity.register("ipfs://buyer-agent");
         assertEq(buyerAgentId, 1);
 
-        // 2. Provider registers as ERC-8004 agent
+        // 2. Provider registers as ERC-8004 agent (one NFT, one operator)
         vm.prank(provider);
         uint256 providerAgentId = identity.register("https://provider.example/agent.json");
         assertEq(providerAgentId, 2);
 
-        // 3. Provider lists with Daski (pays 1 USDC listing fee)
+        // 3. Provider lists with Daski
         usdc.mint(provider, 1e6);
         vm.startPrank(provider);
         usdc.approve(address(registry), 1e6);
@@ -156,23 +224,15 @@ contract IntegrationTest is Test {
         vm.stopPrank();
         assertEq(usdc.balanceOf(treasury), 1e6);
 
+        // 3a. Provider registers a service in ServiceRegistry. Reputation
+        //     queries downstream key off this serviceId.
+        vm.prank(provider);
+        bytes32 serviceId =
+            services.registerService(providerAgentId, "domain-registration", "1", "ipfs://service", address(0));
+
         // 4. Buyer signs EIP-3009 (to=router); relayer settles via X402Adapter.
-        //    Nonce binds the auth to (serviceRef, providerAgentId) — without
-        //    this binding a frontrunner could redirect the payment.
         bytes32 serviceRef = keccak256("service-1");
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm,
-            BUYER_KEY,
-            address(usdc),
-            buyer,
-            address(router),
-            100e6,
-            0,
-            block.timestamp + 1 hours,
-            keccak256(abi.encode(serviceRef, providerAgentId))
-        );
-        vm.prank(relayer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, auth);
+        uint256 paymentId = _signedAuthAndSettle(BUYER_KEY, buyer, 100e6, serviceRef, providerAgentId, serviceId);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(treasury), 6e6);
@@ -180,24 +240,14 @@ contract IntegrationTest is Test {
         IPaymentRouter.PaymentRecord memory record = router.getPayment(paymentId);
         assertEq(record.buyerAgentId, 1);
         assertEq(record.providerAgentId, 2);
+        assertEq(record.serviceId, serviceId);
         assertEq(record.amount, 100e6);
         assertEq(record.token, address(usdc));
         assertEq(record.cachedBuyerWallet, buyer);
         assertEq(record.paidAt, block.timestamp, "paidAt captures settlement timestamp");
 
-        // 5. Provider attests outcome via EAS (direct call; providers hold
-        //    their own wallet and pay gas).
-        AttestationRequest memory outcomeReq = AttestationRequest({
-            schema: outcomeSchemaUid,
-            data: AttestationRequestData({
-                recipient: address(0),
-                expirationTime: 0,
-                revocable: false,
-                refUID: bytes32(0),
-                data: abi.encode(paymentId, uint8(ReputationStorage.TransactionOutcome.Completed), uint256(3600)),
-                value: 0
-            })
-        });
+        // 5. Provider attests outcome via EAS.
+        AttestationRequest memory outcomeReq = _outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed);
 
         vm.prank(unauthorized);
         vm.expectRevert("no identity");
@@ -206,28 +256,11 @@ contract IntegrationTest is Test {
         vm.prank(provider);
         eas.attest(outcomeReq);
 
-        // 6. Buyer submits confirmation via delegated attestation; relayer
-        //    (gateway) pays gas. Mock EAS skips sig verification, but the
-        //    resolver still enforces attester == buyer agent.
-        DelegatedAttestationRequest memory confirmReq = DelegatedAttestationRequest({
-            schema: confirmationSchemaUid,
-            data: AttestationRequestData({
-                recipient: address(0),
-                expirationTime: 0,
-                revocable: true,
-                refUID: bytes32(0),
-                data: abi.encode(paymentId, uint8(ReputationStorage.BuyerConfirmation.Confirmed)),
-                value: 0
-            }),
-            signature: Signature({v: 0, r: bytes32(0), s: bytes32(0)}),
-            attester: buyer,
-            deadline: type(uint64).max
-        });
-
+        // 6. Buyer submits confirmation via delegated attestation; relayer pays gas.
         vm.prank(relayer);
-        eas.attestByDelegation(confirmReq);
+        eas.attestByDelegation(_delegatedConfirm(buyer, paymentId));
 
-        // 7. Provider refunds a goodwill amount; reputation mirrors it.
+        // 7. Provider refunds a goodwill amount; reputation mirrors it per-service.
         vm.prank(provider);
         usdc.approve(address(router), 10e6);
         vm.prank(provider);
@@ -235,6 +268,7 @@ contract IntegrationTest is Test {
 
         assertEq(router.refundedAmount(paymentId), 10e6);
         assertEq(reputation.refundedAmount(paymentId), 10e6);
+        assertEq(reputation.refundedAmountByService(serviceId), 10e6);
         assertEq(usdc.balanceOf(buyer), 910e6);
 
         // 8. ERC-8004 ReputationRegistry: external reviewer leaves feedback.
@@ -245,7 +279,7 @@ contract IntegrationTest is Test {
         );
         assertEq(reputationRegistry.getLastIndex(providerAgentId, reviewer), 1);
 
-        // 9. ERC-8004 ValidationRegistry: provider requests validation of a job.
+        // 9. ERC-8004 ValidationRegistry
         address validator = makeAddr("validator");
         bytes32 reqHash = keccak256("validation-req-1");
         vm.prank(provider);
@@ -257,9 +291,84 @@ contract IntegrationTest is Test {
         assertEq(validatedAgentId, providerAgentId);
         assertEq(response, 100);
 
-        // 10. Final check: Daski aggregate stats from the resolver.
-        (uint256 completed,,, uint256 confirmed,) = reputation.getProviderStats(providerAgentId);
-        assertEq(completed, 1);
-        assertEq(confirmed, 1);
+        // 10. Final stats — per-provider AND per-service.
+        (uint256 completedP,,, uint256 confirmedP,) = reputation.getProviderStats(providerAgentId);
+        assertEq(completedP, 1);
+        assertEq(confirmedP, 1);
+
+        (uint256 completedS,,, uint256 confirmedS,, uint256 refundedS) = reputation.getServiceStats(serviceId);
+        assertEq(completedS, 1);
+        assertEq(confirmedS, 1);
+        assertEq(refundedS, 10e6);
+    }
+
+    /// @notice Section 11.5 of the brief: one provider, two services. Run
+    ///         multiple payments, confirm all, refund only on service A.
+    ///         Verify per-service split and per-provider blend.
+    function test_oneProviderTwoServices_perServiceVsPerProviderStats() public {
+        // Buyer + provider setup
+        vm.prank(buyer);
+        identity.register("ipfs://buyer");
+        usdc.mint(buyer, 1000e6);
+
+        vm.prank(provider);
+        uint256 providerAgentId = identity.register("ipfs://provider");
+        usdc.mint(provider, 1e6);
+        vm.startPrank(provider);
+        usdc.approve(address(registry), 1e6);
+        registry.register(providerAgentId);
+        vm.stopPrank();
+
+        vm.prank(provider);
+        bytes32 svcA = services.registerService(providerAgentId, "service-A", "1", "u", address(0));
+        vm.prank(provider);
+        bytes32 svcB = services.registerService(providerAgentId, "service-B", "1", "u", address(0));
+
+        // 3 payments to A, 2 payments to B
+        uint256[] memory aPayments = new uint256[](3);
+        uint256[] memory bPayments = new uint256[](2);
+        for (uint256 i = 0; i < 3; i++) {
+            aPayments[i] =
+                _signedAuthAndSettle(BUYER_KEY, buyer, 50e6, keccak256(abi.encode("a", i)), providerAgentId, svcA);
+        }
+        for (uint256 i = 0; i < 2; i++) {
+            bPayments[i] =
+                _signedAuthAndSettle(BUYER_KEY, buyer, 50e6, keccak256(abi.encode("b", i)), providerAgentId, svcB);
+        }
+
+        // Provider attests Completed for each, buyer confirms each.
+        for (uint256 i = 0; i < 3; i++) {
+            vm.prank(provider);
+            eas.attest(_outcomeReq(aPayments[i], ReputationStorage.TransactionOutcome.Completed));
+            vm.prank(relayer);
+            eas.attestByDelegation(_delegatedConfirm(buyer, aPayments[i]));
+        }
+        for (uint256 i = 0; i < 2; i++) {
+            vm.prank(provider);
+            eas.attest(_outcomeReq(bPayments[i], ReputationStorage.TransactionOutcome.Completed));
+            vm.prank(relayer);
+            eas.attestByDelegation(_delegatedConfirm(buyer, bPayments[i]));
+        }
+
+        // Refund 5 USDC against the FIRST service-A payment only.
+        vm.prank(provider);
+        usdc.approve(address(router), 5e6);
+        vm.prank(provider);
+        router.refund(aPayments[0], 5e6);
+
+        // Per-service: A has 3 confirmed/completed, B has 2.
+        (uint256 cA,,, uint256 confA,, uint256 refA) = reputation.getServiceStats(svcA);
+        (uint256 cB,,, uint256 confB,, uint256 refB) = reputation.getServiceStats(svcB);
+        assertEq(cA, 3);
+        assertEq(confA, 3);
+        assertEq(refA, 5e6);
+        assertEq(cB, 2);
+        assertEq(confB, 2);
+        assertEq(refB, 0, "service B refunds untouched");
+
+        // Per-provider: 5 confirmed/completed total, blended.
+        (uint256 cP,,, uint256 confP,) = reputation.getProviderStats(providerAgentId);
+        assertEq(cP, 5);
+        assertEq(confP, 5);
     }
 }

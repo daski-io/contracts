@@ -18,6 +18,14 @@ import {IIdentityRegistry} from "./interfaces/IIdentityRegistry.sol";
 
 /// @notice ERC-8004-compliant Identity Registry built on ERC-721 with URIStorage.
 ///
+/// Each ERC-8004 agent NFT registered here represents a **provider** (a
+/// real-world operator that fields one or more services on Daski). Services
+/// themselves are managed in the Daski `ServiceRegistry` and are **NOT**
+/// ERC-8004 agents. The provider's A2A Agent Card (resolved via `agentURI`)
+/// exposes services as A2A `AgentSkill` entries. Do not re-introduce the
+/// per-service-NFT pattern — it fragments operator reputation and breaks A2A
+/// skill discovery.
+///
 /// Design notes:
 ///   * Every agent owns a unique agentId (ERC-721 tokenId). agentURI (tokenURI)
 ///     resolves to the agent registration JSON file per §Identity Registry.

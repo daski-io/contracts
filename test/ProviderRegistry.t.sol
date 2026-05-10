@@ -17,6 +17,7 @@ contract ProviderRegistryTest is Test {
     address treasury = makeAddr("treasury");
     address provider = makeAddr("provider");
     address otherUser = makeAddr("otherUser");
+    address operator = makeAddr("operator");
 
     uint256 constant LISTING_FEE = 1_000_000;
     string constant AGENT_URI = "https://example.com/agent.json";
@@ -109,6 +110,24 @@ contract ProviderRegistryTest is Test {
         registry.register(agentId);
     }
 
+    /// @dev `register` stays strict on `ownerOf` even after the auth-model
+    ///      broadening — listing is a one-time act of consent that should
+    ///      require the actual NFT key, not a delegate.
+    function test_register_byOperator_reverts() public {
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+
+        usdc.mint(operator, LISTING_FEE);
+        vm.prank(operator);
+        usdc.approve(address(registry), type(uint256).max);
+        vm.prank(operator);
+        vm.expectRevert("not agent owner");
+        registry.register(agentId);
+    }
+
     function test_registerDuplicateReverts() public {
         uint256 agentId = _registerAsProvider(provider);
         vm.prank(provider);
@@ -138,10 +157,35 @@ contract ProviderRegistryTest is Test {
         assertEq(p.walletAddress, newWallet);
     }
 
+    function test_updateWalletAddress_byApprovedForAllOperator() public {
+        uint256 agentId = _registerAsProvider(provider);
+        address newWallet = makeAddr("newWallet");
+
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+
+        vm.prank(operator);
+        registry.updateWalletAddress(agentId, newWallet);
+
+        assertEq(registry.getProvider(agentId).walletAddress, newWallet);
+    }
+
+    function test_updateWalletAddress_byPerTokenApprovedSpender() public {
+        uint256 agentId = _registerAsProvider(provider);
+        address newWallet = makeAddr("newWallet");
+
+        vm.prank(provider);
+        identity.approve(operator, agentId);
+
+        vm.prank(operator);
+        registry.updateWalletAddress(agentId, newWallet);
+        assertEq(registry.getProvider(agentId).walletAddress, newWallet);
+    }
+
     function test_updateWalletAddressByStrangerReverts() public {
         uint256 agentId = _registerAsProvider(provider);
         vm.prank(otherUser);
-        vm.expectRevert("not agent owner");
+        vm.expectRevert("not owner or operator");
         registry.updateWalletAddress(agentId, otherUser);
     }
 
@@ -173,6 +217,35 @@ contract ProviderRegistryTest is Test {
         vm.prank(provider);
         registry.setActive(agentId, true);
         assertTrue(registry.getProvider(agentId).isActive);
+    }
+
+    function test_setActive_byApprovedForAllOperator() public {
+        uint256 agentId = _registerAsProvider(provider);
+
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+
+        vm.prank(operator);
+        registry.setActive(agentId, false);
+        assertFalse(registry.getProvider(agentId).isActive);
+    }
+
+    function test_setActive_byPerTokenApprovedSpender() public {
+        uint256 agentId = _registerAsProvider(provider);
+
+        vm.prank(provider);
+        identity.approve(operator, agentId);
+
+        vm.prank(operator);
+        registry.setActive(agentId, false);
+        assertFalse(registry.getProvider(agentId).isActive);
+    }
+
+    function test_setActiveByStrangerReverts() public {
+        uint256 agentId = _registerAsProvider(provider);
+        vm.prank(otherUser);
+        vm.expectRevert("not owner or operator");
+        registry.setActive(agentId, false);
     }
 
     function test_getProviderByAddress() public {

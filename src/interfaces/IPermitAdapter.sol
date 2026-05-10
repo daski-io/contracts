@@ -19,6 +19,7 @@ interface IPermitAdapter {
         uint256 amount,
         bytes32 serviceRef,
         uint256 providerAgentId,
+        bytes32 serviceId,
         PermitData calldata permit
     ) external returns (uint256 paymentId);
 }

@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IdentityRegistry} from "../src/IdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
+import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
@@ -15,6 +16,7 @@ import {PermitSigner} from "./helpers/PermitSigner.sol";
 contract PermitAdapterTest is Test {
     IdentityRegistry identity;
     ProviderRegistry registry;
+    ServiceRegistry services;
     PaymentRouter router;
     PermitAdapter adapter;
     MockUSDC usdc;
@@ -27,6 +29,7 @@ contract PermitAdapterTest is Test {
     address buyer;
     uint256 buyerAgentId;
     uint256 providerAgentId;
+    bytes32 serviceId;
 
     function setUp() public {
         buyer = vm.addr(BUYER_KEY);
@@ -49,13 +52,24 @@ contract PermitAdapterTest is Test {
             )
         );
 
+        ServiceRegistry sregImpl = new ServiceRegistry();
+        services = ServiceRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(sregImpl),
+                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                )
+            )
+        );
+
         PaymentRouter routerImpl = new PaymentRouter();
         router = PaymentRouter(
             address(
                 new ERC1967Proxy(
                     address(routerImpl),
                     abi.encodeCall(
-                        PaymentRouter.initialize, (address(identity), address(registry), treasury, 500, admin)
+                        PaymentRouter.initialize,
+                        (address(identity), address(registry), address(services), treasury, 500, admin)
                     )
                 )
             )
@@ -84,6 +98,9 @@ contract PermitAdapterTest is Test {
         registry.register(providerAgentId);
         vm.stopPrank();
 
+        vm.prank(provider);
+        serviceId = services.registerService(providerAgentId, "skill", "1", "u", address(0));
+
         vm.prank(buyer);
         buyerAgentId = identity.register();
         usdc.mint(buyer, 1000e6);
@@ -94,13 +111,14 @@ contract PermitAdapterTest is Test {
             vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, block.timestamp + 1 hours
         );
         vm.prank(buyer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("p-ref"), providerAgentId, p);
+        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("p-ref"), providerAgentId, serviceId, p);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(address(adapter)), 0);
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
+        assertEq(rec.serviceId, serviceId);
     }
 
     function test_settleBadPermitWithoutAllowanceReverts() public {
@@ -114,7 +132,7 @@ contract PermitAdapterTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert(); // SafeERC20 wraps; OZ ERC20 reverts on insufficient allowance
-        adapter.settle(address(usdc), 100e6, keccak256("p-bad"), providerAgentId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-bad"), providerAgentId, serviceId, p);
     }
 
     function test_settleExpiredDeadlineWithoutAllowanceReverts() public {
@@ -124,7 +142,7 @@ contract PermitAdapterTest is Test {
         // then reverts because allowance was never granted.
         vm.prank(buyer);
         vm.expectRevert();
-        adapter.settle(address(usdc), 100e6, keccak256("p-exp"), providerAgentId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-exp"), providerAgentId, serviceId, p);
     }
 
     function test_settleWithPreExistingAllowanceSkipsPermit() public {
@@ -136,7 +154,7 @@ contract PermitAdapterTest is Test {
         IPermitAdapter.PermitData memory p =
             PermitSigner.signPermit(vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, block.timestamp - 1);
         vm.prank(buyer);
-        adapter.settle(address(usdc), 100e6, keccak256("p-pre"), providerAgentId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-pre"), providerAgentId, serviceId, p);
         assertEq(usdc.balanceOf(provider), 95e6);
     }
 
@@ -147,6 +165,6 @@ contract PermitAdapterTest is Test {
         );
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, keccak256("p-unk"), providerAgentId, p);
+        adapter.settle(address(other), 100e6, keccak256("p-unk"), providerAgentId, serviceId, p);
     }
 }

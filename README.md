@@ -8,22 +8,23 @@ identity, provider registry, rail-agnostic payment routing, and bilateral
 reputation backed by EAS attestations. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia. 148 unit + integration tests passing.
+**Status:** v1 deployed on Base Sepolia. 209 unit + integration tests passing.
 Audit pending.
 
 ## Contracts
 
 | Contract            | Purpose |
 |---------------------|---------|
-| **IdentityRegistry**   | ERC-8004 identity for every actor — buyers, gateway, providers. Enforces a 1:1 wallet ↔ agent invariant. |
-| **ProviderRegistry**   | Provider listings: USDC listing fee, agent-card URI, active toggle. |
-| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider wallet and DAO treasury. Pluggable adapters per rail. |
+| **IdentityRegistry**   | ERC-8004 identity for every actor — buyers, gateway, providers. One NFT per *operator*; services live in `ServiceRegistry`. Enforces a 1:1 wallet ↔ agent invariant. |
+| **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates ERC-8004 agents into the Daski "provider" role. |
+| **ServiceRegistry**    | Per-provider service catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, skillId, version)`. |
+| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
 | **ReputationRegistry** | ERC-8004 public feedback events. |
 | **ValidationRegistry** | ERC-8004 request/response attestations. |
-| **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. Backed by EAS, authenticated against on-chain payment records. |
+| **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
@@ -35,21 +36,22 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 | Contract            | Address                                      |
 |---------------------|----------------------------------------------|
 | USDC (Circle)       | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| IdentityRegistry    | `0x498CFfaF1F54C355df050098Dc40f9804F21dBAe` |
-| ReputationRegistry  | `0x7172fFaDa6850D6601D32A1034972430CC77397A` |
-| ValidationRegistry  | `0x734c8eD562c981eEB2D7544A5046144208A776a7` |
-| ProviderRegistry    | `0x80C9718CE4FF51f9B690cEEE137bE5c27874D870` |
-| PaymentRouter       | `0x2194984EFfB3596B05ECe7e7FdA09D8B21B4afF5` |
-| ReputationStorage   | `0x4107f1F86A74849c705D4758c594D9586ed9dE74` |
-| X402Adapter         | `0x24f9a2137376c131cc0054aE51F29401921FB991` |
-| PermitAdapter       | `0xF26ded83D6173649410968B7c7af58C4408E7A73` |
-| ApprovalAdapter     | `0xf15c07352B9366432B1eAFf86b199F46b83FC420` |
+| IdentityRegistry    | `0xF6d62Fb7AC723C745E9a9Ea6c11B8562db7D6109` |
+| ReputationRegistry  | `0xa0641ffBd9e533756f2b79f46b751b621CEE2483` |
+| ValidationRegistry  | `0x796D4ae756fB0B603442a4Ec9be03C428afF086a` |
+| ProviderRegistry    | `0x3b941dB8d64cbE91366C90EfFB4141e779a35717` |
+| ServiceRegistry     | `0x8e5397978A10527e4b4F7a61d7565956dF66368b` |
+| PaymentRouter       | `0xb91880314637985298b9353BF0C139c4cB7DdFA3` |
+| ReputationStorage   | `0xC03E48bc244452A5D042969694eA7f3aeD0B3338` |
+| X402Adapter         | `0x09d6B61EA9844Ba0d9ecc4E3280670782EDa6f5D` |
+| PermitAdapter       | `0xedD3460e4B18dbE1136553e5CDC81a1528f948f5` |
+| ApprovalAdapter     | `0x1586Dea86b7abf231dD7E6bFde05C5BAA474b082` |
 | EAS                 | `0x4200000000000000000000000000000000000021` |
 | Schema Registry     | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x70b722c935f300a4e499f81ccba050252a4546c9b1368914eadab0c996616702`
-- Confirmation: `0x1b1cf50e45b670cfbfc5821e3f4e828d6a068275ef0ea3966763b54d0d3c01a5`
+- Outcome: `0xa61ee8c25187ab94ca4008e8b8e57af59c2461a849bca1202d5ff951c668868b`
+- Confirmation: `0xf89caf3be9ed938aadaf1421bb02b428482efb5c3ab87406ba95837052b0ab03`
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
@@ -65,9 +67,10 @@ UUPS proxy pattern; deploy order matters due to cross-contract dependencies:
 2. ReputationRegistry      (IdentityRegistry)
 3. ValidationRegistry      (IdentityRegistry)
 4. ProviderRegistry        (IdentityRegistry, USDC, treasury)
-5. PaymentRouter           (IdentityRegistry, ProviderRegistry, USDC, treasury)
-6. ReputationStorage       (IdentityRegistry, PaymentRouter, EAS, schema UIDs)
-7. Adapters (X402/Permit/Approval) — registered with PaymentRouter
+5. ServiceRegistry         (IdentityRegistry, ProviderRegistry)
+6. PaymentRouter           (IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
+7. ReputationStorage       (IdentityRegistry, PaymentRouter, EAS, schema UIDs)
+8. Adapters (X402/Permit/Approval) — registered with PaymentRouter
 ```
 
 ## Development
@@ -76,23 +79,24 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 148 tests across 10 suites
+forge test       # 209 tests across 11 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
+| PaymentRouter       | 50 |
 | IdentityRegistry    | 31 |
-| PaymentRouter       | 32 |
-| ReputationStorage   | 25 |
-| ProviderRegistry    | 17 |
-| ReputationRegistry  | 13 |
-| X402Adapter         | 10 |
-| ValidationRegistry  | 10 |
+| ReputationStorage   | 26 |
+| ServiceRegistry     | 24 |
+| ProviderRegistry    | 24 |
+| ReputationRegistry  | 17 |
+| X402Adapter         | 14 |
+| ValidationRegistry  | 12 |
 | PermitAdapter       | 5  |
 | ApprovalAdapter     | 4  |
-| Integration         | 1  |
+| Integration         | 2  |
 
 ## Deploy
 

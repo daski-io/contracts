@@ -20,6 +20,7 @@ interface IX402Adapter {
         uint256 amount,
         bytes32 serviceRef,
         uint256 providerAgentId,
+        bytes32 serviceId,
         EIP3009Auth calldata auth
     ) external returns (uint256 paymentId);
 }

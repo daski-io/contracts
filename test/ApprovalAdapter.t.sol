@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IdentityRegistry} from "../src/IdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
+import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
@@ -13,6 +14,7 @@ import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 contract ApprovalAdapterTest is Test {
     IdentityRegistry identity;
     ProviderRegistry registry;
+    ServiceRegistry services;
     PaymentRouter router;
     ApprovalAdapter adapter;
     MockUSDC usdc;
@@ -24,6 +26,7 @@ contract ApprovalAdapterTest is Test {
 
     uint256 buyerAgentId;
     uint256 providerAgentId;
+    bytes32 serviceId;
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -45,13 +48,24 @@ contract ApprovalAdapterTest is Test {
             )
         );
 
+        ServiceRegistry sregImpl = new ServiceRegistry();
+        services = ServiceRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(sregImpl),
+                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                )
+            )
+        );
+
         PaymentRouter routerImpl = new PaymentRouter();
         router = PaymentRouter(
             address(
                 new ERC1967Proxy(
                     address(routerImpl),
                     abi.encodeCall(
-                        PaymentRouter.initialize, (address(identity), address(registry), treasury, 500, admin)
+                        PaymentRouter.initialize,
+                        (address(identity), address(registry), address(services), treasury, 500, admin)
                     )
                 )
             )
@@ -80,6 +94,9 @@ contract ApprovalAdapterTest is Test {
         registry.register(providerAgentId);
         vm.stopPrank();
 
+        vm.prank(provider);
+        serviceId = services.registerService(providerAgentId, "skill", "1", "u", address(0));
+
         vm.prank(buyer);
         buyerAgentId = identity.register();
         usdc.mint(buyer, 1000e6);
@@ -89,12 +106,13 @@ contract ApprovalAdapterTest is Test {
         vm.prank(buyer);
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("a-ref"), providerAgentId);
+        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("a-ref"), providerAgentId, serviceId);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.amount, 100e6);
         assertEq(rec.buyerAgentId, buyerAgentId);
+        assertEq(rec.serviceId, serviceId);
     }
 
     function test_settleInsufficientAllowanceReverts() public {
@@ -102,7 +120,7 @@ contract ApprovalAdapterTest is Test {
         usdc.approve(address(adapter), 50e6);
         vm.prank(buyer);
         vm.expectRevert();
-        adapter.settle(address(usdc), 100e6, keccak256("a-noall"), providerAgentId);
+        adapter.settle(address(usdc), 100e6, keccak256("a-noall"), providerAgentId, serviceId);
     }
 
     function test_settleUnacceptedTokenReverts() public {
@@ -112,7 +130,7 @@ contract ApprovalAdapterTest is Test {
         other.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, keccak256("a-unk"), providerAgentId);
+        adapter.settle(address(other), 100e6, keccak256("a-unk"), providerAgentId, serviceId);
     }
 
     function test_settleBuyerNoAgentReverts() public {
@@ -124,6 +142,6 @@ contract ApprovalAdapterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId);
+        adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId, serviceId);
     }
 }

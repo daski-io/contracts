@@ -13,8 +13,8 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 ///         version did), this contract now lives as an **EAS schema resolver**.
 ///         EAS is the source of truth for every individual outcome /
 ///         confirmation attestation, and this contract maintains the
-///         aggregate counters (per-provider, per-buyer) the rest of the Daski
-///         stack reads for discovery ranking.
+///         aggregate counters (per-provider, per-service, per-buyer) the rest
+///         of the Daski stack reads for discovery ranking.
 ///
 /// Per the Daski whitepaper §Reputation: "Per-transaction signals are stored
 /// as attestations via the Ethereum Attestation Service (EAS)." EAS calls
@@ -39,9 +39,13 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 ///                       — buyer-attested, revisions allowed via EAS refUID;
 ///                         resolver rebalances counters on each revision.
 ///
-/// Reads (`getRecord`, `getProviderStats`, `getBuyerStats`, `getRefundedAmount`)
-/// preserve the exact shape the pre-EAS version exposed so the off-chain
-/// gateway / provider read paths remain a drop-in.
+/// `serviceId` is NOT a schema field. It is derived from
+/// `PaymentRouter.getPayment(paymentId).serviceId` so the off-chain attester
+/// cannot lie about which service a feedback applies to.
+///
+/// Reads (`getRecord`, `getProviderStats`, `getServiceStats`, `getBuyerStats`,
+/// `getRefundedAmount`) preserve the exact shape the pre-EAS version exposed
+/// so the off-chain gateway / provider read paths remain a drop-in.
 contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     enum TransactionOutcome {
         Completed,
@@ -62,6 +66,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         uint256 paymentId;
         uint256 providerAgentId;
         uint256 buyerAgentId;
+        bytes32 serviceId;
         TransactionOutcome outcome;
         BuyerConfirmation confirmation;
         uint256 fulfillmentTime;
@@ -70,7 +75,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         bool outcomeRecorded;
     }
 
-    // ── Storage layout (preserved order — UUPS upgrade safety) ──────────
+    // ── Storage ─────────────────────────────────────────────────────────
 
     mapping(uint256 => ReputationRecord) public _records;
     uint256[] public recordIds;
@@ -96,7 +101,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     ///         PaymentRouter when a provider issues a refund.
     mapping(uint256 => uint256) public refundedAmount;
 
-    // ── EAS wiring (appended at the end to preserve storage slots) ──────
+    // ── EAS wiring ──────────────────────────────────────────────────────
 
     /// @notice The EAS contract authorized to invoke `attest` / `revoke`
     ///         on this resolver. On Base (and Base Sepolia) this is the
@@ -127,12 +132,23 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     ///         while orphaning the legitimate UID.
     mapping(bytes32 => uint256) public paymentIdByUid;
 
+    // ── Per-service counters (added by the service-identity refactor) ───
+
+    mapping(bytes32 => uint256) public completedByService;
+    mapping(bytes32 => uint256) public failedByService;
+    mapping(bytes32 => uint256) public canceledByService;
+    mapping(bytes32 => uint256) public confirmedByService;
+    mapping(bytes32 => uint256) public notConfirmedByService;
+    /// @notice Cumulative refunded USDC across all payments for this service.
+    mapping(bytes32 => uint256) public refundedAmountByService;
+
     // ── Events ──────────────────────────────────────────────────────────
 
     event OutcomeRecorded(
         uint256 indexed paymentId,
         uint256 indexed providerAgentId,
         uint256 indexed buyerAgentId,
+        bytes32 serviceId,
         TransactionOutcome outcome,
         uint256 fulfillmentTime,
         bytes32 attestationUid
@@ -142,12 +158,15 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         uint256 indexed paymentId,
         uint256 indexed providerAgentId,
         uint256 indexed buyerAgentId,
+        bytes32 serviceId,
         BuyerConfirmation confirmation,
         bytes32 attestationUid,
         bytes32 refUid
     );
 
-    event ReputationRefunded(uint256 indexed paymentId, uint256 amountToBuyer, uint256 cumulativeRefunded);
+    event ReputationRefunded(
+        uint256 indexed paymentId, bytes32 indexed serviceId, uint256 amountToBuyer, uint256 cumulativeRefunded
+    );
 
     event PaymentRouterUpdated(address indexed oldRouter, address indexed newRouter);
     event EASUpdated(address indexed oldEAS, address indexed newEAS);
@@ -284,7 +303,13 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
             record.paymentId = paymentId;
             record.providerAgentId = payment.providerAgentId;
             record.buyerAgentId = payment.buyerAgentId;
+            record.serviceId = payment.serviceId;
             recordIds.push(paymentId);
+        } else if (record.serviceId == bytes32(0)) {
+            // Confirmation arrived before outcome and was created on the
+            // pre-refactor router (no serviceId on record). Backfill from
+            // the canonical PaymentRouter record.
+            record.serviceId = payment.serviceId;
         }
 
         // Derive fulfillmentTime from on-chain timestamps rather than the
@@ -308,15 +333,20 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
         if (outcome == TransactionOutcome.Completed) {
             completedCount[payment.providerAgentId]++;
+            completedByService[payment.serviceId]++;
         } else if (outcome == TransactionOutcome.Failed) {
             failedCount[payment.providerAgentId]++;
+            failedByService[payment.serviceId]++;
         } else {
             canceledCount[payment.providerAgentId]++;
+            canceledByService[payment.serviceId]++;
         }
 
         buyerTransactionCount[payment.buyerAgentId]++;
 
-        emit OutcomeRecorded(paymentId, payment.providerAgentId, payment.buyerAgentId, outcome, fulfillmentTime, a.uid);
+        emit OutcomeRecorded(
+            paymentId, payment.providerAgentId, payment.buyerAgentId, payment.serviceId, outcome, fulfillmentTime, a.uid
+        );
     }
 
     // ── Confirmation logic (with revision rebalance) ────────────────────
@@ -341,7 +371,10 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
             record.paymentId = paymentId;
             record.providerAgentId = payment.providerAgentId;
             record.buyerAgentId = payment.buyerAgentId;
+            record.serviceId = payment.serviceId;
             recordIds.push(paymentId);
+        } else if (record.serviceId == bytes32(0)) {
+            record.serviceId = payment.serviceId;
         }
 
         // Revision path: if `refUID` is set, it MUST point at a confirmation
@@ -357,9 +390,11 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
             require(paymentIdByUid[a.refUID] == paymentId, "refUID belongs to different payment");
             if (old == BuyerConfirmation.Confirmed) {
                 confirmedCount[payment.providerAgentId]--;
+                confirmedByService[record.serviceId]--;
                 buyerConfirmedCount[payment.buyerAgentId]--;
             } else {
                 notConfirmedCount[payment.providerAgentId]--;
+                notConfirmedByService[record.serviceId]--;
                 buyerNotConfirmedCount[payment.buyerAgentId]--;
             }
             // Clear the mapping so the old UID can't be used as a refUID
@@ -377,9 +412,11 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
         if (confirmation == BuyerConfirmation.Confirmed) {
             confirmedCount[payment.providerAgentId]++;
+            confirmedByService[record.serviceId]++;
             buyerConfirmedCount[payment.buyerAgentId]++;
         } else {
             notConfirmedCount[payment.providerAgentId]++;
+            notConfirmedByService[record.serviceId]++;
             buyerNotConfirmedCount[payment.buyerAgentId]++;
         }
 
@@ -387,7 +424,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         paymentIdByUid[a.uid] = paymentId;
 
         emit BuyerConfirmationSubmitted(
-            paymentId, payment.providerAgentId, payment.buyerAgentId, confirmation, a.uid, a.refUID
+            paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, confirmation, a.uid, a.refUID
         );
     }
 
@@ -404,18 +441,20 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         // attest handler.
         uint256 paymentId = paymentIdByUid[a.uid];
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+        ReputationRecord storage record = _records[paymentId];
 
         if (old == BuyerConfirmation.Confirmed) {
             confirmedCount[payment.providerAgentId]--;
+            confirmedByService[record.serviceId]--;
             buyerConfirmedCount[payment.buyerAgentId]--;
         } else {
             notConfirmedCount[payment.providerAgentId]--;
+            notConfirmedByService[record.serviceId]--;
             buyerNotConfirmedCount[payment.buyerAgentId]--;
         }
         delete confirmationByUid[a.uid];
         delete paymentIdByUid[a.uid];
 
-        ReputationRecord storage record = _records[paymentId];
         // If the revoked attestation was the *current* confirmation on the
         // record, roll back the record too so `getRecord` reflects reality.
         if (record.confirmation == old) {
@@ -424,17 +463,27 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         }
     }
 
-    // ── Refund mirror (unchanged external shape) ────────────────────────
+    // ── Refund mirror (per-service dimension added) ─────────────────────
 
     /// @notice Called by the PaymentRouter when a provider refunds (partial
-    ///         or full). Aggregates into `refundedAmount[paymentId]`.
+    ///         or full). Aggregates into `refundedAmount[paymentId]` and
+    ///         `refundedAmountByService[serviceId]`.
+    /// @dev    The serviceId is read from the local record if present, or
+    ///         lazy-fetched from the router for refund-before-outcome paths.
     function recordRefund(uint256 paymentId, uint256 amountToBuyer) external onlyPaymentRouter {
+        ReputationRecord storage record = _records[paymentId];
+        bytes32 svcId = record.serviceId;
+        if (svcId == bytes32(0)) {
+            svcId = paymentRouter.getPayment(paymentId).serviceId;
+        }
+
         uint256 cumulative = refundedAmount[paymentId] + amountToBuyer;
         refundedAmount[paymentId] = cumulative;
-        emit ReputationRefunded(paymentId, amountToBuyer, cumulative);
+        refundedAmountByService[svcId] += amountToBuyer;
+        emit ReputationRefunded(paymentId, svcId, amountToBuyer, cumulative);
     }
 
-    // ── Views (preserved signatures) ────────────────────────────────────
+    // ── Views ───────────────────────────────────────────────────────────
 
     function getRecord(uint256 paymentId) external view returns (ReputationRecord memory) {
         return _records[paymentId];
@@ -460,6 +509,29 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         canceled = canceledCount[providerAgentId];
         confirmed = confirmedCount[providerAgentId];
         notConfirmed_ = notConfirmedCount[providerAgentId];
+    }
+
+    /// @notice Per-service reputation tuple. Provider-level stats blend
+    ///         across all services; this view returns the service-scoped
+    ///         numbers needed for category-level discovery ranking.
+    function getServiceStats(bytes32 serviceId)
+        external
+        view
+        returns (
+            uint256 completed,
+            uint256 failed,
+            uint256 canceled,
+            uint256 confirmed,
+            uint256 notConfirmed_,
+            uint256 totalRefunded
+        )
+    {
+        completed = completedByService[serviceId];
+        failed = failedByService[serviceId];
+        canceled = canceledByService[serviceId];
+        confirmed = confirmedByService[serviceId];
+        notConfirmed_ = notConfirmedByService[serviceId];
+        totalRefunded = refundedAmountByService[serviceId];
     }
 
     function getBuyerStats(uint256 buyerAgentId)

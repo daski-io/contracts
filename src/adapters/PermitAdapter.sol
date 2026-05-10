@@ -50,6 +50,7 @@ contract PermitAdapter is Initializable, UUPSUpgradeable, IPermitAdapter {
         uint256 amount,
         bytes32 serviceRef,
         uint256 providerAgentId,
+        bytes32 serviceId,
         PermitData calldata permit
     ) external returns (uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
@@ -67,7 +68,7 @@ contract PermitAdapter is Initializable, UUPSUpgradeable, IPermitAdapter {
         // Pull funds from buyer straight into the router.
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
 
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId);
+        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
     }
 
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);

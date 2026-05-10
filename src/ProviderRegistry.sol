@@ -11,18 +11,24 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 
-/// @notice Daski-specific provider catalog. Now keyed by ERC-8004 agentId.
-///         The Agent Card is resolved off-chain by following the agentURI in
-///         the IdentityRegistry — we no longer store `agentCardURI` here.
+/// @notice Daski-specific provider gate. A "provider" is the real-world
+///         operator (Blue T Group LLC, etc.) — identified by an ERC-8004
+///         agent NFT in IdentityRegistry, with a row here marking it as an
+///         active Daski provider. Services offered by the provider live in
+///         the separate Daski `ServiceRegistry`. Per ERC-8004 v1, each NFT
+///         represents one operator that may field many capabilities; do NOT
+///         re-introduce a per-service NFT pattern.
+///
+/// Auth model on mutating functions other than `register`: the caller must be
+/// the NFT owner, an ERC-721 operator (`isApprovedForAll`), or per-token
+/// approved spender (`getApproved`) — matching the surface used in the rest
+/// of the stack. `register(agentId)` stays strict on `ownerOf` because
+/// listing is a one-time act of consent that should require the actual key.
 contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IProviderRegistry {
     using SafeERC20 for IERC20;
 
     mapping(uint256 => Provider) public _providers;
     uint256[] public providerIds;
-    /// @dev DEPRECATED — set during register() in earlier versions but never
-    ///      consumed. Slot retained to preserve UUPS upgrade safety; new
-    ///      code does not write here.
-    mapping(uint256 => uint256) public providerIndex;
 
     address public admin;
     address public pendingAdmin;
@@ -33,8 +39,7 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
 
     /// @dev Wallet → agentId reverse index. Populated on register() and
     ///      updateWalletAddress() so getProviderByAddress is O(1) instead of
-    ///      a linear scan over providerIds. Appended at the end of storage
-    ///      so existing slot order is preserved across UUPS upgrades.
+    ///      a linear scan over providerIds.
     mapping(address => uint256) private _agentIdByWallet;
 
     event ProviderRegistered(uint256 indexed agentId, address indexed wallet);
@@ -83,8 +88,15 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         emit ProviderRegistered(agentId, msg.sender);
     }
 
+    /// @notice Update the Daski-internal walletAddress hint for a provider.
+    /// @dev    The ERC-8004 agentWallet (in IdentityRegistry) is the
+    ///         canonical payee surface used by PaymentRouter and refund auth.
+    ///         walletAddress here is a Daski-internal field retained for
+    ///         historical compatibility with older off-chain consumers.
+    ///         TODO: deprecate walletAddress in favor of identity.getAgentWallet
+    ///         once all off-chain consumers have migrated.
     function updateWalletAddress(uint256 agentId, address newWallet) external {
-        _requireAgentOwner(agentId);
+        _requireAgentAuth(agentId);
         require(_isRegistered(agentId), "not registered");
         require(newWallet != address(0), "zero wallet");
 
@@ -104,7 +116,7 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
     }
 
     function setActive(uint256 agentId, bool active) external {
-        _requireAgentOwner(agentId);
+        _requireAgentAuth(agentId);
         require(_isRegistered(agentId), "not registered");
         _providers[agentId].isActive = active;
         emit ProviderActiveStatusChanged(agentId, active);
@@ -185,8 +197,17 @@ contract ProviderRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IP
         return _providers[agentId].walletAddress != address(0);
     }
 
-    function _requireAgentOwner(uint256 agentId) internal view {
-        require(identity.ownerOf(agentId) == msg.sender, "not agent owner");
+    /// @dev Mirrors the auth surface used by IdentityRegistry,
+    ///      ReputationRegistry, and ValidationRegistry: NFT owner OR ERC-721
+    ///      operator OR per-token approved spender. Used by mutating calls
+    ///      other than `register`.
+    function _requireAgentAuth(uint256 agentId) internal view {
+        address owner = identity.ownerOf(agentId);
+        require(
+            msg.sender == owner || identity.isApprovedForAll(owner, msg.sender)
+                || identity.getApproved(agentId) == msg.sender,
+            "not owner or operator"
+        );
     }
 
     function _authorizeUpgrade(address) internal override onlyAdmin {}

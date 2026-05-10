@@ -9,32 +9,42 @@ interface IPaymentRouter {
     struct PaymentRecord {
         uint256 buyerAgentId;
         uint256 providerAgentId;
+        bytes32 serviceId; // ServiceRegistry serviceId this payment was for
         address token; // token used for this payment
         uint256 amount; // original gross amount
         address cachedBuyerWallet; // captured at settle; fallback for refund if agent unsets
-        bytes32 serviceRef; // convenience for joins
+        bytes32 serviceRef; // adapter-supplied reference, single-use
         // Block timestamp at settlement. Used by ReputationStorage to derive
         // fulfillment time from the outcome attestation rather than trusting
-        // the provider-supplied value. Appended at the end so existing
-        // mapping entries from earlier deployments aren't rearranged on
-        // upgrade — pre-upgrade entries read this slot as 0, which the
-        // resolver treats as "unknown, fall back to attested value".
+        // the provider-supplied value.
         uint256 paidAt;
     }
 
     /// @notice Adapter-facing settlement entry point. The adapter MUST have
     ///         transferred `amount` of `token` into this contract (router)
-    ///         before calling. Router splits (provider/treasury), stores the
-    ///         PaymentRecord, emits PaymentSettled, returns the new paymentId.
-    function settle(address token, uint256 amount, bytes32 serviceRef, uint256 buyerAgentId, uint256 providerAgentId)
-        external
-        returns (uint256 paymentId);
+    ///         before calling. Router validates the (provider, service) pair
+    ///         against ServiceRegistry, splits funds (provider/treasury),
+    ///         stores the PaymentRecord, emits PaymentSettled, returns the
+    ///         new paymentId.
+    /// @dev    `serviceId` MUST belong to `providerAgentId` and the service
+    ///         MUST be active. Payee resolution: serviceWallet if set, else
+    ///         the provider's ERC-8004 agentWallet.
+    function settle(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        uint256 providerAgentId,
+        bytes32 serviceId
+    ) external returns (uint256 paymentId);
 
-    /// @notice Provider-initiated refund. The provider wallet (must be the
-    ///         current agentWallet of `providerAgentId`) must have approved
-    ///         this router for at least `amountToBuyer` of the ORIGINAL
-    ///         payment token. Cumulative refunds are enforced to not exceed
-    ///         the original amount.
+    /// @notice Provider-initiated refund. Authorized callers are: NFT owner,
+    ///         ERC-721 operator (isApprovedForAll), per-token approved
+    ///         spender (getApproved), or the provider's current agentWallet.
+    ///         Source of funds is `msg.sender` — the caller must have
+    ///         approved the router for at least `amountToBuyer` of the
+    ///         original payment token. Cumulative refunds are capped at the
+    ///         original payment amount.
     function refund(uint256 paymentId, uint256 amountToBuyer) external;
 
     // ── Views ────────────────────────────────────────────────────────

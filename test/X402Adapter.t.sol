@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IdentityRegistry} from "../src/IdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
+import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
@@ -15,6 +16,7 @@ import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 contract X402AdapterTest is Test {
     IdentityRegistry identity;
     ProviderRegistry registry;
+    ServiceRegistry services;
     PaymentRouter router;
     X402Adapter adapter;
     MockUSDC usdc;
@@ -28,6 +30,7 @@ contract X402AdapterTest is Test {
     address buyer;
     uint256 buyerAgentId;
     uint256 providerAgentId;
+    bytes32 serviceId;
 
     function setUp() public {
         buyer = vm.addr(BUYER_KEY);
@@ -50,13 +53,24 @@ contract X402AdapterTest is Test {
             )
         );
 
+        ServiceRegistry sregImpl = new ServiceRegistry();
+        services = ServiceRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(sregImpl),
+                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                )
+            )
+        );
+
         PaymentRouter routerImpl = new PaymentRouter();
         router = PaymentRouter(
             address(
                 new ERC1967Proxy(
                     address(routerImpl),
                     abi.encodeCall(
-                        PaymentRouter.initialize, (address(identity), address(registry), treasury, 500, admin)
+                        PaymentRouter.initialize,
+                        (address(identity), address(registry), address(services), treasury, 500, admin)
                     )
                 )
             )
@@ -84,14 +98,18 @@ contract X402AdapterTest is Test {
         registry.register(providerAgentId);
         vm.stopPrank();
 
+        vm.prank(provider);
+        serviceId = services.registerService(providerAgentId, "skill", "1", "u", address(0));
+
         vm.prank(buyer);
         buyerAgentId = identity.register();
         usdc.mint(buyer, 1000e6);
     }
 
     /// @dev Sign an EIP-3009 auth with the nonce bound to (serviceRef,
-    ///      providerAgentId) per X402Adapter's auth-binding requirement.
-    function _authFor(uint256 value, bytes32 serviceRef, uint256 providerId)
+    ///      providerAgentId, serviceId) per X402Adapter's auth-binding
+    ///      requirement.
+    function _authFor(uint256 value, bytes32 serviceRef, uint256 providerId, bytes32 svcId)
         internal
         view
         returns (IX402Adapter.EIP3009Auth memory)
@@ -105,15 +123,15 @@ contract X402AdapterTest is Test {
             value,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(serviceRef, providerId))
+            keccak256(abi.encode(serviceRef, providerId, svcId))
         );
     }
 
     function test_settleHappyPath() public {
         bytes32 ref = keccak256("ref-1");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, ref, providerAgentId, auth);
+        uint256 paymentId = adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(treasury), 6e6); // includes 1 USDC listing fee from setUp
@@ -123,17 +141,18 @@ contract X402AdapterTest is Test {
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, buyerAgentId);
         assertEq(rec.providerAgentId, providerAgentId);
+        assertEq(rec.serviceId, serviceId);
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
     }
 
     function test_settleBadSignatureReverts() public {
         bytes32 ref = keccak256("ref-bs");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
         auth.v = auth.v == 27 ? 28 : 27;
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, auth);
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
     }
 
     function test_settleExpiredAuthReverts() public {
@@ -147,26 +166,26 @@ contract X402AdapterTest is Test {
             100e6,
             0,
             block.timestamp + 10,
-            keccak256(abi.encode(ref, providerAgentId))
+            keccak256(abi.encode(ref, providerAgentId, serviceId))
         );
         vm.warp(block.timestamp + 100);
         vm.prank(relayer);
         vm.expectRevert("auth expired");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, auth);
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
     }
 
     function test_settleNonceReplayReverts() public {
         bytes32 ref = keccak256("ref-replay");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(50e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(50e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
-        adapter.settle(address(usdc), 50e6, ref, providerAgentId, auth);
+        adapter.settle(address(usdc), 50e6, ref, providerAgentId, serviceId, auth);
 
         // Same auth → same bound nonce → token rejects on replay. With the
         // binding in place, a buyer who wants to retry MUST sign a new auth
         // with a fresh serviceRef.
         vm.prank(relayer);
         vm.expectRevert("auth already used");
-        adapter.settle(address(usdc), 50e6, ref, providerAgentId, auth);
+        adapter.settle(address(usdc), 50e6, ref, providerAgentId, serviceId, auth);
     }
 
     function test_settleBuyerNoAgentReverts() public {
@@ -174,10 +193,10 @@ contract X402AdapterTest is Test {
         vm.prank(buyer);
         identity.unsetAgentWallet(buyerAgentId);
 
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId, serviceId);
         vm.prank(relayer);
         vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-na"), providerAgentId, auth);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-na"), providerAgentId, serviceId, auth);
     }
 
     function test_settleUnacceptedTokenReverts() public {
@@ -193,44 +212,54 @@ contract X402AdapterTest is Test {
             100e6,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(ref, providerAgentId))
+            keccak256(abi.encode(ref, providerAgentId, serviceId))
         );
         vm.prank(relayer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, ref, providerAgentId, auth);
+        adapter.settle(address(other), 100e6, ref, providerAgentId, serviceId, auth);
     }
 
-    // ── H-2 fix: auth binding to (serviceRef, providerAgentId) ───────────
+    // ── Auth binding to (serviceRef, providerAgentId, serviceId) ─────────
 
     function test_settleAuthMismatchOnServiceRefReverts() public {
         bytes32 signedRef = keccak256("ref-signed");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, signedRef, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, signedRef, providerAgentId, serviceId);
 
-        // Submission uses a DIFFERENT serviceRef than the buyer signed for.
-        // With the H-2 fix, this is rejected before any funds move.
         vm.prank(makeAddr("frontrunner"));
         vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-attacker"), providerAgentId, auth);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-attacker"), providerAgentId, serviceId, auth);
 
-        // Buyer's funds untouched and the auth nonce was NOT consumed —
-        // they can still retry with the correct serviceRef.
+        // Buyer's funds untouched — they can still retry.
         assertEq(usdc.balanceOf(buyer), 1000e6, "no funds moved on mismatch");
     }
 
     function test_settleAuthMismatchOnProviderReverts() public {
         bytes32 ref = keccak256("ref-pm");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
 
-        // Submission uses a DIFFERENT providerAgentId.
         vm.prank(makeAddr("frontrunner"));
         vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId + 99, auth);
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId + 99, serviceId, auth);
+    }
+
+    function test_settleAuthMismatchOnServiceIdReverts() public {
+        // Register a second service for the same provider.
+        vm.prank(provider);
+        bytes32 svc2 = services.registerService(providerAgentId, "skill", "2", "u", address(0));
+
+        bytes32 ref = keccak256("ref-svm");
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
+
+        // Submit with svc2 but the auth was bound to serviceId — reject.
+        vm.prank(makeAddr("frontrunner"));
+        vm.expectRevert("auth not bound to call");
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, svc2, auth);
     }
 
     function test_authNonceFor_matchesCallBinding() public view {
         bytes32 ref = keccak256("hashtest");
-        bytes32 expected = keccak256(abi.encode(ref, providerAgentId));
-        assertEq(adapter.authNonceFor(ref, providerAgentId), expected);
+        bytes32 expected = keccak256(abi.encode(ref, providerAgentId, serviceId));
+        assertEq(adapter.authNonceFor(ref, providerAgentId, serviceId), expected);
     }
 
     // --- settleWithRegistration (atomic gasless register-and-settle) -----
@@ -258,7 +287,7 @@ contract X402AdapterTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    function _eip3009For(uint256 key, address from, uint256 value, bytes32 serviceRef, uint256 providerId)
+    function _eip3009For(uint256 key, address from, uint256 value, bytes32 serviceRef, uint256 providerId, bytes32 svc)
         internal
         view
         returns (IX402Adapter.EIP3009Auth memory)
@@ -272,7 +301,7 @@ contract X402AdapterTest is Test {
             value,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(serviceRef, providerId))
+            keccak256(abi.encode(serviceRef, providerId, svc))
         );
     }
 
@@ -286,11 +315,12 @@ contract X402AdapterTest is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://fresh", 0, deadline);
         bytes32 ref = keccak256("ref-swr-1");
-        IX402Adapter.EIP3009Auth memory auth = _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth =
+            _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId, serviceId);
 
         vm.prank(relayer);
         (uint256 newBuyerAgentId, uint256 paymentId) = adapter.settleWithRegistration(
-            address(usdc), 80e6, ref, providerAgentId, auth, "ipfs://fresh", deadline, regSig
+            address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://fresh", deadline, regSig
         );
 
         // Registered + paid in one tx.
@@ -301,6 +331,7 @@ contract X402AdapterTest is Test {
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, newBuyerAgentId);
         assertEq(rec.amount, 80e6);
+        assertEq(rec.serviceId, serviceId);
     }
 
     function test_settleWithRegistration_alreadyRegisteredSkipsRegistration() public {
@@ -308,15 +339,13 @@ contract X402AdapterTest is Test {
         // The registration sig + agentURI args should be ignored and the
         // original agentId reused.
         uint256 deadline = block.timestamp + 1 hours;
-        // Deliberately pass a signature that would FAIL if checked — proves
-        // the contract takes the short-circuit path when already registered.
         bytes memory invalidRegSig = hex"deadbeef";
         bytes32 ref = keccak256("ref-swr-2");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(50e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(50e6, ref, providerAgentId, serviceId);
 
         vm.prank(relayer);
         (uint256 reusedAgentId, uint256 paymentId) = adapter.settleWithRegistration(
-            address(usdc), 50e6, ref, providerAgentId, auth, "anything", deadline, invalidRegSig
+            address(usdc), 50e6, ref, providerAgentId, serviceId, auth, "anything", deadline, invalidRegSig
         );
 
         assertEq(reusedAgentId, buyerAgentId, "existing agentId reused");
@@ -329,16 +358,18 @@ contract X402AdapterTest is Test {
         usdc.mint(freshBuyer, 100e6);
 
         uint256 deadline = block.timestamp + 1 hours;
-        // Sign registration with the WRONG key — registration will revert.
         bytes memory badRegSig = _signRegisterAgent(0xBAD, freshBuyer, "ipfs://x", 0, deadline);
         bytes32 ref = keccak256("ref-swr-3");
-        IX402Adapter.EIP3009Auth memory auth = _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth =
+            _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId, serviceId);
 
         uint256 freshBuyerUsdcBefore = usdc.balanceOf(freshBuyer);
 
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
-        adapter.settleWithRegistration(address(usdc), 80e6, ref, providerAgentId, auth, "ipfs://x", deadline, badRegSig);
+        adapter.settleWithRegistration(
+            address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://x", deadline, badRegSig
+        );
 
         // Atomicity: nothing moved.
         assertEq(identity.agentOfWallet(freshBuyer), 0, "no agent minted");
@@ -352,14 +383,17 @@ contract X402AdapterTest is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://x", 0, deadline);
         bytes32 ref = keccak256("ref-swr-4");
-        IX402Adapter.EIP3009Auth memory auth = _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId);
+        IX402Adapter.EIP3009Auth memory auth =
+            _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId, serviceId);
         // Corrupt the EIP-3009 signature so settlement reverts AFTER
         // registration succeeded inside the same call frame.
         auth.v = auth.v == 27 ? 28 : 27;
 
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
-        adapter.settleWithRegistration(address(usdc), 80e6, ref, providerAgentId, auth, "ipfs://x", deadline, regSig);
+        adapter.settleWithRegistration(
+            address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://x", deadline, regSig
+        );
 
         // Atomicity: registration is rolled back along with the failed transfer.
         assertEq(identity.agentOfWallet(freshBuyer), 0, "registration rolled back");
