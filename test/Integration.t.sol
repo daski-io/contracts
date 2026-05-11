@@ -371,4 +371,89 @@ contract IntegrationTest is Test {
         assertEq(cP, 5);
         assertEq(confP, 5);
     }
+
+    /// @notice Three-layer cardinality regression. One provider, ONE
+    ///         service (`serviceSlug = "domain-registration"`). The
+    ///         off-chain serviceURI JSON declares two skills
+    ///         (`register-domain`, `renew-domain`) that implement the
+    ///         service. Three settlements occur — two intended to invoke
+    ///         `register-domain` and one to invoke `renew-domain`. The
+    ///         on-chain payment binding is identical for all three
+    ///         (same serviceId) because skills are off-chain plumbing,
+    ///         not on-chain identity.
+    ///
+    /// Pins the intended cardinality: services are product categories,
+    /// skills are A2A methods, and multiple skills can roll up into one
+    /// service. Pre-fix, an implementer might have registered one
+    /// Service per skill — this test would still PASS in that scenario
+    /// (nothing forbids it), but the assertions below are written
+    /// against the *correct* model and provider implementations should
+    /// follow it.
+    function test_threeLayerCardinality_skillsRollUpToOneService() public {
+        vm.prank(buyer);
+        identity.register("ipfs://buyer");
+        usdc.mint(buyer, 1000e6);
+
+        vm.prank(provider);
+        uint256 providerAgentId = identity.register("ipfs://provider");
+        usdc.mint(provider, 1e6);
+        vm.startPrank(provider);
+        usdc.approve(address(registry), 1e6);
+        registry.register(providerAgentId);
+        vm.stopPrank();
+
+        // ONE on-chain service. The skills (register-domain, renew-domain)
+        // live in the off-chain JSON pointed to by serviceURI; on-chain we
+        // only know about the slug.
+        vm.prank(provider);
+        bytes32 serviceId = services.registerService(
+            providerAgentId, "domain-registration", "1", "ipfs://domain-registration-service.json", address(0)
+        );
+
+        // Three settlements — two notionally invoking `register-domain`,
+        // one `renew-domain`. The skill name never appears on-chain; the
+        // only on-chain identity is the shared serviceId.
+        uint256 pid1 =
+            _signedAuthAndSettle(BUYER_KEY, buyer, 15e6, keccak256("svc-A-register-1"), providerAgentId, serviceId);
+        uint256 pid2 =
+            _signedAuthAndSettle(BUYER_KEY, buyer, 15e6, keccak256("svc-A-register-2"), providerAgentId, serviceId);
+        uint256 pid3 =
+            _signedAuthAndSettle(BUYER_KEY, buyer, 10e6, keccak256("svc-A-renew-1"), providerAgentId, serviceId);
+
+        // All three payment records carry the SAME serviceId. The router
+        // does not care which skill the buyer is invoking — that's a
+        // gateway/provider concern.
+        assertEq(router.getPayment(pid1).serviceId, serviceId);
+        assertEq(router.getPayment(pid2).serviceId, serviceId);
+        assertEq(router.getPayment(pid3).serviceId, serviceId);
+
+        // Provider attests outcomes, buyer confirms all three.
+        vm.prank(provider);
+        eas.attest(_outcomeReq(pid1, ReputationStorage.TransactionOutcome.Completed));
+        vm.prank(provider);
+        eas.attest(_outcomeReq(pid2, ReputationStorage.TransactionOutcome.Completed));
+        vm.prank(provider);
+        eas.attest(_outcomeReq(pid3, ReputationStorage.TransactionOutcome.Completed));
+        vm.prank(relayer);
+        eas.attestByDelegation(_delegatedConfirm(buyer, pid1));
+        vm.prank(relayer);
+        eas.attestByDelegation(_delegatedConfirm(buyer, pid2));
+        vm.prank(relayer);
+        eas.attestByDelegation(_delegatedConfirm(buyer, pid3));
+
+        // Reputation rolls up at the service level: 3 completed,
+        // 3 confirmed against the SAME serviceId. Provider-level numbers
+        // match because there's only one service.
+        (uint256 svcCompleted,,, uint256 svcConfirmed,,) = reputation.getServiceStats(serviceId);
+        assertEq(svcCompleted, 3, "all three skill invocations roll up to one service");
+        assertEq(svcConfirmed, 3);
+
+        (uint256 provCompleted,,, uint256 provConfirmed,) = reputation.getProviderStats(providerAgentId);
+        assertEq(provCompleted, 3);
+        assertEq(provConfirmed, 3);
+
+        // Per-provider service count is ONE — not three (would-be wrong
+        // cardinality from pre-fix per-skill registration).
+        assertEq(services.getServiceCountByProvider(providerAgentId), 1);
+    }
 }

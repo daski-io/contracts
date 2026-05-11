@@ -65,20 +65,20 @@ contract ServiceRegistryTest is Test {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    function _expectedId(uint256 agentId, string memory skillId, string memory version)
+    function _expectedId(uint256 agentId, string memory serviceSlug, string memory version)
         internal
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(agentId, skillId, version));
+        return keccak256(abi.encodePacked(agentId, serviceSlug, version));
     }
 
-    function _registerSimple(address as_, string memory skillId, string memory version)
+    function _registerSimple(address as_, string memory serviceSlug, string memory version)
         internal
         returns (bytes32 serviceId)
     {
         vm.prank(as_);
-        serviceId = services.registerService(providerAgentId, skillId, version, "ipfs://meta", address(0));
+        serviceId = services.registerService(providerAgentId, serviceSlug, version, "ipfs://meta", address(0));
     }
 
     // ── registerService ──────────────────────────────────────────────
@@ -96,7 +96,7 @@ contract ServiceRegistryTest is Test {
 
         IServiceRegistry.Service memory svc = services.getService(svcId);
         assertEq(svc.providerAgentId, providerAgentId);
-        assertEq(svc.skillId, "domain-registration");
+        assertEq(svc.serviceSlug, "domain-registration");
         assertEq(svc.version, "1");
         assertEq(svc.serviceURI, "ipfs://meta");
         assertEq(svc.serviceWallet, address(0));
@@ -165,17 +165,17 @@ contract ServiceRegistryTest is Test {
         assertEq(services.getServiceCountByProvider(providerAgentId), 2);
     }
 
-    function test_registerService_emptySkillReverts() public {
+    function test_registerService_emptySlugReverts() public {
         vm.prank(provider);
-        vm.expectRevert("bad skillId length");
+        vm.expectRevert("bad serviceSlug length");
         services.registerService(providerAgentId, "", "1", "u", address(0));
     }
 
-    function test_registerService_skillTooLongReverts() public {
+    function test_registerService_slugTooLongReverts() public {
         // 65 chars
         string memory long65 = "12345678901234567890123456789012345678901234567890123456789012345";
         vm.prank(provider);
-        vm.expectRevert("bad skillId length");
+        vm.expectRevert("bad serviceSlug length");
         services.registerService(providerAgentId, long65, "1", "u", address(0));
     }
 
@@ -193,10 +193,10 @@ contract ServiceRegistryTest is Test {
         services.registerService(providerAgentId, "skill", long33, "u", address(0));
     }
 
-    function test_registerService_distinctProvidersSameSkillVersion() public {
+    function test_registerService_distinctProvidersSameSlugVersion() public {
         // Two different providers register a service with the same
-        // (skillId, version) — the resulting serviceIds must differ because
-        // providerAgentId is part of the hash.
+        // (serviceSlug, version) — the resulting serviceIds must differ
+        // because providerAgentId is part of the hash.
         address otherProvider = makeAddr("otherProvider");
         vm.prank(otherProvider);
         uint256 otherAgentId = identity.register("u2");

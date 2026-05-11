@@ -8,8 +8,18 @@ identity, provider registry, rail-agnostic payment routing, and bilateral
 reputation backed by EAS attestations. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia. 209 unit + integration tests passing.
+**Status:** v1 deployed on Base Sepolia. 210 unit + integration tests passing.
 Audit pending.
+
+## Three-layer identity model
+
+| Layer       | Where it lives                          | Identifier        | Example                |
+|-------------|-----------------------------------------|-------------------|------------------------|
+| Provider    | On-chain (`IdentityRegistry`, ERC-8004) | `agentId`         | Blue T Group LLC       |
+| **Service** | On-chain (`ServiceRegistry`)            | `serviceId`       | "Domain Registration"  |
+| Skill       | Off-chain (provider's A2A Agent Card)   | `AgentSkill.id`   | `register-domain`      |
+
+A *service* is a marketable product — the unit of buyer discovery and reputation. A *skill* is a callable A2A method. **One service maps to one or more skills**; the mapping lives in the off-chain `serviceURI` JSON, not on-chain.
 
 ## Contracts
 
@@ -17,7 +27,7 @@ Audit pending.
 |---------------------|---------|
 | **IdentityRegistry**   | ERC-8004 identity for every actor — buyers, gateway, providers. One NFT per *operator*; services live in `ServiceRegistry`. Enforces a 1:1 wallet ↔ agent invariant. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates ERC-8004 agents into the Daski "provider" role. |
-| **ServiceRegistry**    | Per-provider service catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, skillId, version)`. |
+| **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
 | **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
@@ -36,22 +46,22 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 | Contract            | Address                                      |
 |---------------------|----------------------------------------------|
 | USDC (Circle)       | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| IdentityRegistry    | `0xF6d62Fb7AC723C745E9a9Ea6c11B8562db7D6109` |
-| ReputationRegistry  | `0xa0641ffBd9e533756f2b79f46b751b621CEE2483` |
-| ValidationRegistry  | `0x796D4ae756fB0B603442a4Ec9be03C428afF086a` |
-| ProviderRegistry    | `0x3b941dB8d64cbE91366C90EfFB4141e779a35717` |
-| ServiceRegistry     | `0x8e5397978A10527e4b4F7a61d7565956dF66368b` |
-| PaymentRouter       | `0xb91880314637985298b9353BF0C139c4cB7DdFA3` |
-| ReputationStorage   | `0xC03E48bc244452A5D042969694eA7f3aeD0B3338` |
-| X402Adapter         | `0x09d6B61EA9844Ba0d9ecc4E3280670782EDa6f5D` |
-| PermitAdapter       | `0xedD3460e4B18dbE1136553e5CDC81a1528f948f5` |
-| ApprovalAdapter     | `0x1586Dea86b7abf231dD7E6bFde05C5BAA474b082` |
+| IdentityRegistry    | `0xeaaC421470c954207Eb83cA8466aFD76073AeC6a` |
+| ReputationRegistry  | `0xA7818955C3481d4cf28dB7B2911Dee3D89668461` |
+| ValidationRegistry  | `0x0FA6E239F1bDc7798338e853aBa515a294F14c3B` |
+| ProviderRegistry    | `0xb97EEf193ab724f7Fb83C03A7536E87C746e6365` |
+| ServiceRegistry     | `0xFB261Af34428a8ad00A6aa3B686527EFc9F64409` |
+| PaymentRouter       | `0xd63a2E11D4E9f9a05A6d183cBa7A58E18e802Bfe` |
+| ReputationStorage   | `0x20fC391ed7994c2a3e5A054A6671e9dA6Ba07612` |
+| X402Adapter         | `0x5d351E9e65484053CABa86d4c957F6cb71f95a6F` |
+| PermitAdapter       | `0xAC74Ce3B0E18037A34a13b3c5b6Dd58099a80a84` |
+| ApprovalAdapter     | `0xee7dC5C5D22C9ce5D12ce5342cEFe7d208A158f8` |
 | EAS                 | `0x4200000000000000000000000000000000000021` |
 | Schema Registry     | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0xa61ee8c25187ab94ca4008e8b8e57af59c2461a849bca1202d5ff951c668868b`
-- Confirmation: `0xf89caf3be9ed938aadaf1421bb02b428482efb5c3ab87406ba95837052b0ab03`
+- Outcome: `0xc9ab6f5d6d2b09b1ab2fe3eeed94f74d7ff60f0313c9c2ad301764c118ac7c06`
+- Confirmation: `0x39d07ff65235d34f01f3bdb90a0b5eb6a5ffbc9380e676043292a6151227b227`
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
@@ -79,7 +89,7 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 209 tests across 11 suites
+forge test       # 210 tests across 11 suites
 forge test -vvv  # verbose
 forge fmt
 ```
@@ -96,7 +106,7 @@ forge fmt
 | ValidationRegistry  | 12 |
 | PermitAdapter       | 5  |
 | ApprovalAdapter     | 4  |
-| Integration         | 2  |
+| Integration         | 3  |
 
 ## Deploy
 

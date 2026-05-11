@@ -17,6 +17,23 @@ import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 ///         and a single provider fields many services. A service is a row
 ///         in this contract, not its own NFT.
 ///
+/// Three-layer identity model:
+///   1. Provider — on-chain ERC-8004 agent NFT, identified by `agentId`.
+///                 The real-world operator (e.g. "Blue T Group LLC").
+///   2. Service  — on-chain row in this contract, identified by
+///                 `serviceId = keccak256(providerAgentId, serviceSlug, version)`.
+///                 A *marketable product* (e.g. "Domain Registration",
+///                 "LLC Formation"). The unit of discovery and reputation.
+///   3. Skill    — off-chain A2A AgentSkill, identified by `AgentSkill.id`
+///                 (e.g. `register-domain`, `renew-domain`). A callable
+///                 method. One service is implemented by **one or more**
+///                 skills; the mapping lives in the off-chain `serviceURI`
+///                 JSON document, NOT on-chain.
+///
+/// The on-chain registry knows nothing about A2A skills. The serviceURI's
+/// `skills` array is a Daski convention enforced off-chain by the gateway
+/// at ingest time.
+///
 /// Auth model — every mutating call on an existing service requires the
 /// caller to be authorized over the provider's ERC-8004 NFT, matching the
 /// surface used by IdentityRegistry / ReputationRegistry / ValidationRegistry:
@@ -66,7 +83,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     /// @inheritdoc IServiceRegistry
     function registerService(
         uint256 providerAgentId,
-        string calldata skillId,
+        string calldata serviceSlug,
         string calldata version,
         string calldata serviceURI,
         address serviceWallet
@@ -79,22 +96,22 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
         require(providerRegistry.isRegistered(providerAgentId), "provider not registered");
         require(providerRegistry.getProvider(providerAgentId).isActive, "provider not active");
 
-        bytes memory skillBytes = bytes(skillId);
-        require(skillBytes.length >= 1 && skillBytes.length <= 64, "bad skillId length");
+        bytes memory slugBytes = bytes(serviceSlug);
+        require(slugBytes.length >= 1 && slugBytes.length <= 64, "bad serviceSlug length");
         bytes memory versionBytes = bytes(version);
         require(versionBytes.length >= 1 && versionBytes.length <= 32, "bad version length");
 
-        serviceId = _computeServiceId(providerAgentId, skillId, version);
-        // Collision guard. If a service with the same (provider, skill,
+        serviceId = _computeServiceId(providerAgentId, serviceSlug, version);
+        // Collision guard. If a service with the same (provider, slug,
         // version) already exists, registerService MUST revert — the same
-        // (skill, version) pair represents the same service capability and
+        // (slug, version) pair represents the same product offering and
         // duplicating it would create ambiguity in payment routing.
         require(_services[serviceId].providerAgentId == 0, "service already registered");
 
         _services[serviceId] = Service({
             providerAgentId: providerAgentId,
             serviceId: serviceId,
-            skillId: skillId,
+            serviceSlug: serviceSlug,
             version: version,
             serviceURI: serviceURI,
             serviceWallet: serviceWallet,
@@ -104,7 +121,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
 
         _servicesByProvider[providerAgentId].push(serviceId);
 
-        emit ServiceRegistered(serviceId, providerAgentId, skillId, version, serviceURI, serviceWallet);
+        emit ServiceRegistered(serviceId, providerAgentId, serviceSlug, version, serviceURI, serviceWallet);
     }
 
     /// @inheritdoc IServiceRegistry
@@ -192,20 +209,20 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     }
 
     /// @inheritdoc IServiceRegistry
-    function computeServiceId(uint256 providerAgentId, string calldata skillId, string calldata version)
+    function computeServiceId(uint256 providerAgentId, string calldata serviceSlug, string calldata version)
         external
         pure
         returns (bytes32)
     {
-        return _computeServiceId(providerAgentId, skillId, version);
+        return _computeServiceId(providerAgentId, serviceSlug, version);
     }
 
-    function _computeServiceId(uint256 providerAgentId, string calldata skillId, string calldata version)
+    function _computeServiceId(uint256 providerAgentId, string calldata serviceSlug, string calldata version)
         internal
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(providerAgentId, skillId, version));
+        return keccak256(abi.encodePacked(providerAgentId, serviceSlug, version));
     }
 
     // ── Auth helpers ─────────────────────────────────────────────────
