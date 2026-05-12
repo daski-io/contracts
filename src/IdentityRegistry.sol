@@ -10,11 +10,10 @@ import {ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC72
 import {
     ERC721URIStorageUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IIdentityRegistry} from "./interfaces/IIdentityRegistry.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 
 /// @notice ERC-8004-compliant Identity Registry built on ERC-721 with URIStorage.
 ///
@@ -44,10 +43,9 @@ import {IIdentityRegistry} from "./interfaces/IIdentityRegistry.sol";
 ///     authoritative per-agent _agentWallet mapping and does not change
 ///     spec-defined behavior.
 contract IdentityRegistry is
-    Initializable,
+    Admin2StepUpgradeable,
     ERC721Upgradeable,
     ERC721URIStorageUpgradeable,
-    UUPSUpgradeable,
     EIP712Upgradeable,
     IIdentityRegistry
 {
@@ -72,8 +70,6 @@ contract IdentityRegistry is
     bytes32 public constant REGISTER_AGENT_TYPEHASH =
         keccak256("RegisterAgent(string agentURI,address agentWallet,uint256 nonce,uint256 deadline)");
 
-    address public admin;
-    address public pendingAdmin;
     uint256 private _nextAgentId;
 
     // agentId → (metadataKey → bytes). `agentWallet` is stored separately
@@ -93,22 +89,16 @@ contract IdentityRegistry is
     // typed-data signature cannot be replayed after unsetAgentWallet.
     mapping(address => uint256) private _walletRotationNonces;
 
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
-
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
     function initialize(address _admin) external initializer {
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         __ERC721_init("Daski Identity", "DASKI-ID");
         __ERC721URIStorage_init();
         __EIP712_init("Daski IdentityRegistry", "1");
-        admin = _admin;
         _nextAgentId = 1;
     }
 
@@ -368,29 +358,5 @@ contract IdentityRegistry is
         return super.supportsInterface(interfaceId);
     }
 
-    // ------------------------------------------------------------------
-    // Admin / upgrade
-    // ------------------------------------------------------------------
-
-    /// @notice Step 1 of admin transfer — propose a new admin. Step 2 is
-    ///         `acceptAdmin()` from `newAdmin`. A typo at proposal time is
-    ///         recoverable; a typo at acceptance is not, but acceptance can
-    ///         only be done by the holder of the proposed key.
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

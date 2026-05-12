@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 // Same pattern as PaymentRouter / ProviderRegistry: use the non-upgradeable
 // ReentrancyGuard. In OZ v5 it is @custom:stateless and safe behind UUPS.
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
+import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski service catalog. Services live here as first-class records
 ///         keyed under an ERC-8004 provider agentId. ServiceRegistry is
@@ -40,7 +41,7 @@ import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 ///   1. NFT owner (ownerOf), OR
 ///   2. operator approved via setApprovalForAll, OR
 ///   3. per-token approved spender (getApproved).
-contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, IServiceRegistry {
+contract ServiceRegistry is Admin2StepUpgradeable, ReentrancyGuard, IServiceRegistry {
     // ── Storage ──────────────────────────────────────────────────────
 
     IERC721 public identity;
@@ -48,21 +49,6 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
 
     mapping(bytes32 => Service) private _services;
     mapping(uint256 => bytes32[]) private _servicesByProvider;
-    /// @dev Reserved for future O(1) removal-style ops; not consumed today.
-    ///      Kept in storage layout to leave room without a storage gap. Reads
-    ///      via the auto-getter return 0 for any serviceId because it is
-    ///      never written.
-    mapping(bytes32 => uint256) private _serviceIndexInProvider;
-
-    address public admin;
-    address public pendingAdmin;
-
-    // ── Modifiers ────────────────────────────────────────────────────
-
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -72,10 +58,9 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     function initialize(address _identity, address _providerRegistry, address _admin) external initializer {
         require(_identity != address(0), "zero identity");
         require(_providerRegistry != address(0), "zero provider registry");
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         identity = IERC721(_identity);
         providerRegistry = IProviderRegistry(_providerRegistry);
-        admin = _admin;
     }
 
     // ── Service registration / management ────────────────────────────
@@ -88,7 +73,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
         string calldata serviceURI,
         address serviceWallet
     ) external nonReentrant returns (bytes32 serviceId) {
-        _requireAgentAuth(providerAgentId);
+        LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
 
         // Provider must be registered AND active. Inactive providers cannot
         // add new services; existing services on an inactive provider remain
@@ -128,7 +113,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     function updateServiceURI(bytes32 serviceId, string calldata newURI) external {
         Service storage svc = _services[serviceId];
         require(svc.providerAgentId != 0, "service not found");
-        _requireAgentAuth(svc.providerAgentId);
+        LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
     }
@@ -140,7 +125,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     function setServiceWallet(bytes32 serviceId, address newWallet) external {
         Service storage svc = _services[serviceId];
         require(svc.providerAgentId != 0, "service not found");
-        _requireAgentAuth(svc.providerAgentId);
+        LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.serviceWallet = newWallet;
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
@@ -152,7 +137,7 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     function setActive(bytes32 serviceId, bool active) external {
         Service storage svc = _services[serviceId];
         require(svc.providerAgentId != 0, "service not found");
-        _requireAgentAuth(svc.providerAgentId);
+        LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
     }
@@ -186,21 +171,9 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
     function getServicesByProviderPaginated(uint256 providerAgentId, uint256 offset, uint256 limit)
         external
         view
-        returns (bytes32[] memory page)
+        returns (bytes32[] memory)
     {
-        bytes32[] storage all = _servicesByProvider[providerAgentId];
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new bytes32[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new bytes32[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
+        return LibPagination.paginate(_servicesByProvider[providerAgentId], offset, limit);
     }
 
     /// @inheritdoc IServiceRegistry
@@ -225,36 +198,5 @@ contract ServiceRegistry is Initializable, UUPSUpgradeable, ReentrancyGuard, ISe
         return keccak256(abi.encodePacked(providerAgentId, serviceSlug, version));
     }
 
-    // ── Auth helpers ─────────────────────────────────────────────────
-
-    /// @dev Mirrors the auth surface in IdentityRegistry / ReputationRegistry /
-    ///      ValidationRegistry: NFT owner OR operator OR per-token approved.
-    function _requireAgentAuth(uint256 agentId) internal view {
-        address owner = identity.ownerOf(agentId);
-        require(
-            msg.sender == owner || identity.isApprovedForAll(owner, msg.sender)
-                || identity.getApproved(agentId) == msg.sender,
-            "not owner or operator"
-        );
-    }
-
-    // ── Admin / upgrade ──────────────────────────────────────────────
-
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

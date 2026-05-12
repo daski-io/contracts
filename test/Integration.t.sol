@@ -138,8 +138,7 @@ contract IntegrationTest is Test {
             )
         );
 
-        outcomeSchemaUid =
-            eas.register("uint256 paymentId,uint8 outcome,uint256 fulfillmentTime", address(reputation), false);
+        outcomeSchemaUid = eas.register("uint256 paymentId,uint8 outcome", address(reputation), false);
         confirmationSchemaUid = eas.register("uint256 paymentId,uint8 confirmation", address(reputation), true);
         reputation.setEAS(address(eas));
         reputation.setOutcomeSchema(outcomeSchemaUid);
@@ -176,7 +175,7 @@ contract IntegrationTest is Test {
                 expirationTime: 0,
                 revocable: false,
                 refUID: bytes32(0),
-                data: abi.encode(pid, uint8(o), uint256(3600)),
+                data: abi.encode(pid, uint8(o)),
                 value: 0
             })
         });

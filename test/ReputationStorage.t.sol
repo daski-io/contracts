@@ -123,8 +123,7 @@ contract ReputationStorageTest is Test {
         );
 
         // Register EAS schemas bound to this resolver + wire the resolver.
-        outcomeSchemaUid =
-            eas.register("uint256 paymentId,uint8 outcome,uint256 fulfillmentTime", address(reputation), false);
+        outcomeSchemaUid = eas.register("uint256 paymentId,uint8 outcome", address(reputation), false);
         confirmationSchemaUid = eas.register("uint256 paymentId,uint8 confirmation", address(reputation), true);
         vm.startPrank(admin);
         reputation.setEAS(address(eas));
@@ -164,7 +163,7 @@ contract ReputationStorageTest is Test {
         return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth);
     }
 
-    function _outcomeReq(uint256 pid, ReputationStorage.TransactionOutcome o, uint256 ft)
+    function _outcomeReq(uint256 pid, ReputationStorage.TransactionOutcome o)
         internal
         view
         returns (AttestationRequest memory)
@@ -176,7 +175,7 @@ contract ReputationStorageTest is Test {
                 expirationTime: 0,
                 revocable: false,
                 refUID: bytes32(0),
-                data: abi.encode(pid, uint8(o), ft),
+                data: abi.encode(pid, uint8(o)),
                 value: 0
             })
         });
@@ -228,7 +227,7 @@ contract ReputationStorageTest is Test {
         vm.warp(block.timestamp + elapsed);
 
         vm.prank(provider);
-        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 99_999));
+        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
         assertTrue(uid != bytes32(0), "uid returned");
 
         ReputationStorage.ReputationRecord memory rec = reputation.getRecord(paymentId);
@@ -246,25 +245,25 @@ contract ReputationStorageTest is Test {
     function test_recordOutcomeUnauthorizedReverts() public {
         vm.prank(unauthorized);
         vm.expectRevert("no identity");
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(buyer);
         vm.expectRevert("not provider for this payment");
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
     }
 
     function test_recordOutcomeDoubleReverts() public {
         vm.prank(provider);
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(provider);
         vm.expectRevert("outcome already recorded");
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
     }
 
     function test_recordOutcomeRevocationRejected() public {
         vm.prank(provider);
-        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        bytes32 uid = eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(provider);
         vm.expectRevert("schema not revocable");
@@ -275,7 +274,7 @@ contract ReputationStorageTest is Test {
 
     function test_submitConfirmationHappyPath() public {
         vm.prank(provider);
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(buyer);
         eas.attest(_confirmReq(paymentId, ReputationStorage.BuyerConfirmation.Confirmed, bytes32(0)));
@@ -536,7 +535,7 @@ contract ReputationStorageTest is Test {
 
     function test_refundOrthogonalToOutcome() public {
         vm.prank(provider);
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(provider);
         usdc.approve(address(router), 20e6);
@@ -597,7 +596,7 @@ contract ReputationStorageTest is Test {
         assertEq(completed + failed + canceled + confirmed + notConfirmed_ + ref_, 0);
 
         vm.prank(provider);
-        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed, 3600));
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(buyer);
         eas.attest(_confirmReq(paymentId, ReputationStorage.BuyerConfirmation.Confirmed, bytes32(0)));

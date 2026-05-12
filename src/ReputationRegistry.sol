@@ -5,11 +5,12 @@ pragma solidity ^0.8.24;
 // Pinned to draft spec commit 503591a6e80e6e1affdd6403341e25269141f046.
 // Source: https://github.com/ethereum/ERCs/blob/503591a6/ERCS/erc-8004.md
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IReputationRegistry} from "./interfaces/IReputationRegistry.sol";
 import {IIdentityRegistry} from "./interfaces/IIdentityRegistry.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
+import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice ERC-8004 Reputation Registry. Feedback is per-(agent, client)
 ///         storage; the heavier fields (endpoint, URI, hash) are only
@@ -18,7 +19,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 /// Per spec:
 ///   * Feedback submitter MUST NOT be the agent owner or an approved operator.
 ///   * valueDecimals MUST be between 0 and 18.
-contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegistry {
+contract ReputationRegistry is Admin2StepUpgradeable, IReputationRegistry {
     struct FeedbackRecord {
         int128 value;
         uint8 valueDecimals;
@@ -34,8 +35,6 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         bytes32 responseHash;
     }
 
-    address public admin;
-    address public pendingAdmin;
     IERC721 public identityRegistry;
 
     // agentId → clientAddress → feedbackIndex (1-indexed) → record
@@ -49,11 +48,6 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
     // agentId → clientAddress → feedbackIndex → responses
     mapping(uint256 => mapping(address => mapping(uint64 => ResponseRecord[]))) private _responses;
 
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
-
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -61,9 +55,8 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
 
     function initialize(address identityRegistry_, address _admin) external initializer {
         require(identityRegistry_ != address(0), "zero identity");
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         identityRegistry = IERC721(identityRegistry_);
-        admin = _admin;
     }
 
     function getIdentityRegistry() external view override returns (address) {
@@ -184,12 +177,7 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         // may respond to feedback about itself. Without this gate, anyone
         // can append arbitrary responses, polluting the off-chain index
         // and forging "agent acknowledged" signals.
-        address owner = identityRegistry.ownerOf(agentId);
-        require(
-            msg.sender == owner || identityRegistry.isApprovedForAll(owner, msg.sender)
-                || identityRegistry.getApproved(agentId) == msg.sender,
-            "not owner or operator"
-        );
+        LibAgentAuth.requireAgentAuth(identityRegistry, agentId, msg.sender);
 
         _responses[agentId][clientAddress][feedbackIndex].push(
             ResponseRecord({responder: msg.sender, responseURI: responseURI, responseHash: responseHash})
@@ -232,21 +220,9 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         external
         view
         override
-        returns (address[] memory page)
+        returns (address[] memory)
     {
-        address[] storage all = _clients[agentId];
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new address[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new address[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
+        return LibPagination.paginate(_clients[agentId], offset, limit);
     }
 
     function getLastIndex(uint256 agentId, address clientAddress) external view override returns (uint64) {
@@ -263,21 +239,5 @@ contract ReputationRegistry is Initializable, UUPSUpgradeable, IReputationRegist
         return identityRegistry.ownerOf(agentId);
     }
 
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

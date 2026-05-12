@@ -26,7 +26,7 @@ contract Deploy is Script {
     address internal constant DEFAULT_EAS = 0x4200000000000000000000000000000000000021;
     address internal constant DEFAULT_SCHEMA_REGISTRY = 0x4200000000000000000000000000000000000020;
 
-    string internal constant OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome,uint256 fulfillmentTime";
+    string internal constant OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome";
     string internal constant CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation";
 
     function run() external {

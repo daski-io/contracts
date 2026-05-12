@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IdentityRegistry} from "../IdentityRegistry.sol";
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IERC3009} from "../interfaces/IERC3009.sol";
 import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
+import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 
 /// @notice Adapter that settles x402 (EIP-3009 TransferWithAuthorization)
 ///         payments. Funds flow DIRECTLY from buyer → router via the token's
@@ -27,16 +26,9 @@ import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
 ///   This adapter rejects calls whose nonce does not match. The token's
 ///   per-(from, nonce) replay protection then doubles as a commitment to
 ///   exactly one (service, provider) pair per authorization.
-contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
+contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
     IPaymentRouter public router;
     IdentityRegistry public identity;
-    address public admin;
-    address public pendingAdmin;
-
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -46,10 +38,9 @@ contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
     function initialize(address _router, address _identity, address _admin) external initializer {
         require(_router != address(0), "zero router");
         require(_identity != address(0), "zero identity");
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         router = IPaymentRouter(_router);
         identity = IdentityRegistry(_identity);
-        admin = _admin;
     }
 
     /// @inheritdoc IX402Adapter
@@ -151,21 +142,5 @@ contract X402Adapter is Initializable, UUPSUpgradeable, IX402Adapter {
         return keccak256(abi.encode(serviceRef, providerAgentId, serviceId));
     }
 
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

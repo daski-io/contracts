@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 // We deliberately use the non-upgradeable ReentrancyGuard. In OZ v5 it is
 // marked @custom:stateless (no initializer required; uses a fixed namespaced-storage slot
 // per ERC-7201) and is safe behind UUPS proxies — the proxy's storage at that slot
@@ -14,6 +12,7 @@ import {IdentityRegistry} from "./IdentityRegistry.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 
 /// @dev Minimal reputation sink. Decoupled from the router: admin may wire
 ///      this on or leave it unset, and a failed reputation call never
@@ -54,12 +53,10 @@ interface IReputationRefundSink {
 ///     or compromised operator can only burn THEIR OWN approved balance,
 ///     never drain the provider's agentWallet. Worst-case abuse is
 ///     self-griefing, not theft from the provider.
-contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaymentRouter {
+contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter {
     using SafeERC20 for IERC20;
 
     // ── Storage ──────────────────────────────────────────────────────
-    address public admin;
-    address public pendingAdmin;
     address public treasury;
     IdentityRegistry public identity;
     IProviderRegistry public registry;
@@ -114,11 +111,6 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
     event ERC20Rescued(address indexed token, address indexed to, uint256 amount);
 
     // ── Modifiers ────────────────────────────────────────────────────
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
-
     modifier onlyAdapter() {
         require(adapters[msg.sender], "not adapter");
         _;
@@ -141,14 +133,13 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         require(_registry != address(0), "zero registry");
         require(_serviceRegistry != address(0), "zero service registry");
         require(_treasury != address(0), "zero treasury");
-        require(_admin != address(0), "zero admin");
         require(_commissionBps <= 10000, "commission too high");
+        __Admin2Step_init(_admin);
         identity = IdentityRegistry(_identity);
         registry = IProviderRegistry(_registry);
         serviceRegistry = IServiceRegistry(_serviceRegistry);
         treasury = _treasury;
         commissionBps = _commissionBps;
-        admin = _admin;
         nextPaymentId = 1;
     }
 
@@ -370,21 +361,5 @@ contract PaymentRouter is Initializable, UUPSUpgradeable, ReentrancyGuard, IPaym
         emit ERC20Rescued(address(token), to, amount);
     }
 
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

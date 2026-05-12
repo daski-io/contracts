@@ -5,16 +5,17 @@ pragma solidity ^0.8.24;
 // Pinned to draft spec commit 503591a6e80e6e1affdd6403341e25269141f046.
 // Source: https://github.com/ethereum/ERCs/blob/503591a6/ERCS/erc-8004.md
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IValidationRegistry} from "./interfaces/IValidationRegistry.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
+import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Minimal ERC-8004 Validation Registry. Stores the latest response
 ///         per requestHash (the spec allows multiple calls; each overwrites
 ///         response/responseHash/tag and bumps lastUpdate — the full history
 ///         is recoverable from events).
-contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegistry {
+contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
     struct Validation {
         address validatorAddress;
         uint256 agentId;
@@ -25,18 +26,11 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
         bool exists;
     }
 
-    address public admin;
-    address public pendingAdmin;
     IERC721 public identityRegistry;
 
     mapping(bytes32 => Validation) private _validations;
     mapping(uint256 => bytes32[]) private _agentRequests;
     mapping(address => bytes32[]) private _validatorRequests;
-
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -45,9 +39,8 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
 
     function initialize(address identityRegistry_, address _admin) external initializer {
         require(identityRegistry_ != address(0), "zero identity");
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         identityRegistry = IERC721(identityRegistry_);
-        admin = _admin;
     }
 
     function getIdentityRegistry() external view override returns (address) {
@@ -61,12 +54,7 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
         bytes32 requestHash
     ) external override {
         // Spec: MUST be called by owner or operator of agentId.
-        address owner = identityRegistry.ownerOf(agentId);
-        require(
-            msg.sender == owner || identityRegistry.isApprovedForAll(owner, msg.sender)
-                || identityRegistry.getApproved(agentId) == msg.sender,
-            "not owner or operator"
-        );
+        LibAgentAuth.requireAgentAuth(identityRegistry, agentId, msg.sender);
         require(validatorAddress != address(0), "zero validator");
         require(!_validations[requestHash].exists, "request exists");
 
@@ -143,21 +131,9 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
         external
         view
         override
-        returns (bytes32[] memory page)
+        returns (bytes32[] memory)
     {
-        bytes32[] storage all = _agentRequests[agentId];
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new bytes32[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new bytes32[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
+        return LibPagination.paginate(_agentRequests[agentId], offset, limit);
     }
 
     /// @notice Length of the validator's request list. Pair with
@@ -170,38 +146,10 @@ contract ValidationRegistry is Initializable, UUPSUpgradeable, IValidationRegist
         external
         view
         override
-        returns (bytes32[] memory page)
+        returns (bytes32[] memory)
     {
-        bytes32[] storage all = _validatorRequests[validatorAddress];
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new bytes32[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new bytes32[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
+        return LibPagination.paginate(_validatorRequests[validatorAddress], offset, limit);
     }
 
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
+    uint256[50] private __gap;
 }

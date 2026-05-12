@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IdentityRegistry} from "./IdentityRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
 import {IEAS, Attestation} from "./interfaces/IEAS.sol";
 import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
+import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 
 /// @notice Daski-specific bilateral reputation aggregator. Rather than store
 ///         per-transaction signals in this contract directly (as an earlier
@@ -25,16 +24,13 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 /// PaymentRouter's best-effort refund mirror keeps working unchanged.
 ///
 /// Two schemas are registered against this resolver:
-///   * `outcome`:        (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime)
+///   * `outcome`:        (uint256 paymentId, uint8 outcome)
 ///                       — provider-attested, one-shot per paymentId. The
-///                         `fulfillmentTime` field is preserved in the schema
-///                         for back-compat with already-registered EAS
-///                         schemas, but the resolver IGNORES it and derives
-///                         the real fulfillment time as
-///                         `block.timestamp - PaymentRouter.PaymentRecord.paidAt`.
-///                         The attested value is only used as a fallback for
-///                         pre-upgrade payments where `paidAt` was never
-///                         written (reads as 0 from the legacy mapping slot).
+///                         on-chain fulfillment time is derived in the
+///                         resolver as
+///                         `block.timestamp - PaymentRouter.PaymentRecord.paidAt`,
+///                         not taken from the attester — the provider's
+///                         self-reported number is gameable.
 ///   * `confirmation`:   (uint256 paymentId, uint8 confirmation)
 ///                       — buyer-attested, revisions allowed via EAS refUID;
 ///                         resolver rebalances counters on each revision.
@@ -46,16 +42,21 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 /// Reads (`getRecord`, `getProviderStats`, `getServiceStats`, `getBuyerStats`,
 /// `getRefundedAmount`) preserve the exact shape the pre-EAS version exposed
 /// so the off-chain gateway / provider read paths remain a drop-in.
-contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
+contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
     enum TransactionOutcome {
         Completed,
         Failed,
         Canceled
     }
 
-    /// @notice Binary confirmation (Pending was removed in the EAS migration —
-    ///         absence of an attestation IS pending). Kept at the same ordinal
-    ///         values as before so downstream callers don't have to re-map.
+    /// @notice Binary confirmation. `Pending` is no longer *attestable* — the
+    ///         resolver rejects attest payloads carrying it ("binary
+    ///         confirmation only") — but the variant is retained at ordinal 0
+    ///         to serve as the storage sentinel for "no confirmation yet".
+    ///         Downstream callers read `Pending` from `getRecord(...)` when an
+    ///         outcome was attested before any buyer confirmation, and from
+    ///         `confirmationByUid[...]` for any UID this resolver never
+    ///         credited.
     enum BuyerConfirmation {
         Pending,
         Confirmed,
@@ -92,8 +93,6 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     mapping(uint256 => uint256) public buyerNotConfirmedCount;
     mapping(uint256 => uint256) public buyerTransactionCount;
 
-    address public admin;
-    address public pendingAdmin;
     IdentityRegistry public identity;
     IPaymentRouter public paymentRouter;
 
@@ -109,9 +108,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     IEAS public eas;
 
     /// @notice EAS schema UID for the outcome schema
-    ///         (uint256 paymentId, uint8 outcome, uint256 fulfillmentTime).
-    ///         The third field is decoded but no longer trusted — see the
-    ///         contract-level NatSpec and `_onOutcomeAttest`.
+    ///         (uint256 paymentId, uint8 outcome).
     bytes32 public outcomeSchema;
 
     /// @notice EAS schema UID for the buyer confirmation schema
@@ -175,11 +172,6 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
     // ── Modifiers ───────────────────────────────────────────────────────
 
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "not admin");
-        _;
-    }
-
     modifier onlyPaymentRouter() {
         require(msg.sender == address(paymentRouter), "not payment router");
         _;
@@ -198,10 +190,9 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     function initialize(address _identity, address _paymentRouter, address _admin) external initializer {
         require(_identity != address(0), "zero identity");
         require(_paymentRouter != address(0), "zero router");
-        require(_admin != address(0), "zero admin");
+        __Admin2Step_init(_admin);
         identity = IdentityRegistry(_identity);
         paymentRouter = IPaymentRouter(_paymentRouter);
-        admin = _admin;
     }
 
     // ── ISchemaResolver ─────────────────────────────────────────────────
@@ -284,8 +275,7 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
     // ── Outcome logic ───────────────────────────────────────────────────
 
     function _onOutcomeAttest(Attestation calldata a) internal {
-        (uint256 paymentId, uint8 outcomeRaw, uint256 attestedFulfillmentTime) =
-            abi.decode(a.data, (uint256, uint8, uint256));
+        (uint256 paymentId, uint8 outcomeRaw) = abi.decode(a.data, (uint256, uint8));
         require(outcomeRaw <= uint8(TransactionOutcome.Canceled), "bad outcome");
         TransactionOutcome outcome = TransactionOutcome(outcomeRaw);
 
@@ -312,19 +302,12 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
             record.serviceId = payment.serviceId;
         }
 
-        // Derive fulfillmentTime from on-chain timestamps rather than the
-        // attestation. The provider's claim is gameable (they can plug any
-        // number into the schema's third field); `paidAt` was set by
-        // PaymentRouter at settle and `block.timestamp` is the moment of
-        // outcome attestation, so the difference is the true wall-clock
-        // turnaround.
-        //
-        // Fallback: PaymentRouter entries written before the paidAt upgrade
-        // read as 0 (storage slot never written). For those, fall back to
-        // the attested value so legacy payments don't surface a giant bogus
-        // `block.timestamp` as their fulfillment time. New payments always
-        // have paidAt > 0 because settle() sets it unconditionally.
-        uint256 fulfillmentTime = payment.paidAt > 0 ? block.timestamp - payment.paidAt : attestedFulfillmentTime;
+        // Derive fulfillmentTime from on-chain timestamps. `paidAt` is set
+        // unconditionally by PaymentRouter.settle() and `block.timestamp` is
+        // the moment of outcome attestation, so the difference is the true
+        // wall-clock turnaround — and unlike a self-reported value, it cannot
+        // be gamed by the attesting provider.
+        uint256 fulfillmentTime = block.timestamp - payment.paidAt;
 
         record.outcome = outcome;
         record.fulfillmentTime = fulfillmentTime;
@@ -546,22 +529,6 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
 
     // ── Admin ───────────────────────────────────────────────────────────
 
-    event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
-    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
-
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        pendingAdmin = newAdmin;
-        emit AdminTransferStarted(admin, newAdmin);
-    }
-
-    function acceptAdmin() external {
-        require(msg.sender == pendingAdmin, "not pending admin");
-        address oldAdmin = admin;
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-        emit AdminTransferred(oldAdmin, admin);
-    }
-
     function setPaymentRouter(address newRouter) external onlyAdmin {
         require(newRouter != address(0), "zero router");
         address oldRouter = address(paymentRouter);
@@ -590,10 +557,10 @@ contract ReputationStorage is Initializable, UUPSUpgradeable, ISchemaResolver {
         emit ConfirmationSchemaUpdated(oldSchema, newSchema);
     }
 
-    function _authorizeUpgrade(address) internal override onlyAdmin {}
-
     // @dev receive() for EAS `isPayable` legacy — we return false from
     //      isPayable() so EAS won't forward value, but leaving this absent
     //      means any accidental value-carrying attest() reverts on the
     //      resolver's `payable` call. That's fine.
+
+    uint256[50] private __gap;
 }
