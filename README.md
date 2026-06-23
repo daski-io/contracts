@@ -46,22 +46,22 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 | Contract            | Address                                      |
 |---------------------|----------------------------------------------|
 | USDC (Circle)       | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| IdentityRegistry    | `0xeaaC421470c954207Eb83cA8466aFD76073AeC6a` |
-| ReputationRegistry  | `0xA7818955C3481d4cf28dB7B2911Dee3D89668461` |
-| ValidationRegistry  | `0x0FA6E239F1bDc7798338e853aBa515a294F14c3B` |
-| ProviderRegistry    | `0xb97EEf193ab724f7Fb83C03A7536E87C746e6365` |
-| ServiceRegistry     | `0xFB261Af34428a8ad00A6aa3B686527EFc9F64409` |
-| PaymentRouter       | `0xd63a2E11D4E9f9a05A6d183cBa7A58E18e802Bfe` |
-| ReputationStorage   | `0x20fC391ed7994c2a3e5A054A6671e9dA6Ba07612` |
-| X402Adapter         | `0x5d351E9e65484053CABa86d4c957F6cb71f95a6F` |
-| PermitAdapter       | `0xAC74Ce3B0E18037A34a13b3c5b6Dd58099a80a84` |
-| ApprovalAdapter     | `0xee7dC5C5D22C9ce5D12ce5342cEFe7d208A158f8` |
+| IdentityRegistry    | `0xa03bd7e27dB0A942B2C30d6d4bCCD78724FC1E83` |
+| ReputationRegistry  | `0x3bB1ead34f04141C3e7791D9588e4F2017a0f38e` |
+| ValidationRegistry  | `0x13411C888Ececa7dA2078D8fC386118881Fc6E00` |
+| ProviderRegistry    | `0x3D3f1ACA48D5f8AC7cf910d2e075426B7894C2B8` |
+| ServiceRegistry     | `0x68e9d4c55309f71E3C4Fe70fba0983a5De7d4303` |
+| PaymentRouter       | `0x78f9b15F9b228Acd8D5A85eF4DAfef2164459d8f` |
+| ReputationStorage   | `0x6D657941343494605be3B86c7a60422621d2e97f` |
+| X402Adapter         | `0x20027cED25D8A9a79B385B6cD57432a6950aD032` |
+| PermitAdapter       | `0xE377F3bB81B238E4F9f2B9EB4CAC3052de833FFA` |
+| ApprovalAdapter     | `0xC270B04B994aC2B10442613eD1744FE77327427E` |
 | EAS                 | `0x4200000000000000000000000000000000000021` |
 | Schema Registry     | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0xc9ab6f5d6d2b09b1ab2fe3eeed94f74d7ff60f0313c9c2ad301764c118ac7c06`
-- Confirmation: `0x39d07ff65235d34f01f3bdb90a0b5eb6a5ffbc9380e676043292a6151227b227`
+- Outcome: `0x6c9458ad1048bb37075c352d48fa6530d2302c33fad8303a572e64528171bbfd`
+- Confirmation: `0xd83d8f2044d492d9606841e85786f2b9b32a83b66f444924758e88b966f78597`
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
