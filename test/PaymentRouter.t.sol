@@ -186,13 +186,12 @@ contract PaymentRouterTest is Test {
         adapter.settle(address(usdc), 100e6, keccak256("ref-1"), buyerAgentId, providerAgentId, serviceId);
     }
 
-    // L-7: settle pays the LIVE agentWallet from the IdentityRegistry, not
-    // the (potentially stale) walletAddress recorded at provider-registration
-    // time. Without this, a provider that rotates their agentWallet for
-    // refund/auth purposes would still receive payments at the old address.
+    // L-7: settle pays the LIVE agentWallet from the IdentityRegistry and
+    // follows agentWallet rotation. Without this, a provider that rotates their
+    // agentWallet for refund/auth purposes would still receive payments at the
+    // old address.
     function test_settle_paysLiveAgentWallet_notStaleProviderRegistryWallet() public {
-        // Provider rotates agentWallet via setAgentWallet to a fresh wallet,
-        // but does NOT update ProviderRegistry.walletAddress.
+        // Provider rotates agentWallet via setAgentWallet to a fresh wallet.
         uint256 newKey = 0xFEED;
         address newWallet = vm.addr(newKey);
         uint256 deadline = block.timestamp + 1 hours;
@@ -201,8 +200,6 @@ contract PaymentRouterTest is Test {
         vm.prank(provider);
         identity.setAgentWallet(providerAgentId, newWallet, deadline, sig);
 
-        // ProviderRegistry still has the old walletAddress.
-        assertEq(registry.getProvider(providerAgentId).walletAddress, provider);
         assertEq(identity.getAgentWallet(providerAgentId), newWallet);
 
         uint256 newWalletBefore = usdc.balanceOf(newWallet);
@@ -217,11 +214,10 @@ contract PaymentRouterTest is Test {
 
     function test_settle_revertsWhenAgentWalletUnset() public {
         // After audit finding H-1: if the provider unsets their agentWallet,
-        // settle MUST revert rather than fall back to ProviderRegistry's
-        // walletAddress. Falling back would route payments to a stale wallet
-        // — e.g. if the provider transferred their NFT, the agentWallet is
-        // cleared but ProviderRegistry.walletAddress still points at the
-        // former owner. Per ERC-8004 the new owner must re-bind a wallet.
+        // settle MUST revert. The payee is resolved solely from the live
+        // ERC-8004 agentWallet (there is no Daski-local wallet fallback), so an
+        // unset wallet leaves no payee. Per ERC-8004 the new owner must re-bind
+        // a wallet after a transfer before payments can resume.
         vm.prank(provider);
         identity.unsetAgentWallet(providerAgentId);
         assertEq(identity.getAgentWallet(providerAgentId), address(0));
@@ -235,8 +231,8 @@ contract PaymentRouterTest is Test {
 
     /// H-1 regression test: after the agent NFT is transferred, the new
     /// owner has not yet bound a wallet. Settle must revert until they do —
-    /// otherwise payments leak to the former owner via ProviderRegistry's
-    /// stale walletAddress.
+    /// the payee comes only from the live ERC-8004 agentWallet, which is
+    /// cleared on transfer.
     function test_settle_revertsAfterNftTransferUntilNewOwnerBindsWallet() public {
         address newOwner = makeAddr("newOwner");
 
@@ -245,9 +241,6 @@ contract PaymentRouterTest is Test {
         identity.transferFrom(provider, newOwner, providerAgentId);
         assertEq(identity.ownerOf(providerAgentId), newOwner);
         assertEq(identity.getAgentWallet(providerAgentId), address(0), "wallet cleared on transfer");
-        // ProviderRegistry has NOT been updated — its walletAddress still
-        // points at the former owner. Pre-fix, settle would route here.
-        assertEq(registry.getProvider(providerAgentId).walletAddress, provider);
 
         // Buyer attempts to pay — must revert until the new owner binds a wallet.
         vm.prank(buyer);

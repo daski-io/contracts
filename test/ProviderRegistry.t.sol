@@ -67,7 +67,6 @@ contract ProviderRegistryTest is Test {
         registry.register(agentId);
 
         IProviderRegistry.Provider memory p = registry.getProvider(agentId);
-        assertEq(p.walletAddress, provider);
         assertEq(p.agentId, agentId);
         assertEq(p.registrationTime, block.timestamp);
         assertTrue(p.isActive);
@@ -144,60 +143,6 @@ contract ProviderRegistryTest is Test {
         registry.register(agentId);
     }
 
-    function test_updateWalletAddress() public {
-        uint256 agentId = _registerAsProvider(provider);
-        address newWallet = makeAddr("newWallet");
-
-        vm.expectEmit(true, true, false, false, address(registry));
-        emit ProviderRegistry.ProviderWalletUpdated(agentId, newWallet);
-        vm.prank(provider);
-        registry.updateWalletAddress(agentId, newWallet);
-
-        IProviderRegistry.Provider memory p = registry.getProvider(agentId);
-        assertEq(p.walletAddress, newWallet);
-    }
-
-    function test_updateWalletAddress_byApprovedForAllOperator() public {
-        uint256 agentId = _registerAsProvider(provider);
-        address newWallet = makeAddr("newWallet");
-
-        vm.prank(provider);
-        identity.setApprovalForAll(operator, true);
-
-        vm.prank(operator);
-        registry.updateWalletAddress(agentId, newWallet);
-
-        assertEq(registry.getProvider(agentId).walletAddress, newWallet);
-    }
-
-    function test_updateWalletAddress_byPerTokenApprovedSpender() public {
-        uint256 agentId = _registerAsProvider(provider);
-        address newWallet = makeAddr("newWallet");
-
-        vm.prank(provider);
-        identity.approve(operator, agentId);
-
-        vm.prank(operator);
-        registry.updateWalletAddress(agentId, newWallet);
-        assertEq(registry.getProvider(agentId).walletAddress, newWallet);
-    }
-
-    function test_updateWalletAddressByStrangerReverts() public {
-        uint256 agentId = _registerAsProvider(provider);
-        vm.prank(otherUser);
-        vm.expectRevert("not owner or operator");
-        registry.updateWalletAddress(agentId, otherUser);
-    }
-
-    // M-4: zero address must be rejected. Without this guard, the provider
-    // could route their own payments to the burn address and lose funds.
-    function test_updateWalletAddressZeroReverts() public {
-        uint256 agentId = _registerAsProvider(provider);
-        vm.prank(provider);
-        vm.expectRevert("zero wallet");
-        registry.updateWalletAddress(agentId, address(0));
-    }
-
     function test_setTreasuryZeroReverts() public {
         vm.prank(admin);
         vm.expectRevert("zero treasury");
@@ -250,8 +195,9 @@ contract ProviderRegistryTest is Test {
 
     function test_getProviderByAddress() public {
         uint256 agentId = _registerAsProvider(provider);
+        // getProviderByAddress now resolves via the ERC-8004 agentWallet index;
+        // at registration the agentWallet defaults to the owner.
         IProviderRegistry.Provider memory p = registry.getProviderByAddress(provider);
-        assertEq(p.walletAddress, provider);
         assertEq(p.agentId, agentId);
     }
 

@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IdentityRegistry} from "./IdentityRegistry.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
@@ -19,6 +20,11 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///         the separate Daski `ServiceRegistry`. Per ERC-8004 v1, each NFT
 ///         represents one operator that may field many capabilities; do NOT
 ///         re-introduce a per-service NFT pattern.
+///
+/// Wallet model: this registry no longer stores a Daski-local wallet. The
+/// canonical payee/identity surface is the ERC-8004 `agentWallet` in
+/// IdentityRegistry (used by PaymentRouter and refund auth), and wallet→agent
+/// resolution goes through `IdentityRegistry.agentOfWallet`.
 ///
 /// Auth model on mutating functions other than `register`: the caller must be
 /// the NFT owner, an ERC-721 operator (`isApprovedForAll`), or per-token
@@ -36,13 +42,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     IERC721 public identity;
     uint256 public listingFee;
 
-    /// @dev Wallet → agentId reverse index. Populated on register() and
-    ///      updateWalletAddress() so getProviderByAddress is O(1) instead of
-    ///      a linear scan over providerIds.
-    mapping(address => uint256) private _agentIdByWallet;
-
     event ProviderRegistered(uint256 indexed agentId, address indexed wallet);
-    event ProviderWalletUpdated(uint256 indexed agentId, address indexed newWallet);
     event ProviderActiveStatusChanged(uint256 indexed agentId, bool isActive);
     event ListingFeeUpdated(uint256 oldFee, uint256 newFee);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
@@ -72,40 +72,11 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
 
         usdc.safeTransferFrom(msg.sender, treasury, listingFee);
 
-        _providers[agentId] =
-            Provider({walletAddress: msg.sender, agentId: agentId, registrationTime: block.timestamp, isActive: true});
+        _providers[agentId] = Provider({agentId: agentId, registrationTime: block.timestamp, isActive: true});
 
         providerIds.push(agentId);
-        _agentIdByWallet[msg.sender] = agentId;
 
         emit ProviderRegistered(agentId, msg.sender);
-    }
-
-    /// @notice Update the Daski-internal walletAddress hint for a provider.
-    /// @dev    The ERC-8004 agentWallet (in IdentityRegistry) is the
-    ///         canonical payee surface used by PaymentRouter and refund auth.
-    ///         walletAddress here is a Daski-internal field retained for
-    ///         historical compatibility with older off-chain consumers.
-    ///         TODO: deprecate walletAddress in favor of identity.getAgentWallet
-    ///         once all off-chain consumers have migrated.
-    function updateWalletAddress(uint256 agentId, address newWallet) external {
-        LibAgentAuth.requireAgentAuth(identity, agentId, msg.sender);
-        require(_isRegistered(agentId), "not registered");
-        require(newWallet != address(0), "zero wallet");
-
-        address oldWallet = _providers[agentId].walletAddress;
-        if (oldWallet != newWallet) {
-            // Only clear if the index still points at THIS agent — a later
-            // registration with the same wallet may have overwritten it,
-            // and we must not erase that newer entry.
-            if (_agentIdByWallet[oldWallet] == agentId) {
-                delete _agentIdByWallet[oldWallet];
-            }
-            _agentIdByWallet[newWallet] = agentId;
-        }
-
-        _providers[agentId].walletAddress = newWallet;
-        emit ProviderWalletUpdated(agentId, newWallet);
     }
 
     function setActive(uint256 agentId, bool active) external {
@@ -121,8 +92,11 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     }
 
     function getProviderByAddress(address wallet) external view returns (Provider memory) {
-        uint256 agentId = _agentIdByWallet[wallet];
-        require(agentId != 0, "not registered");
+        // Resolve through the canonical ERC-8004 reverse index rather than a
+        // Daski-local wallet copy. agentOfWallet returns the agent whose
+        // CURRENT agentWallet is `wallet` (cleared on transfer / rotation).
+        uint256 agentId = IdentityRegistry(address(identity)).agentOfWallet(wallet);
+        require(agentId != 0 && _isRegistered(agentId), "not registered");
         return _providers[agentId];
     }
 
@@ -160,7 +134,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     // Internal
 
     function _isRegistered(uint256 agentId) internal view returns (bool) {
-        return _providers[agentId].walletAddress != address(0);
+        return _providers[agentId].agentId != 0;
     }
 
     uint256[50] private __gap;

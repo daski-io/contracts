@@ -7,7 +7,6 @@ pragma solidity ^0.8.24;
 ///         `agentCardURI` on this struct anymore.
 interface IProviderRegistry {
     struct Provider {
-        address walletAddress;
         uint256 agentId;
         uint256 registrationTime;
         bool isActive;
@@ -16,9 +15,13 @@ interface IProviderRegistry {
     /// @param agentId ERC-8004 agentId to register as a Daski provider. The
     ///        caller MUST be the ERC-721 owner of agentId.
     function register(uint256 agentId) external;
-    function updateWalletAddress(uint256 agentId, address newWallet) external;
     function setActive(uint256 agentId, bool active) external;
     function getProvider(uint256 agentId) external view returns (Provider memory);
+
+    /// @notice Resolve a provider by wallet via the canonical ERC-8004 reverse
+    ///         index (IdentityRegistry.agentOfWallet) — the wallet that is the
+    ///         agent's CURRENT `agentWallet`. Reverts if `wallet` maps to no
+    ///         agent, or that agent is not a registered Daski provider.
     function getProviderByAddress(address wallet) external view returns (Provider memory);
     function getProviderCount() external view returns (uint256);
     function getProviderIdsPaginated(uint256 offset, uint256 limit) external view returns (uint256[] memory page);
