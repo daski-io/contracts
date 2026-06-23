@@ -16,6 +16,7 @@ import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
+import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 
 /// @notice Deploy the full Daski stack including the new ServiceRegistry. On
 ///         Base Sepolia this also registers the two EAS schemas the new
@@ -42,7 +43,15 @@ contract Deploy is Script {
 
         address deployer = vm.addr(deployerKey);
 
+        // Final admin for all proxies. Defaults to the deployer (testnet
+        // convenience). For mainnet set ADMIN_ADDRESS to a multisig or a
+        // TimelockController: the script deploys + wires as the deployer, then
+        // hands off via the 2-step transferAdmin below (the new admin must call
+        // acceptAdmin() on each contract to complete the handover).
+        address finalAdmin = vm.envOr("ADMIN_ADDRESS", deployer);
+
         console.log("Deployer:", deployer);
+        console.log("Final admin:", finalAdmin);
         console.log("Treasury:", treasury);
         console.log("EAS:     ", easAddress);
         console.log("SchemaRegistry:", schemaRegistryAddress);
@@ -177,6 +186,32 @@ contract Deploy is Script {
         router.setAdapter(address(approvalAdapterProxy), true);
         router.setAcceptedToken(usdcAddress, true);
         router.setReputationStorage(address(reputationProxy));
+
+        // ── (m) Admin handoff ─────────────────────────────────────────
+        // All wiring above is onlyAdmin and ran as the deployer. If a separate
+        // ADMIN_ADDRESS (multisig / timelock) was supplied, start the 2-step
+        // transfer for every proxy now; the new admin completes it by calling
+        // acceptAdmin() on each. Until then the deployer stays admin, so a
+        // mistyped address is recoverable.
+        if (finalAdmin != deployer) {
+            address[10] memory adminContracts = [
+                address(identityProxy),
+                address(reputationRegistryProxy),
+                address(validationRegistryProxy),
+                address(providerRegistryProxy),
+                address(serviceRegistryProxy),
+                address(routerProxy),
+                address(reputationProxy),
+                address(x402AdapterProxy),
+                address(permitAdapterProxy),
+                address(approvalAdapterProxy)
+            ];
+            for (uint256 i = 0; i < adminContracts.length; i++) {
+                Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
+            }
+            console.log("Admin transfer started to:", finalAdmin);
+            console.log("  new admin MUST call acceptAdmin() on each proxy to complete handover");
+        }
 
         vm.stopBroadcast();
 
