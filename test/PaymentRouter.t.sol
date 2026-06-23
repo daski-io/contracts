@@ -190,7 +190,7 @@ contract PaymentRouterTest is Test {
     // follows agentWallet rotation. Without this, a provider that rotates their
     // agentWallet for refund/auth purposes would still receive payments at the
     // old address.
-    function test_settle_paysLiveAgentWallet_notStaleProviderRegistryWallet() public {
+    function test_settle_paysLiveAgentWalletAfterRotation() public {
         // Provider rotates agentWallet via setAgentWallet to a fresh wallet.
         uint256 newKey = 0xFEED;
         address newWallet = vm.addr(newKey);
