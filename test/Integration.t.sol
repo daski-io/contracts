@@ -282,11 +282,11 @@ contract IntegrationTest is Test {
         address validator = makeAddr("validator");
         bytes32 reqHash = keccak256("validation-req-1");
         vm.prank(provider);
-        validationRegistry.validationRequest(validator, providerAgentId, "ipfs://req", reqHash);
+        bytes32 vKey = validationRegistry.validationRequest(validator, providerAgentId, "ipfs://req", reqHash);
         vm.prank(validator);
-        validationRegistry.validationResponse(reqHash, 100, "ipfs://resp", keccak256("resp"), "pass");
+        validationRegistry.validationResponse(vKey, 100, "ipfs://resp", keccak256("resp"), "pass");
 
-        (, uint256 validatedAgentId, uint8 response,,,) = validationRegistry.getValidationStatus(reqHash);
+        (, uint256 validatedAgentId,, uint8 response,,,) = validationRegistry.getValidationStatus(vKey);
         assertEq(validatedAgentId, providerAgentId);
         assertEq(response, 100);
 
