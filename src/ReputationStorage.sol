@@ -78,7 +78,7 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
 
     // ── Storage ─────────────────────────────────────────────────────────
 
-    mapping(uint256 => ReputationRecord) public _records;
+    mapping(uint256 => ReputationRecord) internal _records;
     uint256[] public recordIds;
 
     // Per-provider aggregate counters
@@ -288,18 +288,15 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
         ReputationRecord storage record = _records[paymentId];
         require(!record.outcomeRecorded, "outcome already recorded");
 
-        // Lazy record creation — may have been partially created by buyer.
+        // Lazy record creation — may have been partially created by the buyer
+        // (a confirmation can land before the provider attests the outcome).
+        // Either path stamps the canonical serviceId from the PaymentRecord.
         if (record.paymentId == 0) {
             record.paymentId = paymentId;
             record.providerAgentId = payment.providerAgentId;
             record.buyerAgentId = payment.buyerAgentId;
             record.serviceId = payment.serviceId;
             recordIds.push(paymentId);
-        } else if (record.serviceId == bytes32(0)) {
-            // Confirmation arrived before outcome and was created on the
-            // pre-refactor router (no serviceId on record). Backfill from
-            // the canonical PaymentRouter record.
-            record.serviceId = payment.serviceId;
         }
 
         // Derive fulfillmentTime from on-chain timestamps. `paidAt` is set
@@ -316,19 +313,19 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
 
         if (outcome == TransactionOutcome.Completed) {
             completedCount[payment.providerAgentId]++;
-            completedByService[payment.serviceId]++;
+            completedByService[record.serviceId]++;
         } else if (outcome == TransactionOutcome.Failed) {
             failedCount[payment.providerAgentId]++;
-            failedByService[payment.serviceId]++;
+            failedByService[record.serviceId]++;
         } else {
             canceledCount[payment.providerAgentId]++;
-            canceledByService[payment.serviceId]++;
+            canceledByService[record.serviceId]++;
         }
 
         buyerTransactionCount[payment.buyerAgentId]++;
 
         emit OutcomeRecorded(
-            paymentId, payment.providerAgentId, payment.buyerAgentId, payment.serviceId, outcome, fulfillmentTime, a.uid
+            paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, outcome, fulfillmentTime, a.uid
         );
     }
 
@@ -356,8 +353,6 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
             record.buyerAgentId = payment.buyerAgentId;
             record.serviceId = payment.serviceId;
             recordIds.push(paymentId);
-        } else if (record.serviceId == bytes32(0)) {
-            record.serviceId = payment.serviceId;
         }
 
         // Revision path: if `refUID` is set, it MUST point at a confirmation
@@ -531,6 +526,12 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
 
     function setPaymentRouter(address newRouter) external onlyAdmin {
         require(newRouter != address(0), "zero router");
+        // All reputation state is keyed by the router's paymentId. Re-pointing
+        // at a different router (whose IDs restart at 1) would collide new
+        // payments with existing records and corrupt counters. Once any record
+        // exists, the only safe migration is a full-stack redeploy — this
+        // guard makes that invariant self-enforcing.
+        require(recordIds.length == 0, "records exist");
         address oldRouter = address(paymentRouter);
         paymentRouter = IPaymentRouter(newRouter);
         emit PaymentRouterUpdated(oldRouter, newRouter);

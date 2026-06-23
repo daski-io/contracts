@@ -70,7 +70,7 @@ contract ServiceRegistryTest is Test {
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(agentId, serviceSlug, version));
+        return keccak256(abi.encode(agentId, serviceSlug, version));
     }
 
     function _registerSimple(address as_, string memory serviceSlug, string memory version)

@@ -3,7 +3,6 @@ pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @notice Test USDC with both EIP-3009 (`transferWithAuthorization`) and
@@ -11,15 +10,13 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 /// paths. Domain is name="USDC" version="2" — signers must use the same
 /// values when building the typed-data hash.
 ///
-/// NOTE: OZ's ERC20Permit already wires EIP-712 with the token name and
-/// version "1". We override the EIP712 initializer via the constructor
-/// by passing our domain inputs through. ERC20Permit sets version to "1"
-/// via its own EIP712 inheritance; we want version "2" for parity with
-/// the EIP-3009 domain used in tests, so we inherit EIP712 directly for
-/// the 3009 path and let ERC20Permit use its own "1" domain for permit.
-/// Since the two authorization types use independent type hashes and both
-/// include the full domain separator, they co-exist safely — they are
-/// effectively two separate typed-data namespaces.
+/// NOTE: OZ's ERC20Permit wires EIP-712 for the `permit` path with the token
+/// name and version "1". For the EIP-3009 path we want version "2" (parity
+/// with production USDC's 3009 domain), so instead of inheriting EIP712 a
+/// second time we hand-roll a dedicated 3009 domain separator in the
+/// constructor (`_TRANSFER_DOMAIN_SEPARATOR`). The two authorization types use
+/// independent type hashes and each carries its own full domain separator, so
+/// they co-exist safely as two separate typed-data namespaces.
 contract MockUSDC is ERC20, ERC20Permit {
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"

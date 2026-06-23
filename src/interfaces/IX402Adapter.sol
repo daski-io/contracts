@@ -23,4 +23,21 @@ interface IX402Adapter {
         bytes32 serviceId,
         EIP3009Auth calldata auth
     ) external returns (uint256 paymentId);
+
+    /// @notice Atomic gasless-registration + settle. If `auth.from` has no
+    ///         agentId yet, mints one via IdentityRegistry.registerBySig using
+    ///         the supplied registration signature, then settles in the same
+    ///         tx (both succeed or both revert). If already registered, behaves
+    ///         exactly like `settle`.
+    function settleWithRegistration(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        EIP3009Auth calldata auth,
+        string calldata agentURI,
+        uint256 registrationDeadline,
+        bytes calldata registrationSignature
+    ) external returns (uint256 buyerAgentId, uint256 paymentId);
 }

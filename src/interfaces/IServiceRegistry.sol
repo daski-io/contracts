@@ -13,7 +13,7 @@ pragma solidity ^0.8.24;
 /// nothing about A2A skills.
 ///
 /// @dev    serviceId is deterministic:
-///           keccak256(abi.encodePacked(providerAgentId, serviceSlug, version))
+///           keccak256(abi.encode(providerAgentId, serviceSlug, version))
 ///         so different providers can share a `serviceSlug`+`version`
 ///         without collision, and off-chain clients can compute the id
 ///         without querying the chain.

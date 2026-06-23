@@ -13,13 +13,7 @@ import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
-
-/// @dev Minimal reputation sink. Decoupled from the router: admin may wire
-///      this on or leave it unset, and a failed reputation call never
-///      reverts the refund (reputation is a tracking sidecar, not consensus).
-interface IReputationRefundSink {
-    function recordRefund(uint256 paymentId, uint256 amountToBuyer) external;
-}
+import {IReputationRefundSink} from "./interfaces/IReputationRefundSink.sol";
 
 /// @notice Payment-rail-agnostic router. Whitelisted adapter contracts are
 ///         responsible for the specifics of how funds arrive at the router

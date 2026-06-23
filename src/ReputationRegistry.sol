@@ -29,12 +29,6 @@ contract ReputationRegistry is Admin2StepUpgradeable, IReputationRegistry {
         bool exists;
     }
 
-    struct ResponseRecord {
-        address responder;
-        string responseURI;
-        bytes32 responseHash;
-    }
-
     IERC721 public identityRegistry;
 
     // agentId → clientAddress → feedbackIndex (1-indexed) → record
@@ -44,9 +38,6 @@ contract ReputationRegistry is Admin2StepUpgradeable, IReputationRegistry {
     // agentId → list of distinct clients (for getClients)
     mapping(uint256 => address[]) private _clients;
     mapping(uint256 => mapping(address => bool)) private _knownClient;
-
-    // agentId → clientAddress → feedbackIndex → responses
-    mapping(uint256 => mapping(address => mapping(uint64 => ResponseRecord[]))) private _responses;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -179,9 +170,9 @@ contract ReputationRegistry is Admin2StepUpgradeable, IReputationRegistry {
         // and forging "agent acknowledged" signals.
         LibAgentAuth.requireAgentAuth(identityRegistry, agentId, msg.sender);
 
-        _responses[agentId][clientAddress][feedbackIndex].push(
-            ResponseRecord({responder: msg.sender, responseURI: responseURI, responseHash: responseHash})
-        );
+        // Responses are not stored on-chain — every field is carried in the
+        // event below, which off-chain indexers consume. Mirrors how feedback
+        // URIs/hashes are handled (emitted, never stored).
         emit ResponseAppended(agentId, clientAddress, feedbackIndex, msg.sender, responseURI, responseHash);
     }
 

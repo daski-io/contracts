@@ -560,6 +560,20 @@ contract ReputationStorageTest is Test {
         // setter works.
     }
 
+    function test_setPaymentRouter_revertsWhenRecordsExist() public {
+        // Recording any outcome populates recordIds. After that the router
+        // pointer is frozen: re-pointing at a router whose paymentIds restart
+        // at 1 would collide with existing records and corrupt counters, so the
+        // guard forbids the swap and forces a full-stack redeploy instead.
+        vm.prank(provider);
+        eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
+        assertEq(reputation.getRecordCount(), 1, "record created");
+
+        vm.prank(admin);
+        vm.expectRevert("records exist");
+        reputation.setPaymentRouter(makeAddr("fakeRouter"));
+    }
+
     function test_setPaymentRouterOnlyAdmin() public {
         vm.prank(buyer);
         vm.expectRevert("not admin");

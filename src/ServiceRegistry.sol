@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-// Same pattern as PaymentRouter / ProviderRegistry: use the non-upgradeable
-// ReentrancyGuard. In OZ v5 it is @custom:stateless and safe behind UUPS.
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
@@ -41,7 +38,7 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///   1. NFT owner (ownerOf), OR
 ///   2. operator approved via setApprovalForAll, OR
 ///   3. per-token approved spender (getApproved).
-contract ServiceRegistry is Admin2StepUpgradeable, ReentrancyGuard, IServiceRegistry {
+contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     // ── Storage ──────────────────────────────────────────────────────
 
     IERC721 public identity;
@@ -72,7 +69,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, ReentrancyGuard, IServiceRegi
         string calldata version,
         string calldata serviceURI,
         address serviceWallet
-    ) external nonReentrant returns (bytes32 serviceId) {
+    ) external returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
 
         // Provider must be registered AND active. Inactive providers cannot
@@ -195,7 +192,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, ReentrancyGuard, IServiceRegi
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encodePacked(providerAgentId, serviceSlug, version));
+        return keccak256(abi.encode(providerAgentId, serviceSlug, version));
     }
 
     uint256[50] private __gap;

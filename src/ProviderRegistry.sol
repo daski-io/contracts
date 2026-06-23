@@ -28,7 +28,7 @@ import {LibPagination} from "./utils/LibPagination.sol";
 contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRegistry {
     using SafeERC20 for IERC20;
 
-    mapping(uint256 => Provider) public _providers;
+    mapping(uint256 => Provider) internal _providers;
     uint256[] public providerIds;
 
     address public treasury;
