@@ -8,7 +8,7 @@ identity, provider registry, rail-agnostic payment routing, and bilateral
 reputation backed by EAS attestations. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia. 210 unit + integration tests passing.
+**Status:** v1 deployed on Base Sepolia. 217 unit + integration tests passing.
 Audit pending.
 
 ## Three-layer identity model
@@ -32,6 +32,7 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
+| **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): attributes payments that a third-party facilitator (Coinbase CDP) settled as bare EIP-3009 transfers into the router, running the split + payment record as a follow-up tx. Attributor-gated (the Daski gateway). |
 | **ReputationRegistry** | ERC-8004 public feedback events. |
 | **ValidationRegistry** | ERC-8004 request/response attestations. |
 | **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
@@ -65,6 +66,10 @@ EAS schema UIDs (resolver = ReputationStorage):
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
+DirectTransferAdapter (external-facilitator / Bazaar rail) is **not yet
+deployed** — roll it out with [`script/AddDirectAdapter.s.sol`](script/AddDirectAdapter.s.sol)
+(see [Deploy](#deploy)) and record the proxy address here and in the JSON.
+
 ### Base mainnet
 Not yet deployed. Pending audit.
 
@@ -80,7 +85,7 @@ UUPS proxy pattern; deploy order matters due to cross-contract dependencies:
 5. ServiceRegistry         (IdentityRegistry, ProviderRegistry)
 6. PaymentRouter           (IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
 7. ReputationStorage       (IdentityRegistry, PaymentRouter, EAS, schema UIDs)
-8. Adapters (X402/Permit/Approval) — registered with PaymentRouter
+8. Adapters (X402/Permit/Approval/DirectTransfer) — registered with PaymentRouter
 ```
 
 ## Development
@@ -89,24 +94,25 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 210 tests across 11 suites
+forge test       # 217 tests across 12 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter       | 50 |
-| IdentityRegistry    | 31 |
-| ReputationStorage   | 26 |
-| ServiceRegistry     | 24 |
-| ProviderRegistry    | 24 |
-| ReputationRegistry  | 17 |
-| X402Adapter         | 14 |
-| ValidationRegistry  | 12 |
-| PermitAdapter       | 5  |
-| ApprovalAdapter     | 4  |
-| Integration         | 3  |
+| PaymentRouter         | 50 |
+| IdentityRegistry      | 31 |
+| ReputationStorage     | 27 |
+| ServiceRegistry       | 24 |
+| ProviderRegistry      | 19 |
+| ReputationRegistry    | 17 |
+| X402Adapter           | 14 |
+| ValidationRegistry    | 13 |
+| DirectTransferAdapter | 10 |
+| PermitAdapter         | 5  |
+| ApprovalAdapter       | 4  |
+| Integration           | 3  |
 
 ## Deploy
 
@@ -129,6 +135,50 @@ forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 
 Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
 of `forge script` output for easy copy-paste into client configs.
+
+### Add DirectTransferAdapter to an existing deployment (x402 Bazaar rail)
+
+`Deploy.s.sol` includes the adapter for **fresh** stacks. To add the rail to
+an already-running deployment (e.g. the current Base Sepolia sandbox) use the
+targeted script — it deploys only the adapter and wires it to the existing
+router, without touching anything else:
+
+```bash
+export DEPLOYER_PRIVATE_KEY=<key>                # pays gas; becomes adapter admin
+export PAYMENT_ROUTER_ADDRESS=<existing router proxy>
+export IDENTITY_REGISTRY_ADDRESS=<existing identity proxy>
+# Gateway facilitator wallet — allowed to call attribute(). Strongly
+# recommended to set here; the rail cannot settle without an attributor.
+export ATTRIBUTOR_ADDRESS=<gateway facilitator wallet>
+# Optional: hand adapter admin to a multisig (2-step; new admin must acceptAdmin())
+# export ADMIN_ADDRESS=<multisig>
+
+forge script script/AddDirectAdapter.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+The script registers the adapter with the router automatically when the
+deployer is the router admin (testnet convention); otherwise it prints the
+exact `PaymentRouter.setAdapter(<proxy>, true)` call for the real admin.
+
+After the deploy:
+
+1. Record the **proxy** address in the Deployments table above and in
+   `deployments/<network>.json`.
+2. Point the gateway at it and redeploy (Railway):
+   ```bash
+   railway variables --service gateway --skip-deploys \
+     --set DIRECT_ADAPTER_ADDRESS=<adapter proxy>
+   railway redeploy --service gateway
+   ```
+   Setting `DIRECT_ADAPTER_ADDRESS` is what mounts the gateway's
+   `/x402/services/:tokenId/:skillId` routes (see daski-gateway
+   `.env.example` — `EXTERNAL_FACILITATOR_URL` defaults per network;
+   mainnet CDP settles additionally need
+   `EXTERNAL_FACILITATOR_AUTH_HEADER`).
+3. Sanity-check: `GET <gateway>/x402/services/<providerAgentId>/<skillId>`
+   should return an HTTP 402 with `accepts[]` + `extensions.bazaar`. The
+   first successful CDP-facilitated settle for a resource is what makes
+   the Bazaar index it.
 
 ## Security
 

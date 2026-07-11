@@ -15,6 +15,7 @@ import {MockUSDC} from "../src/MockUSDC.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
+import {DirectTransferAdapter} from "../src/adapters/DirectTransferAdapter.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 
@@ -180,21 +181,41 @@ contract Deploy is Script {
         console.log("ApprovalAdapter impl:", address(approvalAdapterImpl));
         console.log("ApprovalAdapter proxy:", address(approvalAdapterProxy));
 
-        // ── (l) Wire whitelists ───────────────────────────────────────
+        // ── (l) DirectTransferAdapter (external-facilitator rail) ─────
+        // Attributes payments settled by an external x402 facilitator (CDP)
+        // as bare EIP-3009 transfers into the router. ATTRIBUTOR_ADDRESS is
+        // the gateway's facilitator wallet; when unset, ops must call
+        // setAttributor before the external rail can settle anything.
+        DirectTransferAdapter directAdapterImpl = new DirectTransferAdapter();
+        ERC1967Proxy directAdapterProxy = new ERC1967Proxy(
+            address(directAdapterImpl),
+            abi.encodeCall(DirectTransferAdapter.initialize, (address(routerProxy), address(identityProxy), deployer))
+        );
+        console.log("DirectTransferAdapter impl:", address(directAdapterImpl));
+        console.log("DirectTransferAdapter proxy:", address(directAdapterProxy));
+
+        address attributor = vm.envOr("ATTRIBUTOR_ADDRESS", address(0));
+        if (attributor != address(0)) {
+            DirectTransferAdapter(address(directAdapterProxy)).setAttributor(attributor, true);
+            console.log("Attributor whitelisted:", attributor);
+        }
+
+        // ── (m) Wire whitelists ───────────────────────────────────────
         router.setAdapter(address(x402AdapterProxy), true);
         router.setAdapter(address(permitAdapterProxy), true);
         router.setAdapter(address(approvalAdapterProxy), true);
+        router.setAdapter(address(directAdapterProxy), true);
         router.setAcceptedToken(usdcAddress, true);
         router.setReputationStorage(address(reputationProxy));
 
-        // ── (m) Admin handoff ─────────────────────────────────────────
+        // ── (n) Admin handoff ─────────────────────────────────────────
         // All wiring above is onlyAdmin and ran as the deployer. If a separate
         // ADMIN_ADDRESS (multisig / timelock) was supplied, start the 2-step
         // transfer for every proxy now; the new admin completes it by calling
         // acceptAdmin() on each. Until then the deployer stays admin, so a
         // mistyped address is recoverable.
         if (finalAdmin != deployer) {
-            address[10] memory adminContracts = [
+            address[11] memory adminContracts = [
                 address(identityProxy),
                 address(reputationRegistryProxy),
                 address(validationRegistryProxy),
@@ -204,7 +225,8 @@ contract Deploy is Script {
                 address(reputationProxy),
                 address(x402AdapterProxy),
                 address(permitAdapterProxy),
-                address(approvalAdapterProxy)
+                address(approvalAdapterProxy),
+                address(directAdapterProxy)
             ];
             for (uint256 i = 0; i < adminContracts.length; i++) {
                 Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
@@ -229,6 +251,7 @@ contract Deploy is Script {
         console.log("  X402Adapter:        ", address(x402AdapterProxy));
         console.log("  PermitAdapter:      ", address(permitAdapterProxy));
         console.log("  ApprovalAdapter:    ", address(approvalAdapterProxy));
+        console.log("  DirectTransferAdapter:", address(directAdapterProxy));
         console.log("  EAS:                ", easAddress);
         console.log("  SchemaRegistry:     ", schemaRegistryAddress);
         console.log("  Outcome schema UID:");
