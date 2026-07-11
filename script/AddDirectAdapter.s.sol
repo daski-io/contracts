@@ -15,7 +15,10 @@ import {PaymentRouter} from "../src/PaymentRouter.sol";
 /// Required env:
 ///   DEPLOYER_PRIVATE_KEY       broadcaster (pays gas; becomes adapter admin)
 ///   PAYMENT_ROUTER_ADDRESS     existing PaymentRouter proxy
-///   IDENTITY_REGISTRY_ADDRESS  existing IdentityRegistry proxy
+///   AGENT_INDEX_ADDRESS        existing AgentIndex proxy (the adapter
+///                              resolves buyer wallets through it — NOT the
+///                              canonical identity registry, which has no
+///                              reverse lookup)
 /// Optional env:
 ///   ATTRIBUTOR_ADDRESS  gateway facilitator wallet to whitelist for
 ///                       attribute(). Without it the rail cannot settle —
@@ -31,21 +34,21 @@ contract AddDirectAdapter is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address routerAddress = vm.envAddress("PAYMENT_ROUTER_ADDRESS");
-        address identityAddress = vm.envAddress("IDENTITY_REGISTRY_ADDRESS");
+        address agentIndexAddress = vm.envAddress("AGENT_INDEX_ADDRESS");
         address attributor = vm.envOr("ATTRIBUTOR_ADDRESS", address(0));
         address deployer = vm.addr(deployerKey);
         address finalAdmin = vm.envOr("ADMIN_ADDRESS", deployer);
 
-        console.log("Deployer:        ", deployer);
-        console.log("PaymentRouter:   ", routerAddress);
-        console.log("IdentityRegistry:", identityAddress);
+        console.log("Deployer:     ", deployer);
+        console.log("PaymentRouter:", routerAddress);
+        console.log("AgentIndex:   ", agentIndexAddress);
 
         vm.startBroadcast(deployerKey);
 
         DirectTransferAdapter impl = new DirectTransferAdapter();
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(DirectTransferAdapter.initialize, (routerAddress, identityAddress, deployer))
+            abi.encodeCall(DirectTransferAdapter.initialize, (routerAddress, agentIndexAddress, deployer))
         );
         DirectTransferAdapter adapter = DirectTransferAdapter(address(proxy));
         console.log("DirectTransferAdapter impl: ", address(impl));

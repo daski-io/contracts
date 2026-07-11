@@ -3,14 +3,14 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {IServiceRegistry} from "../src/interfaces/IServiceRegistry.sol";
 
 contract ServiceRegistryTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
     ProviderRegistry providerRegistry;
     ServiceRegistry services;
     MockUSDC usdc;
@@ -26,10 +26,7 @@ contract ServiceRegistryTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
-        );
+        identity = new MockCanonicalIdentityRegistry();
 
         ProviderRegistry pregImpl = new ProviderRegistry();
         providerRegistry = ProviderRegistry(

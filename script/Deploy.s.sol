@@ -4,8 +4,7 @@ pragma solidity ^0.8.24;
 import {Script, console} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
-import {ReputationRegistry} from "../src/ReputationRegistry.sol";
+import {AgentIndex} from "../src/AgentIndex.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
@@ -19,8 +18,21 @@ import {DirectTransferAdapter} from "../src/adapters/DirectTransferAdapter.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 
-/// @notice Deploy the full Daski stack including the new ServiceRegistry. On
-///         Base Sepolia this also registers the two EAS schemas the new
+/// @notice Deploy the Daski stack against the CANONICAL ERC-8004
+///         IdentityRegistry — Daski deploys no identity registry (and no
+///         ERC-8004 reputation registry) of its own anymore.
+///
+///         IDENTITY_REGISTRY_ADDRESS must point at the canonical per-chain
+///         singleton:
+///           Base mainnet  0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
+///           Base Sepolia  0x8004A818BFB912233c491871b3d84c89A494BD9e
+///
+///         Public ERC-8004 feedback lives in the canonical
+///         ReputationRegistry (Base mainnet 0x8004BAa17C55a88189AE136b182e5fdA19dE9b63,
+///         Base Sepolia 0x8004B663056A597Dffe9eCcC1965A193B7388713), written
+///         by the gateway off-chain; no contract in this stack touches it.
+///
+///         The script also registers the two EAS schemas the
 ///         ReputationStorage resolver listens to; schema UIDs are logged at
 ///         the end so CI / ops can paste them into the off-chain services'
 ///         env files.
@@ -34,6 +46,15 @@ contract Deploy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address treasury = vm.envAddress("TREASURY_ADDRESS");
+
+        // The canonical ERC-8004 IdentityRegistry for this chain. Required —
+        // there is deliberately no fallback that deploys a local registry.
+        address identityRegistry = vm.envOr("IDENTITY_REGISTRY_ADDRESS", address(0));
+        require(
+            identityRegistry != address(0),
+            "IDENTITY_REGISTRY_ADDRESS not set. Use the canonical ERC-8004 registry: Base mainnet 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432, Base Sepolia 0x8004A818BFB912233c491871b3d84c89A494BD9e"
+        );
+        require(identityRegistry.code.length > 0, "IDENTITY_REGISTRY_ADDRESS has no code on this chain");
 
         address usdcAddress = vm.envOr("USDC_ADDRESS", address(0));
         uint256 listingFee = vm.envOr("LISTING_FEE", uint256(1_000_000));
@@ -54,6 +75,7 @@ contract Deploy is Script {
         console.log("Deployer:", deployer);
         console.log("Final admin:", finalAdmin);
         console.log("Treasury:", treasury);
+        console.log("Canonical IdentityRegistry:", identityRegistry);
         console.log("EAS:     ", easAddress);
         console.log("SchemaRegistry:", schemaRegistryAddress);
 
@@ -68,61 +90,50 @@ contract Deploy is Script {
             console.log("Using existing USDC:", usdcAddress);
         }
 
-        // ── (b) IdentityRegistry (ERC-8004) ───────────────────────────
-        IdentityRegistry identityImpl = new IdentityRegistry();
-        ERC1967Proxy identityProxy =
-            new ERC1967Proxy(address(identityImpl), abi.encodeCall(IdentityRegistry.initialize, (deployer)));
-        console.log("IdentityRegistry impl:", address(identityImpl));
-        console.log("IdentityRegistry proxy:", address(identityProxy));
-
-        // ── (c) ReputationRegistry (ERC-8004) ─────────────────────────
-        ReputationRegistry reputationRegistryImpl = new ReputationRegistry();
-        ERC1967Proxy reputationRegistryProxy = new ERC1967Proxy(
-            address(reputationRegistryImpl),
-            abi.encodeCall(ReputationRegistry.initialize, (address(identityProxy), deployer))
+        // ── (b) AgentIndex (Daski companion to the canonical registry) ─
+        AgentIndex agentIndexImpl = new AgentIndex();
+        ERC1967Proxy agentIndexProxy = new ERC1967Proxy(
+            address(agentIndexImpl), abi.encodeCall(AgentIndex.initialize, (identityRegistry, deployer))
         );
-        console.log("ReputationRegistry impl:", address(reputationRegistryImpl));
-        console.log("ReputationRegistry proxy:", address(reputationRegistryProxy));
+        console.log("AgentIndex impl:", address(agentIndexImpl));
+        console.log("AgentIndex proxy:", address(agentIndexProxy));
 
-        // ── (d) ValidationRegistry (ERC-8004) ─────────────────────────
+        // ── (c) ValidationRegistry (ERC-8004, Daski-hosted) ───────────
+        // Stays self-hosted: the ERC-8004 Validation Registry spec section is
+        // still in flux and has no canonical deployment yet.
         ValidationRegistry validationRegistryImpl = new ValidationRegistry();
         ERC1967Proxy validationRegistryProxy = new ERC1967Proxy(
-            address(validationRegistryImpl),
-            abi.encodeCall(ValidationRegistry.initialize, (address(identityProxy), deployer))
+            address(validationRegistryImpl), abi.encodeCall(ValidationRegistry.initialize, (identityRegistry, deployer))
         );
         console.log("ValidationRegistry impl:", address(validationRegistryImpl));
         console.log("ValidationRegistry proxy:", address(validationRegistryProxy));
 
-        // ── (e) ProviderRegistry (Daski) ──────────────────────────────
+        // ── (d) ProviderRegistry (Daski) ──────────────────────────────
         ProviderRegistry providerRegistryImpl = new ProviderRegistry();
         ERC1967Proxy providerRegistryProxy = new ERC1967Proxy(
             address(providerRegistryImpl),
-            abi.encodeCall(
-                ProviderRegistry.initialize, (address(identityProxy), usdcAddress, treasury, listingFee, deployer)
-            )
+            abi.encodeCall(ProviderRegistry.initialize, (identityRegistry, usdcAddress, treasury, listingFee, deployer))
         );
         console.log("ProviderRegistry impl:", address(providerRegistryImpl));
         console.log("ProviderRegistry proxy:", address(providerRegistryProxy));
 
-        // ── (f) ServiceRegistry (Daski — new) ─────────────────────────
+        // ── (e) ServiceRegistry (Daski) ───────────────────────────────
         ServiceRegistry serviceRegistryImpl = new ServiceRegistry();
         ERC1967Proxy serviceRegistryProxy = new ERC1967Proxy(
             address(serviceRegistryImpl),
-            abi.encodeCall(
-                ServiceRegistry.initialize, (address(identityProxy), address(providerRegistryProxy), deployer)
-            )
+            abi.encodeCall(ServiceRegistry.initialize, (identityRegistry, address(providerRegistryProxy), deployer))
         );
         console.log("ServiceRegistry impl:", address(serviceRegistryImpl));
         console.log("ServiceRegistry proxy:", address(serviceRegistryProxy));
 
-        // ── (g) PaymentRouter (Daski) ─────────────────────────────────
+        // ── (f) PaymentRouter (Daski) ─────────────────────────────────
         PaymentRouter routerImpl = new PaymentRouter();
         ERC1967Proxy routerProxy = new ERC1967Proxy(
             address(routerImpl),
             abi.encodeCall(
                 PaymentRouter.initialize,
                 (
-                    address(identityProxy),
+                    identityRegistry,
                     address(providerRegistryProxy),
                     address(serviceRegistryProxy),
                     treasury,
@@ -135,11 +146,11 @@ contract Deploy is Script {
         console.log("PaymentRouter impl:", address(routerImpl));
         console.log("PaymentRouter proxy:", address(routerProxy));
 
-        // ── (h) ReputationStorage (EAS resolver + refund sink) ────────
+        // ── (g) ReputationStorage (EAS resolver + refund sink) ────────
         ReputationStorage reputationImpl = new ReputationStorage();
         ERC1967Proxy reputationProxy = new ERC1967Proxy(
             address(reputationImpl),
-            abi.encodeCall(ReputationStorage.initialize, (address(identityProxy), address(routerProxy), deployer))
+            abi.encodeCall(ReputationStorage.initialize, (identityRegistry, address(routerProxy), deployer))
         );
         ReputationStorage reputation = ReputationStorage(address(reputationProxy));
         console.log("ReputationStorage impl:", address(reputationImpl));
@@ -154,34 +165,34 @@ contract Deploy is Script {
         reputation.setOutcomeSchema(outcomeSchemaUid);
         reputation.setConfirmationSchema(confirmationSchemaUid);
 
-        // ── (i) X402Adapter ───────────────────────────────────────────
+        // ── (h) X402Adapter ───────────────────────────────────────────
         X402Adapter x402AdapterImpl = new X402Adapter();
         ERC1967Proxy x402AdapterProxy = new ERC1967Proxy(
             address(x402AdapterImpl),
-            abi.encodeCall(X402Adapter.initialize, (address(routerProxy), address(identityProxy), deployer))
+            abi.encodeCall(X402Adapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
         console.log("X402Adapter impl:", address(x402AdapterImpl));
         console.log("X402Adapter proxy:", address(x402AdapterProxy));
 
-        // ── (j) PermitAdapter ─────────────────────────────────────────
+        // ── (i) PermitAdapter ─────────────────────────────────────────
         PermitAdapter permitAdapterImpl = new PermitAdapter();
         ERC1967Proxy permitAdapterProxy = new ERC1967Proxy(
             address(permitAdapterImpl),
-            abi.encodeCall(PermitAdapter.initialize, (address(routerProxy), address(identityProxy), deployer))
+            abi.encodeCall(PermitAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
         console.log("PermitAdapter impl:", address(permitAdapterImpl));
         console.log("PermitAdapter proxy:", address(permitAdapterProxy));
 
-        // ── (k) ApprovalAdapter ───────────────────────────────────────
+        // ── (j) ApprovalAdapter ───────────────────────────────────────
         ApprovalAdapter approvalAdapterImpl = new ApprovalAdapter();
         ERC1967Proxy approvalAdapterProxy = new ERC1967Proxy(
             address(approvalAdapterImpl),
-            abi.encodeCall(ApprovalAdapter.initialize, (address(routerProxy), address(identityProxy), deployer))
+            abi.encodeCall(ApprovalAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
         console.log("ApprovalAdapter impl:", address(approvalAdapterImpl));
         console.log("ApprovalAdapter proxy:", address(approvalAdapterProxy));
 
-        // ── (l) DirectTransferAdapter (external-facilitator rail) ─────
+        // ── (k) DirectTransferAdapter (external-facilitator rail) ─────
         // Attributes payments settled by an external x402 facilitator (CDP)
         // as bare EIP-3009 transfers into the router. ATTRIBUTOR_ADDRESS is
         // the gateway's facilitator wallet; when unset, ops must call
@@ -189,7 +200,7 @@ contract Deploy is Script {
         DirectTransferAdapter directAdapterImpl = new DirectTransferAdapter();
         ERC1967Proxy directAdapterProxy = new ERC1967Proxy(
             address(directAdapterImpl),
-            abi.encodeCall(DirectTransferAdapter.initialize, (address(routerProxy), address(identityProxy), deployer))
+            abi.encodeCall(DirectTransferAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
         console.log("DirectTransferAdapter impl:", address(directAdapterImpl));
         console.log("DirectTransferAdapter proxy:", address(directAdapterProxy));
@@ -200,7 +211,7 @@ contract Deploy is Script {
             console.log("Attributor whitelisted:", attributor);
         }
 
-        // ── (m) Wire whitelists ───────────────────────────────────────
+        // ── (l) Wire whitelists ───────────────────────────────────────
         router.setAdapter(address(x402AdapterProxy), true);
         router.setAdapter(address(permitAdapterProxy), true);
         router.setAdapter(address(approvalAdapterProxy), true);
@@ -208,16 +219,15 @@ contract Deploy is Script {
         router.setAcceptedToken(usdcAddress, true);
         router.setReputationStorage(address(reputationProxy));
 
-        // ── (n) Admin handoff ─────────────────────────────────────────
+        // ── (m) Admin handoff ─────────────────────────────────────────
         // All wiring above is onlyAdmin and ran as the deployer. If a separate
         // ADMIN_ADDRESS (multisig / timelock) was supplied, start the 2-step
         // transfer for every proxy now; the new admin completes it by calling
         // acceptAdmin() on each. Until then the deployer stays admin, so a
         // mistyped address is recoverable.
         if (finalAdmin != deployer) {
-            address[11] memory adminContracts = [
-                address(identityProxy),
-                address(reputationRegistryProxy),
+            address[10] memory adminContracts = [
+                address(agentIndexProxy),
                 address(validationRegistryProxy),
                 address(providerRegistryProxy),
                 address(serviceRegistryProxy),
@@ -241,8 +251,8 @@ contract Deploy is Script {
         console.log("-------------------------------------------");
         console.log("Deployment complete");
         console.log("  USDC:               ", usdcAddress);
-        console.log("  IdentityRegistry:   ", address(identityProxy));
-        console.log("  ReputationRegistry: ", address(reputationRegistryProxy));
+        console.log("  IdentityRegistry (canonical, external):", identityRegistry);
+        console.log("  AgentIndex:         ", address(agentIndexProxy));
         console.log("  ValidationRegistry: ", address(validationRegistryProxy));
         console.log("  ProviderRegistry:   ", address(providerRegistryProxy));
         console.log("  ServiceRegistry:    ", address(serviceRegistryProxy));

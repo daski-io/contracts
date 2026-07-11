@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IdentityRegistry} from "../IdentityRegistry.sol";
+import {IAgentIndex} from "../interfaces/IAgentIndex.sol";
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IERC3009} from "../interfaces/IERC3009.sol";
 import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
@@ -48,7 +48,7 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 /// attributor's challenge store, which is why only it may attribute.
 contract DirectTransferAdapter is Admin2StepUpgradeable {
     IPaymentRouter public router;
-    IdentityRegistry public identity;
+    IAgentIndex public agentIndex;
 
     /// @notice Off-chain services allowed to attribute externally settled
     ///         transfers. In practice: the Daski gateway's facilitator wallet.
@@ -69,12 +69,12 @@ contract DirectTransferAdapter is Admin2StepUpgradeable {
         _disableInitializers();
     }
 
-    function initialize(address _router, address _identity, address _admin) external initializer {
+    function initialize(address _router, address _agentIndex, address _admin) external initializer {
         require(_router != address(0), "zero router");
-        require(_identity != address(0), "zero identity");
+        require(_agentIndex != address(0), "zero agent index");
         __Admin2Step_init(_admin);
         router = IPaymentRouter(_router);
-        identity = IdentityRegistry(_identity);
+        agentIndex = IAgentIndex(_agentIndex);
     }
 
     /// @notice Run the router split + bookkeeping for a payment whose funds
@@ -104,16 +104,18 @@ contract DirectTransferAdapter is Admin2StepUpgradeable {
         require(IERC3009(token).authorizationState(from, authNonce), "authorization not consumed");
 
         // Resolve the buyer's agentId from the signer wallet — same
-        // live-lookup semantics as X402Adapter. External-rail buyers must
-        // be registered before paying; there is no atomic-register variant
-        // because external facilitators can't carry the registration sig.
-        uint256 buyerAgentId = identity.agentOfWallet(from);
+        // live-lookup semantics as X402Adapter (AgentIndex re-verifies the
+        // binding against the canonical ERC-8004 registry). External-rail
+        // buyers must be registered before paying; there is no
+        // atomic-register variant because external facilitators can't carry
+        // the registration sig.
+        uint256 buyerAgentId = agentIndex.resolve(from);
         require(buyerAgentId != 0, "buyer has no agent");
 
         // Router re-checks: accepted token, serviceRef unused, provider and
         // service active, and — critically — that its balance actually
         // covers `amount` before paying out.
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
+        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, from, providerAgentId, serviceId);
 
         emit DirectTransferAttributed(paymentId, serviceRef, from, authNonce);
     }

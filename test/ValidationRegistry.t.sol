@@ -3,12 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
 import {IValidationRegistry} from "../src/interfaces/IValidationRegistry.sol";
 
 contract ValidationRegistryTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
     ValidationRegistry validation;
 
     address admin = makeAddr("admin");
@@ -20,9 +20,7 @@ contract ValidationRegistryTest is Test {
     bytes32 constant REQ_HASH = keccak256("request-1");
 
     function setUp() public {
-        IdentityRegistry idImpl = new IdentityRegistry();
-        ERC1967Proxy idProxy = new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin)));
-        identity = IdentityRegistry(address(idProxy));
+        identity = new MockCanonicalIdentityRegistry();
 
         ValidationRegistry vImpl = new ValidationRegistry();
         ERC1967Proxy vProxy =

@@ -4,20 +4,42 @@
 economy — an open coordination layer where AI agents discover services, settle
 payment in USDC on Base, and accumulate on-chain reputation, all over open
 standards (MCP, x402, A2A, ERC-8004). This repo is the on-chain protocol:
-identity, provider registry, rail-agnostic payment routing, and bilateral
-reputation backed by EAS attestations. For the full protocol design, read the
+provider registry, rail-agnostic payment routing, and bilateral reputation
+backed by EAS attestations — built on top of the **canonical ERC-8004
+registries**. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia. 217 unit + integration tests passing.
-Audit pending.
+**Status:** v1 deployed on Base Sepolia (pre-canonical-migration — next
+redeploy switches identity to the canonical registry). 188 unit + integration
+tests passing. Audit pending.
+
+## Canonical ERC-8004 registries
+
+Daski does **not** deploy an identity registry (or an ERC-8004 reputation
+registry) of its own. Agent identity is the pair *(registry, agentId)*, and
+Daski agents live in the canonical per-chain singletons that the whole
+ecosystem (8004scan, indexers, other marketplaces) reads:
+
+| Registry            | Base mainnet                                  | Base Sepolia                                  |
+|---------------------|-----------------------------------------------|-----------------------------------------------|
+| IdentityRegistry    | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`  | `0x8004A818BFB912233c491871b3d84c89A494BD9e`  |
+| ReputationRegistry  | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63`  | `0x8004B663056A597Dffe9eCcC1965A193B7388713`  |
+
+Public ERC-8004 feedback is written to the canonical ReputationRegistry by
+the gateway (off-chain, per confirmed delivery, with the EAS attestation as
+evidence); no contract in this repo touches it. The ERC-8004
+ValidationRegistry remains Daski-hosted because that section of the spec is
+still in flux and has no canonical deployment yet. Daski's EAS layer
+(`ReputationStorage`) is the payment-verified internal ledger that drives
+ranking — it is Daski-native, not ERC-8004 reputation.
 
 ## Three-layer identity model
 
-| Layer       | Where it lives                          | Identifier        | Example                |
-|-------------|-----------------------------------------|-------------------|------------------------|
-| Provider    | On-chain (`IdentityRegistry`, ERC-8004) | `agentId`         | Blue T Group LLC       |
-| **Service** | On-chain (`ServiceRegistry`)            | `serviceId`       | "Domain Registration"  |
-| Skill       | Off-chain (provider's A2A Agent Card)   | `AgentSkill.id`   | `register-domain`      |
+| Layer       | Where it lives                                     | Identifier        | Example                |
+|-------------|----------------------------------------------------|-------------------|------------------------|
+| Provider    | On-chain (canonical ERC-8004 `IdentityRegistry`)   | `agentId`         | Blue T Group LLC       |
+| **Service** | On-chain (Daski `ServiceRegistry`)                 | `serviceId`       | "Domain Registration"  |
+| Skill       | Off-chain (provider's A2A Agent Card)              | `AgentSkill.id`   | `register-domain`      |
 
 A *service* is a marketable product — the unit of buyer discovery and reputation. A *skill* is a callable A2A method. **One service maps to one or more skills**; the mapping lives in the off-chain `serviceURI` JSON, not on-chain.
 
@@ -25,16 +47,15 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 
 | Contract            | Purpose |
 |---------------------|---------|
-| **IdentityRegistry**   | ERC-8004 identity for every actor — buyers, gateway, providers. One NFT per *operator*; services live in `ServiceRegistry`. Enforces a 1:1 wallet ↔ agent invariant. |
-| **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates ERC-8004 agents into the Daski "provider" role. |
+| **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. Bindings are re-verified against the canonical registry on every read; stale ones resolve to zero. |
+| **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
 | **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
 | **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): attributes payments that a third-party facilitator (Coinbase CDP) settled as bare EIP-3009 transfers into the router, running the split + payment record as a follow-up tx. Attributor-gated (the Daski gateway). |
-| **ReputationRegistry** | ERC-8004 public feedback events. |
-| **ValidationRegistry** | ERC-8004 request/response attestations. |
+| **ValidationRegistry** | ERC-8004 request/response attestations (Daski-hosted until a canonical validation registry exists). |
 | **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
@@ -43,6 +64,12 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 ## Deployments
 
 ### Base Sepolia (chain id `84532`)
+
+> **Pre-migration deployment.** The addresses below are the LIVE sandbox,
+> which still runs Daski's own Identity/Reputation registries. The next
+> redeploy (this branch) switches identity to the canonical registry, adds
+> AgentIndex, and drops the two self-hosted registries — refresh this table
+> and `deployments/base-sepolia.json` from the deploy script output.
 
 | Contract            | Address                                      |
 |---------------------|----------------------------------------------|
@@ -75,17 +102,18 @@ Not yet deployed. Pending audit.
 
 ## Architecture
 
-UUPS proxy pattern; deploy order matters due to cross-contract dependencies:
+UUPS proxy pattern; deploy order matters due to cross-contract dependencies.
+`IdentityRegistry` below means the CANONICAL singleton (env-supplied, never
+deployed by Daski):
 
 ```
-1. IdentityRegistry        (no deps)
-2. ReputationRegistry      (IdentityRegistry)
-3. ValidationRegistry      (IdentityRegistry)
-4. ProviderRegistry        (IdentityRegistry, USDC, treasury)
-5. ServiceRegistry         (IdentityRegistry, ProviderRegistry)
-6. PaymentRouter           (IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
-7. ReputationStorage       (IdentityRegistry, PaymentRouter, EAS, schema UIDs)
-8. Adapters (X402/Permit/Approval/DirectTransfer) — registered with PaymentRouter
+1. AgentIndex              (canonical IdentityRegistry)
+2. ValidationRegistry      (canonical IdentityRegistry)
+3. ProviderRegistry        (canonical IdentityRegistry, USDC, treasury)
+4. ServiceRegistry         (canonical IdentityRegistry, ProviderRegistry)
+5. PaymentRouter           (canonical IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
+6. ReputationStorage       (canonical IdentityRegistry, PaymentRouter, EAS, schema UIDs)
+7. Adapters (X402/Permit/Approval/DirectTransfer) — initialized with AgentIndex, registered with PaymentRouter
 ```
 
 ## Development
@@ -94,19 +122,18 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 217 tests across 12 suites
+forge test       # 188 tests across 11 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 50 |
-| IdentityRegistry      | 31 |
+| PaymentRouter         | 52 |
 | ReputationStorage     | 27 |
 | ServiceRegistry       | 24 |
-| ProviderRegistry      | 19 |
-| ReputationRegistry    | 17 |
+| AgentIndex            | 18 |
+| ProviderRegistry      | 18 |
 | X402Adapter           | 14 |
 | ValidationRegistry    | 13 |
 | DirectTransferAdapter | 10 |
@@ -114,11 +141,20 @@ forge fmt
 | ApprovalAdapter       | 4  |
 | Integration           | 3  |
 
+Tests run against `test/mocks/MockCanonicalIdentityRegistry.sol`, a faithful
+double of the canonical registry surface (ERC-721 + registration +
+agentWallet, **no** auto-set wallet, **no** reverse index).
+
 ## Deploy
 
 ```bash
 export DEPLOYER_PRIVATE_KEY=<key>
 export TREASURY_ADDRESS=<address>
+
+# REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
+#   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
+#   Base mainnet: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
+export IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
 
 # USDC token. Defaults shown:
 #   Base Sepolia (Circle): 0x036CbD53842c5426634e7929541eC2318f3dCF7e
@@ -146,7 +182,7 @@ router, without touching anything else:
 ```bash
 export DEPLOYER_PRIVATE_KEY=<key>                # pays gas; becomes adapter admin
 export PAYMENT_ROUTER_ADDRESS=<existing router proxy>
-export IDENTITY_REGISTRY_ADDRESS=<existing identity proxy>
+export AGENT_INDEX_ADDRESS=<existing AgentIndex proxy>
 # Gateway facilitator wallet — allowed to call attribute(). Strongly
 # recommended to set here; the rail cannot settle without an attributor.
 export ATTRIBUTOR_ADDRESS=<gateway facilitator wallet>

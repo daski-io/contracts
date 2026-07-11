@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IdentityRegistry} from "../IdentityRegistry.sol";
+import {IAgentIndex} from "../interfaces/IAgentIndex.sol";
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IERC3009} from "../interfaces/IERC3009.sol";
 import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
@@ -28,19 +28,19 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 ///   exactly one (service, provider) pair per authorization.
 contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
     IPaymentRouter public router;
-    IdentityRegistry public identity;
+    IAgentIndex public agentIndex;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address _router, address _identity, address _admin) external initializer {
+    function initialize(address _router, address _agentIndex, address _admin) external initializer {
         require(_router != address(0), "zero router");
-        require(_identity != address(0), "zero identity");
+        require(_agentIndex != address(0), "zero agent index");
         __Admin2Step_init(_admin);
         router = IPaymentRouter(_router);
-        identity = IdentityRegistry(_identity);
+        agentIndex = IAgentIndex(_agentIndex);
     }
 
     /// @inheritdoc IX402Adapter
@@ -56,21 +56,23 @@ contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
         // EIP-3009 transfer. The router will also re-check at settle.
         require(router.isAcceptedToken(token), "token not accepted");
 
-        // Resolve the buyer's agentId from the signer. Using agentOfWallet
-        // honors ERC-8004 wallet rotation — if the signer just rotated
-        // their wallet between signing and submission, the call reverts.
-        uint256 buyerAgentId = identity.agentOfWallet(auth.from);
+        // Resolve the buyer's agentId from the signer. AgentIndex re-verifies
+        // the binding against the canonical ERC-8004 registry — if the signer
+        // transferred the agent away or rotated out between signing and
+        // submission, this resolves to zero and the call reverts.
+        uint256 buyerAgentId = agentIndex.resolve(auth.from);
         require(buyerAgentId != 0, "buyer has no agent");
 
         paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
     }
 
     /// @notice Atomic registration + settle. If the buyer (auth.from) has no
-    ///         agentId, the buyer's gasless registerBySig signature is used
-    ///         to mint one in the same tx as the EIP-3009 transfer + router
-    ///         settlement. Either both succeed or both revert. If the buyer
-    ///         is already registered, the registration call is skipped and
-    ///         this behaves exactly like `settle`.
+    ///         agentId, the buyer's gasless registration consent signature is
+    ///         used to mint one on the canonical ERC-8004 registry (via
+    ///         AgentIndex.registerWithSig) in the same tx as the EIP-3009
+    ///         transfer + router settlement. Either both succeed or both
+    ///         revert. If the buyer is already registered, the registration
+    ///         call is skipped and this behaves exactly like `settle`.
     /// @dev    The Sybil-tax for gasless registration is the USDC payment:
     ///         a spammer must spend `amount` of USDC to mint a fake agentId
     ///         via this path, since the registration only happens together
@@ -88,9 +90,9 @@ contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
     ) external returns (uint256 buyerAgentId, uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
 
-        buyerAgentId = identity.agentOfWallet(auth.from);
+        buyerAgentId = agentIndex.resolve(auth.from);
         if (buyerAgentId == 0) {
-            buyerAgentId = identity.registerBySig(agentURI, auth.from, registrationDeadline, registrationSignature);
+            buyerAgentId = agentIndex.registerWithSig(agentURI, auth.from, registrationDeadline, registrationSignature);
         }
 
         paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
@@ -127,7 +129,9 @@ contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
             );
 
         // Router holds the funds now; delegate the split and bookkeeping.
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
+        // auth.from is the payer wallet — cached by the router as the refund
+        // fallback destination.
+        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId);
     }
 
     /// @notice Helper for off-chain signers: returns the value the buyer

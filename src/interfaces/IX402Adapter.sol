@@ -25,10 +25,10 @@ interface IX402Adapter {
     ) external returns (uint256 paymentId);
 
     /// @notice Atomic gasless-registration + settle. If `auth.from` has no
-    ///         agentId yet, mints one via IdentityRegistry.registerBySig using
-    ///         the supplied registration signature, then settles in the same
-    ///         tx (both succeed or both revert). If already registered, behaves
-    ///         exactly like `settle`.
+    ///         agentId yet, mints one on the canonical ERC-8004 registry via
+    ///         AgentIndex.registerWithSig using the supplied consent
+    ///         signature, then settles in the same tx (both succeed or both
+    ///         revert). If already registered, behaves exactly like `settle`.
     function settleWithRegistration(
         address token,
         uint256 amount,

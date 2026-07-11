@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {AgentIndex} from "../src/AgentIndex.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -12,9 +13,11 @@ import {MockUSDC} from "../src/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
+import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
 
 contract X402AdapterTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
+    AgentIndex agentIndex;
     ProviderRegistry registry;
     ServiceRegistry services;
     PaymentRouter router;
@@ -36,9 +39,14 @@ contract X402AdapterTest is Test {
         buyer = vm.addr(BUYER_KEY);
         usdc = new MockUSDC();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
+        // Stand-in for the canonical ERC-8004 IdentityRegistry singleton,
+        // plus the Daski AgentIndex the adapters resolve buyers through.
+        identity = new MockCanonicalIdentityRegistry();
+        AgentIndex aiImpl = new AgentIndex();
+        agentIndex = AgentIndex(
+            address(
+                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+            )
         );
 
         ProviderRegistry regImpl = new ProviderRegistry();
@@ -80,7 +88,8 @@ contract X402AdapterTest is Test {
         adapter = X402Adapter(
             address(
                 new ERC1967Proxy(
-                    address(aImpl), abi.encodeCall(X402Adapter.initialize, (address(router), address(identity), admin))
+                    address(aImpl),
+                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
                 )
             )
         );
@@ -92,6 +101,9 @@ contract X402AdapterTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
+        // Canonical registries never auto-set agentWallet; without one (or a
+        // serviceWallet) payee resolution rejects at settle.
+        identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
         usdc.approve(address(registry), 1_000_000);
@@ -103,6 +115,9 @@ contract X402AdapterTest is Test {
 
         vm.prank(buyer);
         buyerAgentId = identity.register();
+        // Adapters resolve the buyer through the AgentIndex — bind it.
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 1000e6);
     }
 
@@ -189,9 +204,12 @@ contract X402AdapterTest is Test {
     }
 
     function test_settleBuyerNoAgentReverts() public {
-        // Buyer rotates wallet (i.e. unsets), so agentOfWallet returns 0.
+        // Buyer moves the agent NFT away — the AgentIndex binding goes stale
+        // and resolve() returns 0, so settlement rejects rather than
+        // attributing the payment to an agent the wallet no longer controls.
         vm.prank(buyer);
-        identity.unsetAgentWallet(buyerAgentId);
+        identity.transferFrom(buyer, makeAddr("elsewhere"), buyerAgentId);
+        assertEq(agentIndex.resolve(buyer), 0, "binding stale after transfer");
 
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId, serviceId);
         vm.prank(relayer);
@@ -266,25 +284,14 @@ contract X402AdapterTest is Test {
 
     uint256 constant FRESH_BUYER_KEY = 0xDA571;
 
-    function _signRegisterAgent(uint256 key, address agentWallet, string memory uri, uint256 nonce, uint256 deadline)
+    function _signRegisterAgent(uint256 key, address, string memory uri, uint256 nonce, uint256 deadline)
         internal
         view
         returns (bytes memory)
     {
-        bytes32 typehash = identity.REGISTER_AGENT_TYPEHASH();
-        bytes32 structHash = keccak256(abi.encode(typehash, keccak256(bytes(uri)), agentWallet, nonce, deadline));
-        bytes32 domainSep = keccak256(
-            abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("Daski IdentityRegistry")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(identity)
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSep, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
-        return abi.encodePacked(r, s, v);
+        // Consent signature now targets the AgentIndex domain (the canonical
+        // registry has no registerBySig).
+        return AgentIndexSigner.signRegisterWithNonce(vm, key, agentIndex, uri, nonce, deadline);
     }
 
     function _eip3009For(uint256 key, address from, uint256 value, bytes32 serviceRef, uint256 providerId, bytes32 svc)
@@ -310,7 +317,7 @@ contract X402AdapterTest is Test {
         usdc.mint(freshBuyer, 100e6);
 
         // No agent yet for freshBuyer.
-        assertEq(identity.agentOfWallet(freshBuyer), 0, "precondition: not registered");
+        assertEq(agentIndex.resolve(freshBuyer), 0, "precondition: not registered");
 
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://fresh", 0, deadline);
@@ -323,10 +330,12 @@ contract X402AdapterTest is Test {
             address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://fresh", deadline, regSig
         );
 
-        // Registered + paid in one tx.
+        // Registered + paid in one tx. The NFT lands on the buyer wallet
+        // (registered via AgentIndex, transferred out in the same call) and
+        // the index binding resolves live.
         assertGt(newBuyerAgentId, 0, "buyer registered");
         assertEq(identity.ownerOf(newBuyerAgentId), freshBuyer);
-        assertEq(identity.agentOfWallet(freshBuyer), newBuyerAgentId);
+        assertEq(agentIndex.resolve(freshBuyer), newBuyerAgentId);
 
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, newBuyerAgentId);
@@ -372,7 +381,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: nothing moved.
-        assertEq(identity.agentOfWallet(freshBuyer), 0, "no agent minted");
+        assertEq(agentIndex.resolve(freshBuyer), 0, "no agent minted");
         assertEq(usdc.balanceOf(freshBuyer), freshBuyerUsdcBefore, "no USDC moved");
     }
 
@@ -396,7 +405,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: registration is rolled back along with the failed transfer.
-        assertEq(identity.agentOfWallet(freshBuyer), 0, "registration rolled back");
-        assertEq(identity.registrationNonce(freshBuyer), 0, "nonce rolled back");
+        assertEq(agentIndex.resolve(freshBuyer), 0, "registration rolled back");
+        assertEq(agentIndex.registrationNonce(freshBuyer), 0, "nonce rolled back");
     }
 }

@@ -12,7 +12,10 @@ interface IPaymentRouter {
         bytes32 serviceId; // ServiceRegistry serviceId this payment was for
         address token; // token used for this payment
         uint256 amount; // original gross amount
-        address cachedBuyerWallet; // captured at settle; fallback for refund if agent unsets
+        // Payer wallet captured at settle (adapter-supplied, router-verified
+        // against the buyer agent). Refund fallback when the buyer agent has
+        // no live agentWallet on the canonical registry.
+        address cachedBuyerWallet;
         bytes32 serviceRef; // adapter-supplied reference, single-use
         // Block timestamp at settlement. Used by ReputationStorage to derive
         // fulfillment time from the outcome attestation rather than trusting
@@ -28,12 +31,16 @@ interface IPaymentRouter {
     ///         new paymentId.
     /// @dev    `serviceId` MUST belong to `providerAgentId` and the service
     ///         MUST be active. Payee resolution: serviceWallet if set, else
-    ///         the provider's ERC-8004 agentWallet.
+    ///         the provider's ERC-8004 agentWallet on the canonical registry.
+    ///         `buyerWallet` is the payer wallet; the router verifies it
+    ///         currently controls `buyerAgentId` (verified agentWallet or
+    ///         ERC-721 owner) and caches it as the refund fallback.
     function settle(
         address token,
         uint256 amount,
         bytes32 serviceRef,
         uint256 buyerAgentId,
+        address buyerWallet,
         uint256 providerAgentId,
         bytes32 serviceId
     ) external returns (uint256 paymentId);

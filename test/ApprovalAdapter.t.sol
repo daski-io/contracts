@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {AgentIndex} from "../src/AgentIndex.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -12,7 +13,8 @@ import {MockUSDC} from "../src/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 
 contract ApprovalAdapterTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
+    AgentIndex agentIndex;
     ProviderRegistry registry;
     ServiceRegistry services;
     PaymentRouter router;
@@ -31,9 +33,12 @@ contract ApprovalAdapterTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
+        identity = new MockCanonicalIdentityRegistry();
+        AgentIndex aiImpl = new AgentIndex();
+        agentIndex = AgentIndex(
+            address(
+                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+            )
         );
 
         ProviderRegistry regImpl = new ProviderRegistry();
@@ -76,7 +81,7 @@ contract ApprovalAdapterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(aImpl),
-                    abi.encodeCall(ApprovalAdapter.initialize, (address(router), address(identity), admin))
+                    abi.encodeCall(ApprovalAdapter.initialize, (address(router), address(agentIndex), admin))
                 )
             )
         );
@@ -88,6 +93,9 @@ contract ApprovalAdapterTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
+        // Canonical registries never auto-set agentWallet; payee resolution
+        // needs one (or a serviceWallet).
+        identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
         usdc.approve(address(registry), 1_000_000);
@@ -99,6 +107,9 @@ contract ApprovalAdapterTest is Test {
 
         vm.prank(buyer);
         buyerAgentId = identity.register();
+        // Adapters resolve the buyer through the AgentIndex — bind it.
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 1000e6);
     }
 
@@ -134,9 +145,10 @@ contract ApprovalAdapterTest is Test {
     }
 
     function test_settleBuyerNoAgentReverts() public {
-        // Unregister buyer's wallet
+        // Buyer moves the agent NFT away — the AgentIndex binding goes stale
+        // and resolve() returns 0.
         vm.prank(buyer);
-        identity.unsetAgentWallet(buyerAgentId);
+        identity.transferFrom(buyer, makeAddr("elsewhere"), buyerAgentId);
 
         vm.prank(buyer);
         usdc.approve(address(adapter), 100e6);
