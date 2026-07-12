@@ -172,6 +172,11 @@ forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
 of `forge script` output for easy copy-paste into client configs.
 
+Release coordination — develop→main merges, semver tags, the cross-repo
+address cascade (gateway/provider env, test-suite config, website `llms.txt`),
+DB resets, and post-deploy verification — lives in
+[daski-io/deploy-testnet](https://github.com/daski-io/deploy-testnet).
+
 ### Add DirectTransferAdapter to an existing deployment (x402 Bazaar rail)
 
 `Deploy.s.sol` includes the adapter for **fresh** stacks. To add the rail to
@@ -196,25 +201,11 @@ The script registers the adapter with the router automatically when the
 deployer is the router admin (testnet convention); otherwise it prints the
 exact `PaymentRouter.setAdapter(<proxy>, true)` call for the real admin.
 
-After the deploy:
-
-1. Record the **proxy** address in the Deployments table above and in
-   `deployments/<network>.json`.
-2. Point the gateway at it and redeploy (Railway):
-   ```bash
-   railway variables --service gateway --skip-deploys \
-     --set DIRECT_ADAPTER_ADDRESS=<adapter proxy>
-   railway redeploy --service gateway
-   ```
-   Setting `DIRECT_ADAPTER_ADDRESS` is what mounts the gateway's
-   `/x402/services/:tokenId/:skillId` routes (see daski-gateway
-   `.env.example` — `EXTERNAL_FACILITATOR_URL` defaults per network;
-   mainnet CDP settles additionally need
-   `EXTERNAL_FACILITATOR_AUTH_HEADER`).
-3. Sanity-check: `GET <gateway>/x402/services/<providerAgentId>/<skillId>`
-   should return an HTTP 402 with `accepts[]` + `extensions.bazaar`. The
-   first successful CDP-facilitated settle for a resource is what makes
-   the Bazaar index it.
+After the deploy: record the **proxy** address in the Deployments table above
+and in `deployments/<network>.json`, then run the downstream cascade (gateway
+`DIRECT_ADAPTER_ADDRESS`, verification, Bazaar 402 sanity check) from the
+[deploy-testnet](https://github.com/daski-io/deploy-testnet) runbook
+(`docs/contract-addresses.md`).
 
 ## Security
 
