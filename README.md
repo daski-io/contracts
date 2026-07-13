@@ -63,39 +63,38 @@ All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`)
+### Base Sepolia (chain id `84532`) — deployed 2026-07-12
 
-> **Pre-migration deployment.** The addresses below are the LIVE sandbox,
-> which still runs Daski's own Identity/Reputation registries. The next
-> redeploy (this branch) switches identity to the canonical registry, adds
-> AgentIndex, and drops the two self-hosted registries — refresh this table
-> and `deployments/base-sepolia.json` from the deploy script output.
+Canonical ERC-8004 singletons (external, never Daski-deployed):
+IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
+ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 
-| Contract            | Address                                      |
-|---------------------|----------------------------------------------|
-| USDC (Circle)       | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| IdentityRegistry    | `0xa03bd7e27dB0A942B2C30d6d4bCCD78724FC1E83` |
-| ReputationRegistry  | `0x3bB1ead34f04141C3e7791D9588e4F2017a0f38e` |
-| ValidationRegistry  | `0x13411C888Ececa7dA2078D8fC386118881Fc6E00` |
-| ProviderRegistry    | `0x3D3f1ACA48D5f8AC7cf910d2e075426B7894C2B8` |
-| ServiceRegistry     | `0x68e9d4c55309f71E3C4Fe70fba0983a5De7d4303` |
-| PaymentRouter       | `0x78f9b15F9b228Acd8D5A85eF4DAfef2164459d8f` |
-| ReputationStorage   | `0x6D657941343494605be3B86c7a60422621d2e97f` |
-| X402Adapter         | `0x20027cED25D8A9a79B385B6cD57432a6950aD032` |
-| PermitAdapter       | `0xE377F3bB81B238E4F9f2B9EB4CAC3052de833FFA` |
-| ApprovalAdapter     | `0xC270B04B994aC2B10442613eD1744FE77327427E` |
-| EAS                 | `0x4200000000000000000000000000000000000021` |
-| Schema Registry     | `0x4200000000000000000000000000000000000020` |
+| Contract              | Address                                      |
+|-----------------------|----------------------------------------------|
+| USDC (Circle)         | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| AgentIndex            | `0xf1Aa86a69aBA5750B15FAba3026B8e5CBe7Db519` |
+| ValidationRegistry    | `0x7b4F7eab04D6459D15caC6D26685b49C25613591` |
+| ProviderRegistry      | `0x9Ae6337534B2e16e93862D4CC8AD76B1778758e4` |
+| ServiceRegistry       | `0x0dA4E956f5b0C504d0c57FD43E7BBF69bA9b0E00` |
+| PaymentRouter         | `0x358A5fd242938BAD8b162551ACAC987953c93DC3` |
+| ReputationStorage     | `0xDc26A0c4Ec361F61D3dE56f729F8d6a6DBFCA75E` |
+| X402Adapter           | `0xab6E1a96D0262F484EEdAf3AEEd81f6c41758BD2` |
+| PermitAdapter         | `0x486B72084399716F0C058F5238F6e7f0B0D58038` |
+| ApprovalAdapter       | `0x71783d4FdEC13569DA6311F1941F3c4E0b0B89F7` |
+| DirectTransferAdapter | `0x41147a69e01d658c0290B0e30D7BFEBFC9c481A6` |
+| EAS                   | `0x4200000000000000000000000000000000000021` |
+| Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x6c9458ad1048bb37075c352d48fa6530d2302c33fad8303a572e64528171bbfd`
-- Confirmation: `0xd83d8f2044d492d9606841e85786f2b9b32a83b66f444924758e88b966f78597`
+- Outcome: `0x463fb742a0d186de10c8060e6ab6dbf9a6970e6913439f8ffe826b4bc6f56801`
+- Confirmation: `0xbdf480e91d9566952262fa3bf185872119b37f6c743be6df86603e6cf0717ed5`
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
-DirectTransferAdapter (external-facilitator / Bazaar rail) is **not yet
-deployed** — roll it out with [`script/AddDirectAdapter.s.sol`](script/AddDirectAdapter.s.sol)
-(see [Deploy](#deploy)) and record the proxy address here and in the JSON.
+The previous (pre-canonical-migration) stack at PaymentRouter
+`0x78f9b15F…459d8f` is orphaned, along with Daski's legacy
+Identity/Reputation registries — historical record in the deploy-testnet
+repo's deployment records.
 
 ### Base mainnet
 Not yet deployed. Pending audit.
