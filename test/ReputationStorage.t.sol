@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {AgentIndex} from "../src/AgentIndex.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -24,7 +25,8 @@ import {
 } from "../src/interfaces/IEAS.sol";
 
 contract ReputationStorageTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
+    AgentIndex agentIndex;
     ProviderRegistry registry;
     ServiceRegistry services;
     PaymentRouter router;
@@ -58,9 +60,12 @@ contract ReputationStorageTest is Test {
         usdc = new MockUSDC();
         eas = new MockEAS();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
+        identity = new MockCanonicalIdentityRegistry();
+        AgentIndex aiImpl = new AgentIndex();
+        agentIndex = AgentIndex(
+            address(
+                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+            )
         );
 
         ProviderRegistry regImpl = new ProviderRegistry();
@@ -102,7 +107,8 @@ contract ReputationStorageTest is Test {
         adapter = X402Adapter(
             address(
                 new ERC1967Proxy(
-                    address(aImpl), abi.encodeCall(X402Adapter.initialize, (address(router), address(identity), admin))
+                    address(aImpl),
+                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
                 )
             )
         );
@@ -134,6 +140,10 @@ contract ReputationStorageTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
+        // Canonical registries never auto-set agentWallet; payee resolution
+        // needs one (or a serviceWallet). It also makes `provider` the
+        // outcome attester via the agentWallet branch.
+        identity.forceSetAgentWallet(providerAgentId, provider);
 
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -146,6 +156,9 @@ contract ReputationStorageTest is Test {
 
         vm.prank(buyer);
         buyerAgentId = identity.register();
+        // The adapter resolves the buyer through the AgentIndex — bind it.
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 100e6);
         paymentId = _payAsBuyer(100e6, keccak256("service-1"), serviceId);
     }
@@ -243,8 +256,11 @@ contract ReputationStorageTest is Test {
     }
 
     function test_recordOutcomeUnauthorizedReverts() public {
+        // The attester must control the payment's provider agent on the
+        // canonical registry (agentWallet or owner) — a wallet with no
+        // relation to the agent fails the same check as the wrong party.
         vm.prank(unauthorized);
-        vm.expectRevert("no identity");
+        vm.expectRevert("not provider for this payment");
         eas.attest(_outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed));
 
         vm.prank(buyer);
@@ -295,7 +311,7 @@ contract ReputationStorageTest is Test {
 
     function test_submitConfirmationUnauthorizedReverts() public {
         vm.prank(unauthorized);
-        vm.expectRevert("no identity");
+        vm.expectRevert("not buyer for this payment");
         eas.attest(_confirmReq(paymentId, ReputationStorage.BuyerConfirmation.Confirmed, bytes32(0)));
 
         vm.prank(provider);
@@ -375,6 +391,7 @@ contract ReputationStorageTest is Test {
 
         vm.prank(provider2);
         uint256 provider2AgentId = identity.register("https://provider2.example/agent.json");
+        identity.forceSetAgentWallet(provider2AgentId, provider2);
         usdc.mint(provider2, 1_000_000);
         vm.startPrank(provider2);
         usdc.approve(address(registry), 1_000_000);
@@ -384,7 +401,9 @@ contract ReputationStorageTest is Test {
         bytes32 svc2 = services.registerService(provider2AgentId, "skill", "1", "u", address(0));
 
         vm.prank(buyer2);
-        identity.register();
+        uint256 buyer2AgentId = identity.register();
+        vm.prank(buyer2);
+        agentIndex.claim(buyer2AgentId);
         usdc.mint(buyer2, 100e6);
 
         bytes32 attackSvc = keccak256("attack-svc");

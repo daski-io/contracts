@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -26,16 +26,17 @@ contract PassThroughAdapter {
         uint256 amount,
         bytes32 serviceRef,
         uint256 buyerAgentId,
+        address buyerWallet,
         uint256 providerAgentId,
         bytes32 serviceId
     ) external returns (uint256 paymentId) {
         IERC20(token).transferFrom(msg.sender, address(router), amount);
-        return router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
+        return router.settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
     }
 }
 
 contract PaymentRouterTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
     ProviderRegistry registry;
     ServiceRegistry serviceRegistry;
     PaymentRouter router;
@@ -71,10 +72,8 @@ contract PaymentRouterTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
-        );
+        // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
+        identity = new MockCanonicalIdentityRegistry();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -120,6 +119,9 @@ contract PaymentRouterTest is Test {
         // Provider registers as ERC-8004 agent and lists with Daski.
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
+        // Canonical registries never auto-set agentWallet; payee resolution
+        // needs one (or a serviceWallet).
+        identity.forceSetAgentWallet(providerAgentId, provider);
 
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -146,7 +148,7 @@ contract PaymentRouterTest is Test {
         vm.prank(buyer);
         usdc.approve(address(adapter), amount);
         vm.prank(buyer);
-        paymentId = adapter.settle(address(usdc), amount, ref, buyerAgentId, providerAgentId, svcId);
+        paymentId = adapter.settle(address(usdc), amount, ref, buyerAgentId, buyer, providerAgentId, svcId);
     }
 
     // ── Settle (happy path) ──────────────────────────────────────────
@@ -183,7 +185,7 @@ contract PaymentRouterTest is Test {
             1, keccak256("ref-1"), serviceId, buyerAgentId, providerAgentId, address(usdc), 100e6, 95e6, 5e6
         );
         vm.prank(buyer);
-        adapter.settle(address(usdc), 100e6, keccak256("ref-1"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-1"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     // L-7: settle pays the LIVE agentWallet from the IdentityRegistry and
@@ -226,7 +228,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("no payee wallet");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-fallback"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-fallback"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     /// H-1 regression test: after the agent NFT is transferred, the new
@@ -247,7 +249,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("no payee wallet");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-h1"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-h1"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function _signSetAgentWallet(uint256 key, uint256 agentId, address newWallet, uint256 deadline)
@@ -261,7 +263,7 @@ contract PaymentRouterTest is Test {
         bytes32 domainSep = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("Daski IdentityRegistry")),
+                keccak256(bytes("MockCanonicalIdentityRegistry")),
                 keccak256(bytes("1")),
                 block.chainid,
                 address(identity)
@@ -292,7 +294,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("service/provider mismatch");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-mm"), buyerAgentId, providerAgentId, otherSvc);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-mm"), buyerAgentId, buyer, providerAgentId, otherSvc);
     }
 
     function test_settle_inactiveServiceReverts() public {
@@ -303,7 +305,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("service not active");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-inactive"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-inactive"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function test_settle_unknownServiceReverts() public {
@@ -312,7 +314,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("service not found");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-ghost"), buyerAgentId, providerAgentId, ghost);
+        adapter.settle(address(usdc), 100e6, keccak256("ref-ghost"), buyerAgentId, buyer, providerAgentId, ghost);
     }
 
     function test_settle_serviceWalletPayee() public {
@@ -343,7 +345,7 @@ contract PaymentRouterTest is Test {
 
     function test_settleNonAdapterReverts() public {
         vm.expectRevert("not adapter");
-        router.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, providerAgentId, serviceId);
+        router.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function test_settleUnacceptedTokenReverts() public {
@@ -353,7 +355,7 @@ contract PaymentRouterTest is Test {
         otherToken.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(otherToken), 100e6, keccak256("ref"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(otherToken), 100e6, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function test_settleZeroAmountReverts() public {
@@ -361,7 +363,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100);
         vm.prank(buyer);
         vm.expectRevert("zero amount");
-        adapter.settle(address(usdc), 0, keccak256("ref"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 0, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function test_settleZeroBuyerAgentReverts() public {
@@ -369,7 +371,27 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("ref"), 0, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref"), 0, buyer, providerAgentId, serviceId);
+    }
+
+    function test_settleZeroBuyerWalletReverts() public {
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("zero buyer wallet");
+        adapter.settle(address(usdc), 100e6, keccak256("ref-zw"), buyerAgentId, address(0), providerAgentId, serviceId);
+    }
+
+    function test_settleBuyerWalletMismatchReverts() public {
+        // A buggy adapter passing a wallet unrelated to the buyer agent must
+        // be rejected — it would otherwise become the refund destination.
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("buyer wallet mismatch");
+        adapter.settle(
+            address(usdc), 100e6, keccak256("ref-wm"), buyerAgentId, makeAddr("unrelated"), providerAgentId, serviceId
+        );
     }
 
     function test_settleReuseServiceRefReverts() public {
@@ -378,7 +400,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 50e6);
         vm.prank(buyer);
         vm.expectRevert("serviceRef used");
-        adapter.settle(address(usdc), 50e6, keccak256("dup"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 50e6, keccak256("dup"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     function test_settleInactiveProviderReverts() public {
@@ -389,7 +411,7 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("provider not active");
-        adapter.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
     // ── Refund (happy path) ──────────────────────────────────────────
@@ -566,8 +588,8 @@ contract PaymentRouterTest is Test {
         identity.setAgentWallet(providerAgentId, newWallet, deadline, sig);
 
         // Mint the OLD wallet (which used to be agentWallet) some USDC
-        // and try to refund — must revert because agentOfWallet resolves
-        // live.
+        // and try to refund — must revert because the provider's live
+        // agentWallet is read at call time.
         usdc.mint(provider, 50e6);
         vm.prank(provider);
         usdc.approve(address(router), 50e6);
@@ -598,16 +620,12 @@ contract PaymentRouterTest is Test {
     }
 
     function test_refundNoDestinationReverts() public {
-        // If the buyer unsets their wallet AND the cached wallet is zero
-        // (impossible at settle time, since identity mandates a wallet),
-        // the refund reverts. Here we ensure the live-resolve path works
-        // when the buyer unsets their wallet: we fall back to the cached
-        // wallet successfully.
+        // The buyer agent has no live agentWallet on the canonical registry
+        // (never verified one — the common case for AgentIndex-minted
+        // agents), so the refund falls back to the cached payer wallet.
         uint256 paymentId = _settle(100e6, keccak256("ref-unset"));
 
-        // Buyer unsets their wallet
-        vm.prank(buyer);
-        identity.unsetAgentWallet(buyerAgentId);
+        assertEq(identity.getAgentWallet(buyerAgentId), address(0), "buyer never verified an agentWallet");
 
         vm.prank(provider);
         usdc.approve(address(router), 50e6);
@@ -827,7 +845,7 @@ contract PaymentRouterTest is Test {
         token2.approve(address(adapter), 80e6);
         vm.prank(buyer);
         uint256 paymentId2 =
-            adapter.settle(address(token2), 80e6, keccak256("ref-t2"), buyerAgentId, providerAgentId, serviceId);
+            adapter.settle(address(token2), 80e6, keccak256("ref-t2"), buyerAgentId, buyer, providerAgentId, serviceId);
 
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId2);
         assertEq(rec.token, address(token2));

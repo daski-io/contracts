@@ -7,7 +7,6 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {IdentityRegistry} from "./IdentityRegistry.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
@@ -15,16 +14,20 @@ import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski-specific provider gate. A "provider" is the real-world
 ///         operator (Blue T Group LLC, etc.) — identified by an ERC-8004
-///         agent NFT in IdentityRegistry, with a row here marking it as an
-///         active Daski provider. Services offered by the provider live in
-///         the separate Daski `ServiceRegistry`. Per ERC-8004 v1, each NFT
-///         represents one operator that may field many capabilities; do NOT
-///         re-introduce a per-service NFT pattern.
+///         agent NFT in the CANONICAL per-chain IdentityRegistry (the
+///         0x8004A... singleton; Daski deploys no identity registry of its
+///         own), with a row here marking it as an active Daski provider.
+///         Services offered by the provider live in the separate Daski
+///         `ServiceRegistry`. Per ERC-8004 v1, each NFT represents one
+///         operator that may field many capabilities; do NOT re-introduce a
+///         per-service NFT pattern.
 ///
-/// Wallet model: this registry no longer stores a Daski-local wallet. The
-/// canonical payee/identity surface is the ERC-8004 `agentWallet` in
-/// IdentityRegistry (used by PaymentRouter and refund auth), and wallet→agent
-/// resolution goes through `IdentityRegistry.agentOfWallet`.
+/// Wallet model: this registry stores no wallet. The payee surface is the
+/// canonical registry's `agentWallet` (PaymentRouter payee resolution and
+/// refund auth read it live; providers MUST verify one there — or set a
+/// per-service serviceWallet — before they can be paid). Wallet→agent
+/// resolution for payment attribution goes through the Daski `AgentIndex`,
+/// off-chain callers resolve agentIds before calling `getProvider`.
 ///
 /// Auth model on mutating functions other than `register`: the caller must be
 /// the NFT owner, an ERC-721 operator (`isApprovedForAll`), or per-token
@@ -88,15 +91,6 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
 
     function getProvider(uint256 agentId) external view returns (Provider memory) {
         require(_isRegistered(agentId), "not registered");
-        return _providers[agentId];
-    }
-
-    function getProviderByAddress(address wallet) external view returns (Provider memory) {
-        // Resolve through the canonical ERC-8004 reverse index rather than a
-        // Daski-local wallet copy. agentOfWallet returns the agent whose
-        // CURRENT agentWallet is `wallet` (cleared on transfer / rotation).
-        uint256 agentId = IdentityRegistry(address(identity)).agentOfWallet(wallet);
-        require(agentId != 0 && _isRegistered(agentId), "not registered");
         return _providers[agentId];
     }
 

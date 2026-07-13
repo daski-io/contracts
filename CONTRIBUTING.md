@@ -13,3 +13,10 @@ In the meantime:
 If you want to run the contracts locally, see the [README](README.md). All
 tests should pass on a clean clone (`forge test`); please include a regression
 test with any reproducer.
+
+## Branching
+
+`develop` is the integration branch — all work and PRs target `develop`.
+`main` is the release branch (deploys across the Daski stack key off it), so
+`develop` → `main` merges are deliberate, explicitly authorized release steps
+only.

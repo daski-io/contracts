@@ -8,7 +8,7 @@ pragma solidity ^0.8.24;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IdentityRegistry} from "./IdentityRegistry.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
@@ -34,11 +34,13 @@ import {IReputationRefundSink} from "./interfaces/IReputationRefundSink.sol";
 ///     providers isolate accounting (regulated vs unregulated, separate
 ///     jurisdictions, etc.). When unset (the common case) the existing
 ///     "pay live agentWallet" semantics apply.
-///   * The PaymentRecord caches the buyer's wallet at settle time. Refund
-///     prefers the LIVE agentWallet (via IdentityRegistry) and only falls
-///     back to the cached wallet if the buyer's agent has unset their
-///     wallet. This honors ERC-8004 wallet rotation while keeping refunds
-///     possible if the buyer abandons the wallet without updating.
+///   * The PaymentRecord caches the PAYER wallet at settle time (passed by
+///     the adapter, verified against the buyer agent). Refund prefers the
+///     LIVE agentWallet on the canonical ERC-8004 registry and falls back
+///     to the cached payer wallet — the common case, since the canonical
+///     registry does not auto-set agentWallet and agents minted via
+///     AgentIndex usually never verify one. This honors ERC-8004 wallet
+///     rotation while keeping refunds routable to whoever actually paid.
 ///   * Refunds are partial, cumulative, and have no expiration. Total per
 ///     paymentId is capped at the original amount. Authorized refund callers
 ///     are: provider NFT owner, ERC-721 operators (isApprovedForAll),
@@ -52,7 +54,7 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
 
     // ── Storage ──────────────────────────────────────────────────────
     address public treasury;
-    IdentityRegistry public identity;
+    ICanonicalIdentity public identity;
     IProviderRegistry public registry;
     uint256 public commissionBps;
 
@@ -129,7 +131,7 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         require(_treasury != address(0), "zero treasury");
         require(_commissionBps <= 10000, "commission too high");
         __Admin2Step_init(_admin);
-        identity = IdentityRegistry(_identity);
+        identity = ICanonicalIdentity(_identity);
         registry = IProviderRegistry(_registry);
         serviceRegistry = IServiceRegistry(_serviceRegistry);
         treasury = _treasury;
@@ -145,6 +147,7 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         uint256 amount,
         bytes32 serviceRef,
         uint256 buyerAgentId,
+        address buyerWallet,
         uint256 providerAgentId,
         bytes32 serviceId
     ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
@@ -152,6 +155,17 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         require(acceptedTokens[token], "token not accepted");
         require(!_usedServiceRefs[serviceRef], "serviceRef used");
         require(buyerAgentId != 0, "buyer has no agent");
+        require(buyerWallet != address(0), "zero buyer wallet");
+
+        // Defense-in-depth on top of the adapter's AgentIndex resolution:
+        // the wallet cached as the refund fallback must currently control
+        // the buyer agent on the canonical registry (verified agentWallet or
+        // ERC-721 owner) — a buggy adapter cannot cache a refund destination
+        // unrelated to the buyer agent.
+        require(
+            buyerWallet == identity.getAgentWallet(buyerAgentId) || buyerWallet == identity.ownerOf(buyerAgentId),
+            "buyer wallet mismatch"
+        );
 
         require(registry.getProvider(providerAgentId).isActive, "provider not active");
 
@@ -163,9 +177,11 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         require(svc.active, "service not active");
 
         // Payee resolution: per-service override wins, else fall back to the
-        // provider's LIVE agentWallet from IdentityRegistry. If both are
-        // unset, reject — per ERC-8004, agentWallet "must be re-verified by
-        // the new owner" before payments resume after an NFT transfer.
+        // provider's LIVE agentWallet on the canonical ERC-8004 registry. If
+        // both are unset, reject. The canonical registry never auto-sets
+        // agentWallet (and clears it on every transfer), so providers MUST
+        // verify a payment wallet there — or set a serviceWallet — before
+        // they can be paid; provider onboarding enforces this off-chain.
         address payee = svc.serviceWallet;
         if (payee == address(0)) {
             payee = identity.getAgentWallet(providerAgentId);
@@ -191,10 +207,6 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
             IERC20(token).safeTransfer(treasury, commission);
         }
 
-        // Cache the buyer's wallet as a refund fallback. If the agent unsets
-        // their wallet later, refunds can still land here as a best-effort.
-        address cachedBuyer = identity.getAgentWallet(buyerAgentId);
-
         paymentId = nextPaymentId++;
         _payments[paymentId] = PaymentRecord({
             buyerAgentId: buyerAgentId,
@@ -202,7 +214,9 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
             serviceId: serviceId,
             token: token,
             amount: amount,
-            cachedBuyerWallet: cachedBuyer,
+            // The verified payer wallet — refund fallback when the buyer
+            // agent has no live agentWallet on the canonical registry.
+            cachedBuyerWallet: buyerWallet,
             serviceRef: serviceRef,
             paidAt: block.timestamp
         });
@@ -226,15 +240,15 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         PaymentRecord memory rec = _payments[paymentId];
         require(rec.amount > 0, "payment not found");
 
-        // Auth surface mirrors IdentityRegistry / ReputationRegistry /
-        // ValidationRegistry: NFT owner OR operator OR per-token approved
-        // OR the provider's CURRENT agentWallet (back-compat). Rotated-out
-        // wallets fail because agentOfWallet resolves live.
+        // Auth surface mirrors ServiceRegistry / ValidationRegistry: NFT
+        // owner OR operator OR per-token approved OR the provider's CURRENT
+        // agentWallet on the canonical registry. Rotated-out wallets fail
+        // because the live agentWallet is read at call time.
         address provOwner = identity.ownerOf(rec.providerAgentId);
         require(
             msg.sender == provOwner || identity.isApprovedForAll(provOwner, msg.sender)
                 || identity.getApproved(rec.providerAgentId) == msg.sender
-                || identity.agentOfWallet(msg.sender) == rec.providerAgentId,
+                || identity.getAgentWallet(rec.providerAgentId) == msg.sender,
             "not authorized for provider"
         );
 

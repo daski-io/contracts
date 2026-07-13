@@ -3,13 +3,13 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {IProviderRegistry} from "../src/interfaces/IProviderRegistry.sol";
 
 contract ProviderRegistryTest is Test {
-    IdentityRegistry identity;
+    MockCanonicalIdentityRegistry identity;
     ProviderRegistry registry;
     MockUSDC usdc;
 
@@ -25,10 +25,8 @@ contract ProviderRegistryTest is Test {
     function setUp() public {
         usdc = new MockUSDC();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
-        );
+        // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
+        identity = new MockCanonicalIdentityRegistry();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -191,14 +189,6 @@ contract ProviderRegistryTest is Test {
         vm.prank(otherUser);
         vm.expectRevert("not owner or operator");
         registry.setActive(agentId, false);
-    }
-
-    function test_getProviderByAddress() public {
-        uint256 agentId = _registerAsProvider(provider);
-        // getProviderByAddress now resolves via the ERC-8004 agentWallet index;
-        // at registration the agentWallet defaults to the owner.
-        IProviderRegistry.Provider memory p = registry.getProviderByAddress(provider);
-        assertEq(p.agentId, agentId);
     }
 
     function test_getProviderCount() public {

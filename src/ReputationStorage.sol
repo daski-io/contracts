@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IdentityRegistry} from "./IdentityRegistry.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
 import {IEAS, Attestation} from "./interfaces/IEAS.sol";
 import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
@@ -19,8 +19,8 @@ import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 /// as attestations via the Ethereum Attestation Service (EAS)." EAS calls
 /// `onAttest`/`onRevoke` on this resolver for every attestation against the
 /// Daski schemas; the resolver decodes the payload, enforces Daski-specific
-/// auth (provider agent vs. buyer agent from the IdentityRegistry), and
-/// updates counters. The resolver still exposes `recordRefund` so the
+/// auth (the attester must control the payment's provider/buyer agent on the
+/// canonical ERC-8004 registry), and updates counters. The resolver still exposes `recordRefund` so the
 /// PaymentRouter's best-effort refund mirror keeps working unchanged.
 ///
 /// Two schemas are registered against this resolver:
@@ -93,7 +93,7 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
     mapping(uint256 => uint256) public buyerNotConfirmedCount;
     mapping(uint256 => uint256) public buyerTransactionCount;
 
-    IdentityRegistry public identity;
+    ICanonicalIdentity public identity;
     IPaymentRouter public paymentRouter;
 
     /// @notice Cumulative refund amount per paymentId, recorded by the
@@ -191,7 +191,7 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
         require(_identity != address(0), "zero identity");
         require(_paymentRouter != address(0), "zero router");
         __Admin2Step_init(_admin);
-        identity = IdentityRegistry(_identity);
+        identity = ICanonicalIdentity(_identity);
         paymentRouter = IPaymentRouter(_paymentRouter);
     }
 
@@ -281,9 +281,11 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
 
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
 
-        uint256 attesterAgentId = identity.agentOfWallet(a.attester);
-        require(attesterAgentId != 0, "no identity");
-        require(attesterAgentId == payment.providerAgentId, "not provider for this payment");
+        // The attester must currently control the payment's provider agent
+        // on the canonical registry. The agentId comes from the immutable
+        // PaymentRecord, so this is a direct verification — no reverse
+        // index required.
+        require(_controlsAgent(payment.providerAgentId, a.attester), "not provider for this payment");
 
         ReputationRecord storage record = _records[paymentId];
         require(!record.outcomeRecorded, "outcome already recorded");
@@ -342,9 +344,9 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
 
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
 
-        uint256 attesterAgentId = identity.agentOfWallet(a.attester);
-        require(attesterAgentId != 0, "no identity");
-        require(attesterAgentId == payment.buyerAgentId, "not buyer for this payment");
+        // Same direct verification as the outcome path, against the
+        // payment's buyer agent.
+        require(_controlsAgent(payment.buyerAgentId, a.attester), "not buyer for this payment");
 
         ReputationRecord storage record = _records[paymentId];
         if (record.paymentId == 0) {
@@ -439,6 +441,19 @@ contract ReputationStorage is Admin2StepUpgradeable, ISchemaResolver {
             record.confirmation = BuyerConfirmation.Pending;
             record.confirmationTimestamp = 0;
         }
+    }
+
+    // ── Attester auth ───────────────────────────────────────────────────
+
+    /// @dev "Controls" = the agent's current verified agentWallet on the
+    ///      canonical ERC-8004 registry, or its ERC-721 owner. The canonical
+    ///      registry never auto-sets agentWallet, so for agents minted via
+    ///      AgentIndex the owner branch is the common case. `who` is an EAS
+    ///      attester and never zero; an unset agentWallet (zero) can
+    ///      therefore never match it.
+    function _controlsAgent(uint256 agentId, address who) internal view returns (bool) {
+        if (identity.getAgentWallet(agentId) == who) return true;
+        return identity.ownerOf(agentId) == who;
     }
 
     // ── Refund mirror (per-service dimension added) ─────────────────────

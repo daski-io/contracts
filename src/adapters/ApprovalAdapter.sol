@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IdentityRegistry} from "../IdentityRegistry.sol";
+import {IAgentIndex} from "../interfaces/IAgentIndex.sol";
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IApprovalAdapter} from "../interfaces/IApprovalAdapter.sol";
 import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
@@ -21,19 +21,19 @@ contract ApprovalAdapter is Admin2StepUpgradeable, IApprovalAdapter {
     using SafeERC20 for IERC20;
 
     IPaymentRouter public router;
-    IdentityRegistry public identity;
+    IAgentIndex public agentIndex;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address _router, address _identity, address _admin) external initializer {
+    function initialize(address _router, address _agentIndex, address _admin) external initializer {
         require(_router != address(0), "zero router");
-        require(_identity != address(0), "zero identity");
+        require(_agentIndex != address(0), "zero agent index");
         __Admin2Step_init(_admin);
         router = IPaymentRouter(_router);
-        identity = IdentityRegistry(_identity);
+        agentIndex = IAgentIndex(_agentIndex);
     }
 
     /// @inheritdoc IApprovalAdapter
@@ -43,12 +43,14 @@ contract ApprovalAdapter is Admin2StepUpgradeable, IApprovalAdapter {
     {
         require(router.isAcceptedToken(token), "token not accepted");
 
-        uint256 buyerAgentId = identity.agentOfWallet(msg.sender);
+        // AgentIndex re-verifies the binding against the canonical ERC-8004
+        // registry, so a stale wallet resolves to zero and reverts here.
+        uint256 buyerAgentId = agentIndex.resolve(msg.sender);
         require(buyerAgentId != 0, "buyer has no agent");
 
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
 
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, providerAgentId, serviceId);
+        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId);
     }
 
     uint256[50] private __gap;

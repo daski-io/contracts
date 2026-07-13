@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-import {IdentityRegistry} from "../src/IdentityRegistry.sol";
-import {ReputationRegistry} from "../src/ReputationRegistry.sol";
+import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {AgentIndex} from "../src/AgentIndex.sol";
 import {ValidationRegistry} from "../src/ValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
@@ -24,17 +24,20 @@ import {
     Signature
 } from "../src/interfaces/IEAS.sol";
 
-/// @notice End-to-end: an ERC-8004 agent registers, a Daski provider lists,
-///         services are registered in ServiceRegistry, x402 payment settles
-///         through ServiceRegistry-validated route, provider attests outcome,
-///         buyer confirms via delegated EAS, refund mirrors per-service into
+/// @notice End-to-end: agents register on the (mocked) canonical ERC-8004
+///         IdentityRegistry, a Daski provider lists, services are registered
+///         in ServiceRegistry, x402 payment settles through the
+///         ServiceRegistry-validated route, provider attests outcome, buyer
+///         confirms via delegated EAS, refund mirrors per-service into
 ///         ReputationStorage, and a final test verifies per-service vs.
-///         per-provider counters.
+///         per-provider counters. Public ERC-8004 feedback lives in the
+///         canonical ReputationRegistry singleton (gateway-written,
+///         off-chain concern) and is not exercised here.
 contract IntegrationTest is Test {
     MockUSDC usdc;
     MockEAS eas;
-    IdentityRegistry identity;
-    ReputationRegistry reputationRegistry;
+    MockCanonicalIdentityRegistry identity;
+    AgentIndex agentIndex;
     ValidationRegistry validationRegistry;
     ProviderRegistry registry;
     ServiceRegistry services;
@@ -58,17 +61,11 @@ contract IntegrationTest is Test {
         usdc = new MockUSDC();
         eas = new MockEAS();
 
-        IdentityRegistry idImpl = new IdentityRegistry();
-        identity = IdentityRegistry(
-            address(new ERC1967Proxy(address(idImpl), abi.encodeCall(IdentityRegistry.initialize, (admin))))
-        );
-
-        ReputationRegistry repRegImpl = new ReputationRegistry();
-        reputationRegistry = ReputationRegistry(
+        identity = new MockCanonicalIdentityRegistry();
+        AgentIndex aiImpl = new AgentIndex();
+        agentIndex = AgentIndex(
             address(
-                new ERC1967Proxy(
-                    address(repRegImpl), abi.encodeCall(ReputationRegistry.initialize, (address(identity), admin))
-                )
+                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
             )
         );
 
@@ -120,7 +117,8 @@ contract IntegrationTest is Test {
         adapter = X402Adapter(
             address(
                 new ERC1967Proxy(
-                    address(aImpl), abi.encodeCall(X402Adapter.initialize, (address(router), address(identity), admin))
+                    address(aImpl),
+                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
                 )
             )
         );
@@ -205,15 +203,21 @@ contract IntegrationTest is Test {
     function test_fullProtocolFlow() public {
         usdc.mint(buyer, 1000e6);
 
-        // 1. Buyer registers as ERC-8004 agent
+        // 1. Buyer registers as ERC-8004 agent on the canonical registry and
+        //    binds itself in the Daski AgentIndex (payment attribution).
         vm.prank(buyer);
         uint256 buyerAgentId = identity.register("ipfs://buyer-agent");
         assertEq(buyerAgentId, 1);
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
 
         // 2. Provider registers as ERC-8004 agent (one NFT, one operator)
+        //    and verifies its payment wallet — the canonical registry never
+        //    auto-sets agentWallet.
         vm.prank(provider);
         uint256 providerAgentId = identity.register("https://provider.example/agent.json");
         assertEq(providerAgentId, 2);
+        identity.forceSetAgentWallet(providerAgentId, provider);
 
         // 3. Provider lists with Daski
         usdc.mint(provider, 1e6);
@@ -249,7 +253,7 @@ contract IntegrationTest is Test {
         AttestationRequest memory outcomeReq = _outcomeReq(paymentId, ReputationStorage.TransactionOutcome.Completed);
 
         vm.prank(unauthorized);
-        vm.expectRevert("no identity");
+        vm.expectRevert("not provider for this payment");
         eas.attest(outcomeReq);
 
         vm.prank(provider);
@@ -270,15 +274,13 @@ contract IntegrationTest is Test {
         assertEq(reputation.refundedAmountByService(serviceId), 10e6);
         assertEq(usdc.balanceOf(buyer), 910e6);
 
-        // 8. ERC-8004 ReputationRegistry: external reviewer leaves feedback.
-        address reviewer = makeAddr("reviewer");
-        vm.prank(reviewer);
-        reputationRegistry.giveFeedback(
-            providerAgentId, 90, 0, "starred", "", "https://provider.example", "", bytes32(0)
-        );
-        assertEq(reputationRegistry.getLastIndex(providerAgentId, reviewer), 1);
+        // 8. Public ERC-8004 feedback lives in the CANONICAL
+        //    ReputationRegistry singleton (0x8004B... on Base / Base
+        //    Sepolia), written by the gateway per confirmed delivery — an
+        //    off-chain integration, not part of this contract suite.
 
-        // 9. ERC-8004 ValidationRegistry
+        // 9. ERC-8004 ValidationRegistry (Daski-hosted; the canonical
+        //    validation registry does not exist yet)
         address validator = makeAddr("validator");
         bytes32 reqHash = keccak256("validation-req-1");
         vm.prank(provider);
@@ -307,11 +309,14 @@ contract IntegrationTest is Test {
     function test_oneProviderTwoServices_perServiceVsPerProviderStats() public {
         // Buyer + provider setup
         vm.prank(buyer);
-        identity.register("ipfs://buyer");
+        uint256 buyerAgentId = identity.register("ipfs://buyer");
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 1000e6);
 
         vm.prank(provider);
         uint256 providerAgentId = identity.register("ipfs://provider");
+        identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1e6);
         vm.startPrank(provider);
         usdc.approve(address(registry), 1e6);
@@ -390,11 +395,14 @@ contract IntegrationTest is Test {
     /// follow it.
     function test_threeLayerCardinality_skillsRollUpToOneService() public {
         vm.prank(buyer);
-        identity.register("ipfs://buyer");
+        uint256 buyerAgentId = identity.register("ipfs://buyer");
+        vm.prank(buyer);
+        agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 1000e6);
 
         vm.prank(provider);
         uint256 providerAgentId = identity.register("ipfs://provider");
+        identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1e6);
         vm.startPrank(provider);
         usdc.approve(address(registry), 1e6);
