@@ -152,8 +152,7 @@ contract Deploy is Script {
         // ── (g) ReputationStorage (EAS resolver + refund sink) ────────
         ReputationStorage reputationImpl = new ReputationStorage();
         ERC1967Proxy reputationProxy = new ERC1967Proxy(
-            address(reputationImpl),
-            abi.encodeCall(ReputationStorage.initialize, (identityRegistry, address(routerProxy), deployer))
+            address(reputationImpl), abi.encodeCall(ReputationStorage.initialize, (address(routerProxy), deployer))
         );
         ReputationStorage reputation = ReputationStorage(address(reputationProxy));
         console.log("ReputationStorage impl:", address(reputationImpl));

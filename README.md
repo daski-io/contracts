@@ -68,8 +68,11 @@ timelock) as the pending admin of every proxy.
 
 > The addresses below run the previous storage/API revision. This
 > pre-production change intentionally does not include upgrade compatibility;
-> deploy a fresh stack before using the reservation and atomic reputation
-> flows.
+> deploy a fresh stack before relying on the current payment and reputation
+> APIs. The retired DirectTransferAdapter is still enabled as an adapter on
+> this deployed router — the gateway's external-facilitator (x402 Bazaar)
+> rail still settles through it — and is dropped at the next fresh
+> deployment.
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,

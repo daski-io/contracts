@@ -16,12 +16,17 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         _disableInitializers();
     }
 
-    function initialize(address identity_, address paymentRouter_, address admin_) external initializer {
-        _initializeReputation(identity_, paymentRouter_, admin_);
+    function initialize(address paymentRouter_, address admin_) external initializer {
+        _initializeReputation(paymentRouter_, admin_);
     }
 
     function isPayable() external pure override returns (bool) {
         return false;
+    }
+
+    /// @notice Contract semver, per the canonical EAS resolver surface.
+    function version() external pure override returns (string memory) {
+        return "1.0.0";
     }
 
     function attest(Attestation calldata attestation) external payable override onlyEAS returns (bool) {

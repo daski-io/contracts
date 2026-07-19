@@ -273,5 +273,11 @@ contract ProviderRegistryTest is Test {
         // Offset past end → empty.
         uint256[] memory past = registry.getProviderIdsPaginated(5, 1);
         assertEq(past.length, 0);
+
+        // Sentinel-size limit with a nonzero offset clamps to the tail
+        // instead of overflowing offset+limit.
+        uint256[] memory sentinel = registry.getProviderIdsPaginated(1, type(uint256).max);
+        assertEq(sentinel.length, 4);
+        assertEq(sentinel[0], ids[1]);
     }
 }

@@ -197,6 +197,12 @@ contract ValidationRegistryTest is Test {
 
         bytes32[] memory past = validation.getAgentValidationsPaginated(agentId, 4, 1);
         assertEq(past.length, 0);
+
+        // Sentinel-size limit with a nonzero offset clamps to the tail
+        // instead of overflowing offset+limit.
+        bytes32[] memory sentinel = validation.getAgentValidationsPaginated(agentId, 1, type(uint256).max);
+        assertEq(sentinel.length, 3);
+        assertEq(sentinel[2], _key(agentId, hashes[3]));
     }
 
     function test_paginatedValidatorRequests() public {

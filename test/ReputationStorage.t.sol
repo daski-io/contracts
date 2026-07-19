@@ -16,6 +16,7 @@ import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
 import {
+    Attestation,
     AttestationRequest,
     AttestationRequestData,
     RevocationRequest,
@@ -116,8 +117,7 @@ contract ReputationStorageTest is Test {
         reputation = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(repImpl),
-                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                    address(repImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
                 )
             )
         );
@@ -602,8 +602,7 @@ contract ReputationStorageTest is Test {
         ReputationStorage fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(freshImpl),
-                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
                 )
             )
         );
@@ -638,8 +637,7 @@ contract ReputationStorageTest is Test {
         ReputationStorage fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(freshImpl),
-                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
                 )
             )
         );
@@ -659,8 +657,7 @@ contract ReputationStorageTest is Test {
         ReputationStorage fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(freshImpl),
-                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
                 )
             )
         );
@@ -725,5 +722,68 @@ contract ReputationStorageTest is Test {
         assertEq(notConfirmed_, 0);
         assertEq(ref_, 15e6);
         assertEq(transactions, 1);
+    }
+
+    // ── EAS batch entry points ──────────────────────────────────────────
+
+    function _outcomeAttestation(uint256 pid, ReputationStorageBase.TransactionOutcome o, bytes32 uid)
+        internal
+        view
+        returns (Attestation memory)
+    {
+        return Attestation({
+            uid: uid,
+            schema: outcomeSchemaUid,
+            time: uint64(block.timestamp),
+            expirationTime: 0,
+            revocationTime: 0,
+            refUID: bytes32(0),
+            recipient: _providerRecipient(pid),
+            attester: provider,
+            revocable: false,
+            data: abi.encode(pid, uint8(o))
+        });
+    }
+
+    function test_multiAttestProcessesEachEntry() public {
+        usdc.mint(buyer, 60e6);
+        uint256 paymentId2 = _payAsBuyer(60e6, keccak256("service-2"), serviceId);
+        providerRecipients[paymentId2] = provider;
+
+        Attestation[] memory batch = new Attestation[](2);
+        batch[0] = _outcomeAttestation(paymentId, ReputationStorageBase.TransactionOutcome.Completed, keccak256("b1"));
+        batch[1] = _outcomeAttestation(paymentId2, ReputationStorageBase.TransactionOutcome.Failed, keccak256("b2"));
+
+        vm.prank(address(eas));
+        assertTrue(reputation.multiAttest(batch, new uint256[](2)));
+
+        assertTrue(reputation.getRecord(paymentId).outcomeRecorded);
+        assertTrue(reputation.getRecord(paymentId2).outcomeRecorded);
+        assertEq(reputation.completedCount(providerAgentId), 1);
+        assertEq(reputation.failedCount(providerAgentId), 1);
+    }
+
+    function test_multiAttestOnlyEAS() public {
+        vm.prank(unauthorized);
+        vm.expectRevert("not EAS");
+        reputation.multiAttest(new Attestation[](0), new uint256[](0));
+    }
+
+    function test_multiRevokeProcessesEachEntry() public {
+        vm.prank(buyer);
+        bytes32 uid = eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+        assertEq(reputation.confirmedCount(providerAgentId), 1);
+
+        Attestation[] memory batch = new Attestation[](1);
+        batch[0] = eas.getAttestation(uid);
+
+        vm.prank(address(eas));
+        assertTrue(reputation.multiRevoke(batch, new uint256[](1)));
+
+        assertEq(reputation.confirmedCount(providerAgentId), 0);
+        assertEq(
+            uint256(reputation.getRecord(paymentId).confirmation),
+            uint256(ReputationStorageBase.BuyerConfirmation.Pending)
+        );
     }
 }

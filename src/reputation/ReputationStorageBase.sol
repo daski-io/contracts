@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ICanonicalIdentity} from "../interfaces/ICanonicalIdentity.sol";
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IEAS} from "../interfaces/IEAS.sol";
 import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
@@ -47,7 +46,6 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
     mapping(uint256 => uint256) public buyerNotConfirmedCount;
     mapping(uint256 => uint256) public buyerTransactionCount;
 
-    ICanonicalIdentity public identity;
     IPaymentRouter public paymentRouter;
     mapping(uint256 => uint256) public refundedAmount;
 
@@ -104,14 +102,9 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
         _;
     }
 
-    function _initializeReputation(address identity_, address paymentRouter_, address admin_)
-        internal
-        onlyInitializing
-    {
-        require(identity_ != address(0), "zero identity");
+    function _initializeReputation(address paymentRouter_, address admin_) internal onlyInitializing {
         require(paymentRouter_ != address(0), "zero router");
         __Admin2Step_init(admin_);
-        identity = ICanonicalIdentity(identity_);
         paymentRouter = IPaymentRouter(paymentRouter_);
     }
 

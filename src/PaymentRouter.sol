@@ -90,6 +90,10 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         );
 
         (address payee, address providerOwner, address providerWallet) = _providerContext(request);
+        // Adapters are trusted to have delivered `amount` to the router within
+        // this transaction, and accepted tokens must not be fee-on-transfer:
+        // the balance check proves the router is funded, not that THIS call
+        // funded it.
         require(IERC20(request.token).balanceOf(address(this)) >= request.amount, "router under-funded");
 
         _usedServiceRefs[request.serviceRef] = true;

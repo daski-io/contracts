@@ -123,8 +123,7 @@ contract IntegrationTest is Test {
         reputation = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(repStoreImpl),
-                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                    address(repStoreImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
                 )
             )
         );

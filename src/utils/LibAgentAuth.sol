@@ -9,8 +9,8 @@ import {ICanonicalIdentity} from "../interfaces/ICanonicalIdentity.sol";
 ///         approved spender (getApproved). Used by ServiceRegistry,
 ///         ProviderRegistry, and ValidationRegistry (`validationRequest`),
 ///         all reading the canonical ERC-8004 IdentityRegistry.
-/// The extended helpers also cover the canonical registry's live
-/// `agentWallet` for refund and attestation paths.
+/// The extended helper also covers the canonical registry's live
+/// `agentWallet` for the refund path.
 library LibAgentAuth {
     function isAgentAuthorized(IERC721 nft, uint256 agentId, address caller) internal view returns (bool) {
         address owner = nft.ownerOf(agentId);
@@ -19,14 +19,6 @@ library LibAgentAuth {
 
     function requireAgentAuth(IERC721 nft, uint256 agentId, address caller) internal view {
         require(isAgentAuthorized(nft, agentId, caller), "not owner or operator");
-    }
-
-    function isOwnerOrAgentWallet(ICanonicalIdentity identity, uint256 agentId, address caller)
-        internal
-        view
-        returns (bool)
-    {
-        return identity.ownerOf(agentId) == caller || identity.getAgentWallet(agentId) == caller;
     }
 
     function isAuthorizedOrAgentWallet(ICanonicalIdentity identity, uint256 agentId, address caller)
