@@ -54,7 +54,7 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
-| **ValidationRegistry** | ERC-8004 request/response attestations and summary queries (Daski-hosted until a canonical validation registry exists). |
+| **ValidationRegistry** | ERC-8004 request/response attestations and summary queries (Daski-hosted until a canonical validation registry exists). Documented deviation from the draft spec: records are keyed by `computeValidationKey(agentId, requestHash)` — also returned by `validationRequest` — NOT by the raw `requestHash`; external clients must use that key for `validationResponse`/reads. The namespacing closes a cross-agent request-hash squatting vector the draft spec doesn't address. |
 | **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
