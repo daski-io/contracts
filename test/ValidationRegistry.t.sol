@@ -31,19 +31,12 @@ contract ValidationRegistryTest is Test {
         agentId = identity.register();
     }
 
-    /// @dev Independent re-derivation of the namespaced storage key, mirroring
-    ///      ValidationRegistry._validationKey (agentId-scoped).
-    function _key(bytes32 reqHash) internal view returns (bytes32) {
-        return keccak256(abi.encode(agentId, reqHash));
-    }
-
     function test_validationRequestEmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(validation));
         emit IValidationRegistry.ValidationRequest(validator, agentId, "ipfs://req", REQ_HASH);
 
         vm.prank(agentOwner);
-        bytes32 key = validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
-        assertEq(key, _key(REQ_HASH), "returned key matches derivation");
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
     }
 
     function test_validationRequestByStrangerReverts() public {
@@ -66,34 +59,22 @@ contract ValidationRegistryTest is Test {
         validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
     }
 
-    // L-2: the same requestHash registered for two different agents must NOT
-    // collide. The key is namespaced by agentId and validationRequest is
-    // auth-gated on agentId, so a front-runner cannot squat another agent's slot.
-    function test_sameRequestHashAcrossAgents_noCollision() public {
+    function test_sameRequestHashAcrossAgentsReverts() public {
         address otherOwner = makeAddr("otherOwner");
         vm.prank(otherOwner);
         uint256 otherAgentId = identity.register();
 
         vm.prank(agentOwner);
-        bytes32 k1 = validation.validationRequest(validator, agentId, "u", REQ_HASH);
+        validation.validationRequest(validator, agentId, "u", REQ_HASH);
 
-        // Same REQ_HASH, different agent — must not revert.
         vm.prank(otherOwner);
-        bytes32 k2 = validation.validationRequest(validator, otherAgentId, "u", REQ_HASH);
-
-        assertTrue(k1 != k2, "keys namespaced by agentId");
-        assertEq(k1, keccak256(abi.encode(agentId, REQ_HASH)));
-        assertEq(k2, keccak256(abi.encode(otherAgentId, REQ_HASH)));
-
-        (, uint256 a1,,,,,) = validation.getValidationStatus(k1);
-        (, uint256 a2,,,,,) = validation.getValidationStatus(k2);
-        assertEq(a1, agentId);
-        assertEq(a2, otherAgentId);
+        vm.expectRevert("request exists");
+        validation.validationRequest(validator, otherAgentId, "u", REQ_HASH);
     }
 
     function test_validationResponseHappyPath() public {
         vm.prank(agentOwner);
-        bytes32 key = validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
 
         vm.expectEmit(true, true, true, true, address(validation));
         emit IValidationRegistry.ValidationResponse(
@@ -101,20 +82,18 @@ contract ValidationRegistryTest is Test {
         );
 
         vm.prank(validator);
-        validation.validationResponse(key, 100, "ipfs://resp", keccak256("resp"), "pass");
+        validation.validationResponse(REQ_HASH, 100, "ipfs://resp", keccak256("resp"), "pass");
 
         (
             address validatorAddr,
             uint256 aId,
-            bytes32 reqHash,
             uint8 response,
             bytes32 responseHash,
             string memory tag,
             uint256 lastUpdate
-        ) = validation.getValidationStatus(key);
+        ) = validation.getValidationStatus(REQ_HASH);
         assertEq(validatorAddr, validator);
         assertEq(aId, agentId);
-        assertEq(reqHash, REQ_HASH);
         assertEq(response, 100);
         assertEq(responseHash, keccak256("resp"));
         assertEq(keccak256(bytes(tag)), keccak256(bytes("pass")));
@@ -123,29 +102,29 @@ contract ValidationRegistryTest is Test {
 
     function test_validationResponseOnlyByValidator() public {
         vm.prank(agentOwner);
-        bytes32 key = validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
         vm.prank(stranger);
         vm.expectRevert("not validator");
-        validation.validationResponse(key, 50, "", bytes32(0), "");
+        validation.validationResponse(REQ_HASH, 50, "", bytes32(0), "");
     }
 
     function test_validationResponseOutOfRangeReverts() public {
         vm.prank(agentOwner);
-        bytes32 key = validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
         vm.prank(validator);
         vm.expectRevert("response > 100");
-        validation.validationResponse(key, 101, "", bytes32(0), "");
+        validation.validationResponse(REQ_HASH, 101, "", bytes32(0), "");
     }
 
     function test_validationResponseProgressive() public {
         vm.prank(agentOwner);
-        bytes32 key = validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
         vm.prank(validator);
-        validation.validationResponse(key, 50, "", bytes32(0), "soft");
+        validation.validationResponse(REQ_HASH, 50, "", bytes32(0), "soft");
         vm.prank(validator);
-        validation.validationResponse(key, 100, "", bytes32(0), "hard");
+        validation.validationResponse(REQ_HASH, 100, "", bytes32(0), "hard");
 
-        (,,, uint8 response,, string memory tag,) = validation.getValidationStatus(key);
+        (,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQ_HASH);
         assertEq(response, 100);
         assertEq(keccak256(bytes(tag)), keccak256(bytes("hard")));
     }
@@ -160,8 +139,8 @@ contract ValidationRegistryTest is Test {
 
         bytes32[] memory arr = validation.getAgentValidations(agentId);
         assertEq(arr.length, 2);
-        assertEq(arr[0], _key(h1));
-        assertEq(arr[1], _key(h2));
+        assertEq(arr[0], h1);
+        assertEq(arr[1], h2);
     }
 
     function test_getValidatorRequests() public {
@@ -169,7 +148,7 @@ contract ValidationRegistryTest is Test {
         validation.validationRequest(validator, agentId, "u1", REQ_HASH);
         bytes32[] memory arr = validation.getValidatorRequests(validator);
         assertEq(arr.length, 1);
-        assertEq(arr[0], _key(REQ_HASH));
+        assertEq(arr[0], REQ_HASH);
     }
 
     // L-2: paginated views for agent and validator request lists.
@@ -186,12 +165,12 @@ contract ValidationRegistryTest is Test {
 
         bytes32[] memory page = validation.getAgentValidationsPaginated(agentId, 1, 2);
         assertEq(page.length, 2);
-        assertEq(page[0], _key(hashes[1]));
-        assertEq(page[1], _key(hashes[2]));
+        assertEq(page[0], hashes[1]);
+        assertEq(page[1], hashes[2]);
 
         bytes32[] memory tail = validation.getAgentValidationsPaginated(agentId, 3, 99);
         assertEq(tail.length, 1);
-        assertEq(tail[0], _key(hashes[3]));
+        assertEq(tail[0], hashes[3]);
 
         bytes32[] memory past = validation.getAgentValidationsPaginated(agentId, 4, 1);
         assertEq(past.length, 0);
@@ -210,7 +189,25 @@ contract ValidationRegistryTest is Test {
 
         bytes32[] memory page = validation.getValidatorRequestsPaginated(validator, 0, 2);
         assertEq(page.length, 2);
-        assertEq(page[0], _key(hashes[0]));
-        assertEq(page[1], _key(hashes[1]));
+        assertEq(page[0], hashes[0]);
+        assertEq(page[1], hashes[1]);
+    }
+
+    function test_getSummaryFiltersCompletedResponses() public {
+        bytes32 h1 = keccak256("summary-1");
+        bytes32 h2 = keccak256("summary-2");
+        vm.startPrank(agentOwner);
+        validation.validationRequest(validator, agentId, "u1", h1);
+        validation.validationRequest(validator, agentId, "u2", h2);
+        vm.stopPrank();
+
+        vm.prank(validator);
+        validation.validationResponse(h1, 80, "", bytes32(0), "security");
+
+        address[] memory validators = new address[](1);
+        validators[0] = validator;
+        (uint64 count, uint8 average) = validation.getSummary(agentId, validators, "security");
+        assertEq(count, 1);
+        assertEq(average, 80);
     }
 }

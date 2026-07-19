@@ -25,6 +25,7 @@ interface IServiceRegistry {
         string version; // free-form, e.g. "1", "1.0", "2025-Q1". Default "1".
         string serviceURI; // ipfs:// or https:// JSON: skills manifest, pricing, schema, etc.
         address serviceWallet; // optional override; address(0) => use provider's agentWallet
+        address serviceWalletOwner; // NFT owner that authorized the override
         uint64 createdAt;
         bool active;
     }

@@ -10,11 +10,14 @@ import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Minimal pass-through adapter used ONLY by the router unit tests so
 /// we can exercise `settle` in isolation from any specific payment rail.
 /// Funds are transferred via plain `transferFrom` before calling settle.
 contract PassThroughAdapter {
+    using SafeERC20 for IERC20;
+
     PaymentRouter public immutable router;
 
     constructor(PaymentRouter _router) {
@@ -30,8 +33,22 @@ contract PassThroughAdapter {
         uint256 providerAgentId,
         bytes32 serviceId
     ) external returns (uint256 paymentId) {
-        IERC20(token).transferFrom(msg.sender, address(router), amount);
+        IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
         return router.settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
+    }
+}
+
+contract ToggleReputationSink {
+    bool public failRefund;
+
+    function setFailRefund(bool fail) external {
+        failRefund = fail;
+    }
+
+    function recordPayment(uint256) external {}
+
+    function recordRefund(uint256, uint256) external view {
+        require(!failRefund, "refund mirror failed");
     }
 }
 
@@ -119,8 +136,7 @@ contract PaymentRouterTest is Test {
         // Provider registers as ERC-8004 agent and lists with Daski.
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; payee resolution
-        // needs one (or a serviceWallet).
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
 
         usdc.mint(provider, 1_000_000);
@@ -252,6 +268,31 @@ contract PaymentRouterTest is Test {
         adapter.settle(address(usdc), 100e6, keccak256("ref-h1"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
+    function test_settleIgnoresServiceWalletAuthorizedByFormerOwner() public {
+        address oldOverride = makeAddr("oldOverride");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, oldOverride);
+
+        address newOwner = makeAddr("newProviderOwner");
+        vm.prank(provider);
+        identity.transferFrom(provider, newOwner, providerAgentId);
+
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("no payee wallet");
+        adapter.settle(
+            address(usdc), 100e6, keccak256("stale-service-wallet"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+        assertEq(usdc.balanceOf(oldOverride), 0);
+
+        vm.prank(newOwner);
+        identity.forceSetAgentWallet(providerAgentId, newOwner);
+        _settle(100e6, keccak256("new-owner-wallet"));
+        assertEq(usdc.balanceOf(newOwner), 95e6);
+        assertEq(usdc.balanceOf(oldOverride), 0);
+    }
+
     function _signSetAgentWallet(uint256 key, uint256 agentId, address newWallet, uint256 deadline)
         internal
         view
@@ -366,12 +407,15 @@ contract PaymentRouterTest is Test {
         adapter.settle(address(usdc), 0, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
-    function test_settleZeroBuyerAgentReverts() public {
-        vm.prank(buyer);
+    function test_settleSupportsAgentIdZero() public {
+        assertEq(providerAgentId, 0, "canonical IDs start at zero");
+        usdc.mint(provider, 100e6);
+        vm.prank(provider);
         usdc.approve(address(adapter), 100e6);
-        vm.prank(buyer);
-        vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("ref"), 0, buyer, providerAgentId, serviceId);
+        vm.prank(provider);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, keccak256("ref-zero"), 0, provider, providerAgentId, serviceId);
+        assertEq(router.getPayment(paymentId).buyerAgentId, 0);
     }
 
     function test_settleZeroBuyerWalletReverts() public {
@@ -619,21 +663,53 @@ contract PaymentRouterTest is Test {
         router.refund(999, 1);
     }
 
-    function test_refundNoDestinationReverts() public {
-        // The buyer agent has no live agentWallet on the canonical registry
-        // (never verified one — the common case for AgentIndex-minted
-        // agents), so the refund falls back to the cached payer wallet.
+    function test_refundReturnsToOriginalPayerAfterAgentTransfer() public {
         uint256 paymentId = _settle(100e6, keccak256("ref-unset"));
 
-        assertEq(identity.getAgentWallet(buyerAgentId), address(0), "buyer never verified an agentWallet");
+        address newOwner = makeAddr("newBuyerOwner");
+        vm.prank(buyer);
+        identity.transferFrom(buyer, newOwner, buyerAgentId);
+        vm.prank(newOwner);
+        identity.forceSetAgentWallet(buyerAgentId, newOwner);
 
         vm.prank(provider);
         usdc.approve(address(router), 50e6);
 
         uint256 buyerBefore = usdc.balanceOf(buyer);
+        uint256 newOwnerBefore = usdc.balanceOf(newOwner);
         vm.prank(provider);
         router.refund(paymentId, 50e6);
-        assertEq(usdc.balanceOf(buyer) - buyerBefore, 50e6, "falls back to cached wallet");
+        assertEq(usdc.balanceOf(buyer) - buyerBefore, 50e6, "original payer receives refund");
+        assertEq(usdc.balanceOf(newOwner), newOwnerBefore, "new agent owner cannot redirect old refund");
+    }
+
+    function test_refundAndReputationMirrorAreAtomic() public {
+        ToggleReputationSink sink = new ToggleReputationSink();
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
+
+        uint256 paymentId = _settle(100e6, keccak256("atomic-refund"));
+        sink.setFailRefund(true);
+
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+        uint256 buyerBefore = usdc.balanceOf(buyer);
+        uint256 providerBefore = usdc.balanceOf(provider);
+
+        vm.prank(provider);
+        vm.expectRevert("refund mirror failed");
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 0);
+        assertEq(usdc.balanceOf(buyer), buyerBefore);
+        assertEq(usdc.balanceOf(provider), providerBefore);
+    }
+
+    function test_reputationStorageCannotChangeAfterPayment() public {
+        _settle(1e6, keccak256("lock-reputation"));
+        vm.prank(admin);
+        vm.expectRevert("payments already exist");
+        router.setReputationStorage(makeAddr("replacement"));
     }
 
     // ── Admin ────────────────────────────────────────────────────────

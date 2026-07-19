@@ -1,116 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-// We deliberately use the non-upgradeable ReentrancyGuard. In OZ v5 it is
-// marked @custom:stateless (no initializer required; uses a fixed namespaced-storage slot
-// per ERC-7201) and is safe behind UUPS proxies — the proxy's storage at that slot
-// defaults to 0, which the modifier treats as NOT_ENTERED.
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
-import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
-import {IReputationRefundSink} from "./interfaces/IReputationRefundSink.sol";
+import {IReputationSink} from "./interfaces/IReputationSink.sol";
+import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {PaymentRouterAdmin} from "./payment/PaymentRouterAdmin.sol";
 
-/// @notice Payment-rail-agnostic router. Whitelisted adapter contracts are
-///         responsible for the specifics of how funds arrive at the router
-///         (EIP-3009, EIP-2612 permit, plain approve, or future rails). The
-///         router only handles the shared invariants: commission split,
-///         serviceRef uniqueness, per-payment records, and provider-initiated
-///         refunds.
-///
-/// Design notes:
-///   * `settle` enforces serviceRef single-use — even though adapters may
-///     also add their own replay protection (e.g. EIP-3009 nonces), the
-///     contract-level uniqueness is the final line of defense.
-///   * `settle` validates the (provider, service) pair against ServiceRegistry.
-///     The serviceId is recorded on the PaymentRecord so reputation queries
-///     and refund mirrors can attribute outcomes per-service.
-///   * Payee resolution: service.serviceWallet if non-zero, else the
-///     provider's live ERC-8004 agentWallet. Per-service wallets let
-///     providers isolate accounting (regulated vs unregulated, separate
-///     jurisdictions, etc.). When unset (the common case) the existing
-///     "pay live agentWallet" semantics apply.
-///   * The PaymentRecord caches the PAYER wallet at settle time (passed by
-///     the adapter, verified against the buyer agent). Refund prefers the
-///     LIVE agentWallet on the canonical ERC-8004 registry and falls back
-///     to the cached payer wallet — the common case, since the canonical
-///     registry does not auto-set agentWallet and agents minted via
-///     AgentIndex usually never verify one. This honors ERC-8004 wallet
-///     rotation while keeping refunds routable to whoever actually paid.
-///   * Refunds are partial, cumulative, and have no expiration. Total per
-///     paymentId is capped at the original amount. Authorized refund callers
-///     are: provider NFT owner, ERC-721 operators (isApprovedForAll),
-///     per-token approved spender (getApproved), and the live agentWallet.
-///     Source of funds is `msg.sender` via safeTransferFrom — a malicious
-///     or compromised operator can only burn THEIR OWN approved balance,
-///     never drain the provider's agentWallet. Worst-case abuse is
-///     self-griefing, not theft from the provider.
-contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter {
+/// @notice Payment-rail-agnostic commission split, payment ledger, deposit
+///         reservation, and provider refund entry point. Adapters handle rail
+///         mechanics; this contract enforces service references, catalog
+///         membership, payout ownership, and immutable payer destinations.
+contract PaymentRouter is PaymentRouterAdmin {
     using SafeERC20 for IERC20;
-
-    // ── Storage ──────────────────────────────────────────────────────
-    address public treasury;
-    ICanonicalIdentity public identity;
-    IProviderRegistry public registry;
-    uint256 public commissionBps;
-
-    uint256 public nextPaymentId;
-
-    mapping(uint256 => PaymentRecord) internal _payments;
-    mapping(bytes32 => bool) private _usedServiceRefs;
-
-    /// @notice Whitelist of adapter contracts allowed to call `settle`.
-    mapping(address => bool) public adapters;
-
-    /// @notice Whitelist of ERC-20 tokens accepted for payments. Adapters
-    ///         should pre-check this before pulling funds to avoid wasted
-    ///         gas, and the router rejects at `settle` regardless.
-    mapping(address => bool) public acceptedTokens;
-
-    /// @notice Cumulative refunded amount per paymentId. Capped at the
-    ///         original amount; checked on every refund.
-    mapping(uint256 => uint256) internal _refundedAmount;
-
-    /// @notice Optional ReputationStorage hook. When set, refunds are
-    ///         mirrored into the reputation layer so reviewers can see
-    ///         provider goodwill alongside outcome/confirmation data.
-    address public reputationStorage;
-
-    /// @notice ServiceRegistry. settle() validates the (provider, service)
-    ///         pair against this and reads the per-service payee override.
-    IServiceRegistry public serviceRegistry;
-
-    // ── Events ───────────────────────────────────────────────────────
-    event PaymentSettled(
-        uint256 indexed paymentId,
-        bytes32 indexed serviceRef,
-        bytes32 indexed serviceId,
-        uint256 buyerAgentId,
-        uint256 providerAgentId,
-        address token,
-        uint256 totalAmount,
-        uint256 providerAmount,
-        uint256 commission
-    );
-
-    event Refunded(uint256 indexed paymentId, uint256 amountToBuyer, uint256 cumulativeRefunded);
-    event AdapterSet(address indexed adapter, bool allowed);
-    event AcceptedTokenSet(address indexed token, bool allowed);
-    event CommissionUpdated(uint256 oldBps, uint256 newBps);
-    event TreasuryUpdated(address oldTreasury, address newTreasury);
-    event ReputationStorageUpdated(address indexed oldStorage, address indexed newStorage);
-    event ServiceRegistryUpdated(address indexed oldRegistry, address indexed newRegistry);
-    event ERC20Rescued(address indexed token, address indexed to, uint256 amount);
-
-    // ── Modifiers ────────────────────────────────────────────────────
-    modifier onlyAdapter() {
-        require(adapters[msg.sender], "not adapter");
-        _;
-    }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -151,17 +57,82 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         uint256 providerAgentId,
         bytes32 serviceId
     ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
+        paymentId = _settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
+    }
+
+    /// @inheritdoc IPaymentRouter
+    function reserveDeposit(address token, bytes32 depositId, uint256 amount, address refundTo)
+        external
+        onlyAdapter
+        nonReentrant
+    {
+        require(amount > 0, "zero amount");
+        require(acceptedTokens[token], "token not accepted");
+        require(refundTo != address(0), "zero refund address");
+
+        bytes32 key = _reservationKey(msg.sender, depositId);
+        require(_reservations[key].amount == 0, "deposit already reserved");
+
+        uint256 newReserved = _reservedBalances[token] + amount;
+        require(IERC20(token).balanceOf(address(this)) >= newReserved, "deposit not funded");
+
+        _reservedBalances[token] = newReserved;
+        _reservations[key] = Reservation({token: token, refundTo: refundTo, amount: amount});
+
+        emit DepositReserved(msg.sender, depositId, token, refundTo, amount);
+    }
+
+    /// @inheritdoc IPaymentRouter
+    function settleReserved(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        address buyerWallet,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        bytes32 depositId
+    ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
+        bytes32 key = _reservationKey(msg.sender, depositId);
+        Reservation memory reservation = _reservations[key];
+        require(reservation.amount > 0, "deposit not reserved");
+        require(reservation.token == token && reservation.amount == amount, "deposit mismatch");
+
+        delete _reservations[key];
+        _reservedBalances[token] -= amount;
+
+        paymentId = _settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
+    }
+
+    /// @inheritdoc IPaymentRouter
+    function refundReservedDeposit(address token, bytes32 depositId) external onlyAdapter nonReentrant {
+        bytes32 key = _reservationKey(msg.sender, depositId);
+        Reservation memory reservation = _reservations[key];
+        require(reservation.amount > 0, "deposit not reserved");
+        require(reservation.token == token, "deposit mismatch");
+
+        delete _reservations[key];
+        _reservedBalances[token] -= reservation.amount;
+        IERC20(token).safeTransfer(reservation.refundTo, reservation.amount);
+
+        emit ReservedDepositRefunded(msg.sender, depositId, token, reservation.refundTo, reservation.amount);
+    }
+
+    function _settle(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        address buyerWallet,
+        uint256 providerAgentId,
+        bytes32 serviceId
+    ) internal returns (uint256 paymentId) {
         require(amount > 0, "zero amount");
         require(acceptedTokens[token], "token not accepted");
         require(!_usedServiceRefs[serviceRef], "serviceRef used");
-        require(buyerAgentId != 0, "buyer has no agent");
         require(buyerWallet != address(0), "zero buyer wallet");
 
-        // Defense-in-depth on top of the adapter's AgentIndex resolution:
-        // the wallet cached as the refund fallback must currently control
-        // the buyer agent on the canonical registry (verified agentWallet or
-        // ERC-721 owner) — a buggy adapter cannot cache a refund destination
-        // unrelated to the buyer agent.
+        // Prevent an adapter from caching an unrelated refund destination.
         require(
             buyerWallet == identity.getAgentWallet(buyerAgentId) || buyerWallet == identity.ownerOf(buyerAgentId),
             "buyer wallet mismatch"
@@ -169,34 +140,25 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
 
         require(registry.getProvider(providerAgentId).isActive, "provider not active");
 
-        // Validate service belongs to this provider and is active. Reading
-        // through ServiceRegistry binds the payment to a specific catalog
-        // entry, which is what reputation queries key on downstream.
         IServiceRegistry.Service memory svc = serviceRegistry.getService(serviceId);
         require(svc.providerAgentId == providerAgentId, "service/provider mismatch");
         require(svc.active, "service not active");
 
-        // Payee resolution: per-service override wins, else fall back to the
-        // provider's LIVE agentWallet on the canonical ERC-8004 registry. If
-        // both are unset, reject. The canonical registry never auto-sets
-        // agentWallet (and clears it on every transfer), so providers MUST
-        // verify a payment wallet there — or set a serviceWallet — before
-        // they can be paid; provider onboarding enforces this off-chain.
-        address payee = svc.serviceWallet;
+        // An override is valid only while the NFT owner that authorized it
+        // still owns the provider agent.
+        address payee;
+        if (svc.serviceWallet != address(0) && svc.serviceWalletOwner == identity.ownerOf(providerAgentId)) {
+            payee = svc.serviceWallet;
+        }
         if (payee == address(0)) {
             payee = identity.getAgentWallet(providerAgentId);
         }
         require(payee != address(0), "no payee wallet");
 
-        // Defense-in-depth: the adapter is supposed to have transferred
-        // `amount` of `token` into this contract before calling settle.
-        // Verify the contract actually holds at least that much before paying
-        // out, so a buggy adapter cannot drain pre-existing balance for a
-        // settle it never funded.
-        require(IERC20(token).balanceOf(address(this)) >= amount, "router under-funded");
+        // Reserved deposits cannot fund unrelated settlements.
+        require(IERC20(token).balanceOf(address(this)) >= _reservedBalances[token] + amount, "router under-funded");
 
-        // Mark serviceRef used before any external calls to avoid reentrant
-        // re-spends via a malicious token.
+        // Mark used before token or reputation calls.
         _usedServiceRefs[serviceRef] = true;
 
         uint256 commission = (amount * commissionBps) / 10000;
@@ -214,8 +176,6 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
             serviceId: serviceId,
             token: token,
             amount: amount,
-            // The verified payer wallet — refund fallback when the buyer
-            // agent has no live agentWallet on the canonical registry.
             cachedBuyerWallet: buyerWallet,
             serviceRef: serviceRef,
             paidAt: block.timestamp
@@ -224,6 +184,11 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         emit PaymentSettled(
             paymentId, serviceRef, serviceId, buyerAgentId, providerAgentId, token, amount, providerAmount, commission
         );
+
+        address sink = reputationStorage;
+        if (sink != address(0)) {
+            IReputationSink(sink).recordPayment(paymentId);
+        }
     }
 
     // ── Provider-initiated refund ────────────────────────────────────
@@ -244,11 +209,8 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         // owner OR operator OR per-token approved OR the provider's CURRENT
         // agentWallet on the canonical registry. Rotated-out wallets fail
         // because the live agentWallet is read at call time.
-        address provOwner = identity.ownerOf(rec.providerAgentId);
         require(
-            msg.sender == provOwner || identity.isApprovedForAll(provOwner, msg.sender)
-                || identity.getApproved(rec.providerAgentId) == msg.sender
-                || identity.getAgentWallet(rec.providerAgentId) == msg.sender,
+            LibAgentAuth.isAuthorizedOrAgentWallet(identity, rec.providerAgentId, msg.sender),
             "not authorized for provider"
         );
 
@@ -256,13 +218,9 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
         uint256 newTotal = already + amountToBuyer;
         require(newTotal <= rec.amount, "exceeds refundable amount");
 
-        // Resolve the refund destination. Prefer the buyer's CURRENT agent
-        // wallet (honors wallet rotation); fall back to the cached original
-        // wallet if the agent has unset their wallet.
-        address dest = identity.getAgentWallet(rec.buyerAgentId);
-        if (dest == address(0)) {
-            dest = rec.cachedBuyerWallet;
-        }
+        // Return funds to the wallet that paid. A later NFT transfer or
+        // agentWallet rotation must not redirect a historical refund.
+        address dest = rec.cachedBuyerWallet;
         require(dest != address(0), "no refund destination");
 
         _refundedAmount[paymentId] = newTotal;
@@ -274,100 +232,11 @@ contract PaymentRouter is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter
 
         emit Refunded(paymentId, amountToBuyer, newTotal);
 
-        // Best-effort mirror into the reputation storage. Swallow any
-        // revert so reputation issues don't block a refund — the canonical
-        // record is in the router's own _refundedAmount mapping, and
-        // PaymentRouter.Refunded is the authoritative event.
+        // Keep the payment and reputation records atomic. If the configured
+        // sink rejects the update, all state and token movement revert.
         address sink = reputationStorage;
         if (sink != address(0)) {
-            try IReputationRefundSink(sink).recordRefund(paymentId, amountToBuyer) {} catch {}
+            IReputationSink(sink).recordRefund(paymentId, amountToBuyer);
         }
     }
-
-    // ── Views ────────────────────────────────────────────────────────
-
-    function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount) {
-        commission = (amount * commissionBps) / 10000;
-        providerAmount = amount - commission;
-    }
-
-    function getPayment(uint256 paymentId) external view returns (PaymentRecord memory) {
-        require(_payments[paymentId].amount > 0, "payment not found");
-        return _payments[paymentId];
-    }
-
-    function refundedAmount(uint256 paymentId) external view returns (uint256) {
-        return _refundedAmount[paymentId];
-    }
-
-    function serviceRefUsed(bytes32 serviceRef) external view returns (bool) {
-        return _usedServiceRefs[serviceRef];
-    }
-
-    function isAdapter(address adapter) external view returns (bool) {
-        return adapters[adapter];
-    }
-
-    function isAcceptedToken(address token) external view returns (bool) {
-        return acceptedTokens[token];
-    }
-
-    // ── Admin ────────────────────────────────────────────────────────
-
-    function setAdapter(address adapter, bool allowed) external onlyAdmin {
-        require(adapter != address(0), "zero adapter");
-        adapters[adapter] = allowed;
-        emit AdapterSet(adapter, allowed);
-    }
-
-    function setAcceptedToken(address token, bool allowed) external onlyAdmin {
-        require(token != address(0), "zero token");
-        acceptedTokens[token] = allowed;
-        emit AcceptedTokenSet(token, allowed);
-    }
-
-    function setTreasury(address newTreasury) external onlyAdmin {
-        require(newTreasury != address(0), "zero treasury");
-        address oldTreasury = treasury;
-        treasury = newTreasury;
-        emit TreasuryUpdated(oldTreasury, newTreasury);
-    }
-
-    function setReputationStorage(address newStorage) external onlyAdmin {
-        address oldStorage = reputationStorage;
-        reputationStorage = newStorage;
-        emit ReputationStorageUpdated(oldStorage, newStorage);
-    }
-
-    function setServiceRegistry(address newRegistry) external onlyAdmin {
-        require(newRegistry != address(0), "zero service registry");
-        address old = address(serviceRegistry);
-        serviceRegistry = IServiceRegistry(newRegistry);
-        emit ServiceRegistryUpdated(old, newRegistry);
-    }
-
-    function setCommissionBps(uint256 newBps) external onlyAdmin {
-        require(newBps <= 10000, "commission too high");
-        uint256 oldBps = commissionBps;
-        commissionBps = newBps;
-        emit CommissionUpdated(oldBps, newBps);
-    }
-
-    /// @notice Admin rescue for tokens accidentally sent to the router.
-    ///         Restricted to non-accepted tokens because accepted tokens
-    ///         flow through the router transiently during settle (in and
-    ///         out in the same tx, guarded by nonReentrant) — at-rest
-    ///         balance is always zero for them. To rescue an accepted
-    ///         token (e.g. someone misrouted USDC here), the admin must
-    ///         temporarily de-list it via setAcceptedToken(false), call
-    ///         this, then re-list. The unlisting also halts new settles
-    ///         for that token, so the rescue cannot race a settle.
-    function rescueERC20(IERC20 token, address to, uint256 amount) external onlyAdmin {
-        require(to != address(0), "zero to");
-        require(!acceptedTokens[address(token)], "accepted token");
-        token.safeTransfer(to, amount);
-        emit ERC20Rescued(address(token), to, amount);
-    }
-
-    uint256[50] private __gap;
 }

@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
-import {MockUSDC} from "../../src/MockUSDC.sol";
 import {IX402Adapter} from "../../src/interfaces/IX402Adapter.sol";
 
 /// @notice Helper for signing EIP-3009 TransferWithAuthorization messages

@@ -9,9 +9,9 @@ backed by EAS attestations — built on top of the **canonical ERC-8004
 registries**. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia (pre-canonical-migration — next
-redeploy switches identity to the canonical registry). 188 unit + integration
-tests passing. Audit pending.
+**Status:** the Base Sepolia addresses below run the previous pre-production
+revision. The current revision requires a fresh deployment. 199 unit and
+integration tests pass; an external audit is still pending.
 
 ## Canonical ERC-8004 registries
 
@@ -47,23 +47,30 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 
 | Contract            | Purpose |
 |---------------------|---------|
-| **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. Bindings are re-verified against the canonical registry on every read; stale ones resolve to zero. |
+| **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. `resolve` returns an explicit found flag because agent ID 0 is valid. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
 | **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
-| **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): attributes payments that a third-party facilitator (Coinbase CDP) settled as bare EIP-3009 transfers into the router, running the split + payment record as a follow-up tx. Attributor-gated (the Daski gateway). |
-| **ValidationRegistry** | ERC-8004 request/response attestations (Daski-hosted until a canonical validation registry exists). |
-| **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
+| **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): reserves a gateway-observed bare EIP-3009 deposit before attribution. Reservations are isolated, single-use, and refundable to the payer. |
+| **ValidationRegistry** | ERC-8004 request/response attestations and summary queries (Daski-hosted until a canonical validation registry exists). |
+| **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
+Fresh deployments require one deployed governance contract (multisig or
+timelock) as the pending admin of every proxy.
 
 ## Deployments
 
 ### Base Sepolia (chain id `84532`) — deployed 2026-07-12
+
+> The addresses below run the previous storage/API revision. This
+> pre-production change intentionally does not include upgrade compatibility;
+> deploy a fresh stack before using the reservation and atomic reputation
+> flows.
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
@@ -121,34 +128,37 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 188 tests across 11 suites
+forge test       # 199 tests across 11 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 52 |
-| ReputationStorage     | 27 |
+| PaymentRouter         | 55 |
+| ReputationStorage     | 30 |
 | ServiceRegistry       | 24 |
-| AgentIndex            | 18 |
+| AgentIndex            | 19 |
 | ProviderRegistry      | 18 |
 | X402Adapter           | 14 |
-| ValidationRegistry    | 13 |
-| DirectTransferAdapter | 10 |
+| ValidationRegistry    | 14 |
+| DirectTransferAdapter | 13 |
 | PermitAdapter         | 5  |
 | ApprovalAdapter       | 4  |
 | Integration           | 3  |
 
 Tests run against `test/mocks/MockCanonicalIdentityRegistry.sol`, a faithful
 double of the canonical registry surface (ERC-721 + registration +
-agentWallet, **no** auto-set wallet, **no** reverse index).
+agentWallet, IDs beginning at 0, registration-time wallet initialization, and
+**no** reverse index).
 
 ## Deploy
 
 ```bash
 export DEPLOYER_PRIVATE_KEY=<key>
 export TREASURY_ADDRESS=<address>
+export ADMIN_ADDRESS=<deployed multisig or timelock>
+export ATTRIBUTOR_ADDRESS=<gateway attributor>
 
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
 #   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
@@ -169,42 +179,18 @@ forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
 Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
-of `forge script` output for easy copy-paste into client configs.
+of `forge script` output. The governance contract must then call
+`acceptAdmin()` on every logged proxy before the deployment is operational.
+
+For external-facilitator payments, the gateway calls
+`registerDeposit(token, amount, payer, authorizationNonce)` after confirming
+the transfer transaction, then calls `attribute(...)`. If attribution cannot
+complete, the payer or attributor calls `refundDeposit(...)`.
 
 Release coordination — develop→main merges, semver tags, the cross-repo
 address cascade (gateway/provider env, test-suite config, website `llms.txt`),
 DB resets, and post-deploy verification — lives in
 [daski-io/deploy-testnet](https://github.com/daski-io/deploy-testnet).
-
-### Add DirectTransferAdapter to an existing deployment (x402 Bazaar rail)
-
-`Deploy.s.sol` includes the adapter for **fresh** stacks. To add the rail to
-an already-running deployment (e.g. the current Base Sepolia sandbox) use the
-targeted script — it deploys only the adapter and wires it to the existing
-router, without touching anything else:
-
-```bash
-export DEPLOYER_PRIVATE_KEY=<key>                # pays gas; becomes adapter admin
-export PAYMENT_ROUTER_ADDRESS=<existing router proxy>
-export AGENT_INDEX_ADDRESS=<existing AgentIndex proxy>
-# Gateway facilitator wallet — allowed to call attribute(). Strongly
-# recommended to set here; the rail cannot settle without an attributor.
-export ATTRIBUTOR_ADDRESS=<gateway facilitator wallet>
-# Optional: hand adapter admin to a multisig (2-step; new admin must acceptAdmin())
-# export ADMIN_ADDRESS=<multisig>
-
-forge script script/AddDirectAdapter.s.sol --rpc-url <RPC_URL> --broadcast
-```
-
-The script registers the adapter with the router automatically when the
-deployer is the router admin (testnet convention); otherwise it prints the
-exact `PaymentRouter.setAdapter(<proxy>, true)` call for the real admin.
-
-After the deploy: record the **proxy** address in the Deployments table above
-and in `deployments/<network>.json`, then run the downstream cascade (gateway
-`DIRECT_ADAPTER_ADDRESS`, verification, Bazaar 402 sanity check) from the
-[deploy-testnet](https://github.com/daski-io/deploy-testnet) runbook
-(`docs/contract-addresses.md`).
 
 ## Security
 

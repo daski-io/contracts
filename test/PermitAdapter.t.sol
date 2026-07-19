@@ -97,8 +97,7 @@ contract PermitAdapterTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; payee resolution
-        // needs one (or a serviceWallet).
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);

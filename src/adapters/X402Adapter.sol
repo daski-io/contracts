@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IAgentIndex} from "../interfaces/IAgentIndex.sol";
-import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IERC3009} from "../interfaces/IERC3009.sol";
 import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
-import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
+import {AdapterBaseUpgradeable} from "./AdapterBaseUpgradeable.sol";
 
 /// @notice Adapter that settles x402 (EIP-3009 TransferWithAuthorization)
 ///         payments. Funds flow DIRECTLY from buyer → router via the token's
@@ -26,21 +24,14 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 ///   This adapter rejects calls whose nonce does not match. The token's
 ///   per-(from, nonce) replay protection then doubles as a commitment to
 ///   exactly one (service, provider) pair per authorization.
-contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
-    IPaymentRouter public router;
-    IAgentIndex public agentIndex;
-
+contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
     function initialize(address _router, address _agentIndex, address _admin) external initializer {
-        require(_router != address(0), "zero router");
-        require(_agentIndex != address(0), "zero agent index");
-        __Admin2Step_init(_admin);
-        router = IPaymentRouter(_router);
-        agentIndex = IAgentIndex(_agentIndex);
+        __AdapterBase_init(_router, _agentIndex, _admin);
     }
 
     /// @inheritdoc IX402Adapter
@@ -59,9 +50,8 @@ contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
         // Resolve the buyer's agentId from the signer. AgentIndex re-verifies
         // the binding against the canonical ERC-8004 registry — if the signer
         // transferred the agent away or rotated out between signing and
-        // submission, this resolves to zero and the call reverts.
-        uint256 buyerAgentId = agentIndex.resolve(auth.from);
-        require(buyerAgentId != 0, "buyer has no agent");
+        // submission, this returns found=false and the call reverts.
+        uint256 buyerAgentId = _resolveBuyer(auth.from);
 
         paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
     }
@@ -90,8 +80,9 @@ contract X402Adapter is Admin2StepUpgradeable, IX402Adapter {
     ) external returns (uint256 buyerAgentId, uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
 
-        buyerAgentId = agentIndex.resolve(auth.from);
-        if (buyerAgentId == 0) {
+        bool found;
+        (buyerAgentId, found) = _tryResolveBuyer(auth.from);
+        if (!found) {
             buyerAgentId = agentIndex.registerWithSig(agentURI, auth.from, registrationDeadline, registrationSignature);
         }
 

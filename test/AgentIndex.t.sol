@@ -36,6 +36,17 @@ contract AgentIndexTest is Test {
         return AgentIndexSigner.signRegister(vm, WALLET_KEY, agentIndex, URI, deadline);
     }
 
+    function _assertResolved(address who, uint256 expected) internal view {
+        (uint256 agentId, bool found) = agentIndex.resolve(who);
+        assertTrue(found);
+        assertEq(agentId, expected);
+    }
+
+    function _assertNotResolved(address who) internal view {
+        (, bool found) = agentIndex.resolve(who);
+        assertFalse(found);
+    }
+
     // ── registerWithSig ──────────────────────────────────────────────
 
     function test_registerWithSig_happy() public {
@@ -49,10 +60,9 @@ contract AgentIndexTest is Test {
         // registration file set; binding resolves live.
         assertEq(identity.ownerOf(agentId), wallet, "NFT lands on the wallet, not the relayer");
         assertEq(identity.tokenURI(agentId), URI);
-        assertEq(agentIndex.resolve(wallet), agentId);
+        _assertResolved(wallet, agentId);
         assertEq(agentIndex.registrationNonce(wallet), 1, "nonce bumped");
-        // Canonical semantics: no agentWallet auto-set — ownership is the
-        // control proof.
+        // The canonical wallet is cleared when AgentIndex transfers the NFT.
         assertEq(identity.getAgentWallet(agentId), address(0));
     }
 
@@ -88,8 +98,8 @@ contract AgentIndexTest is Test {
         // Even after the wallet transfers the agent away (binding stale),
         // the consumed consent cannot be replayed — the nonce moved on.
         vm.prank(wallet);
-        identity.transferFrom(wallet, makeAddr("elsewhere"), 1);
-        assertEq(agentIndex.resolve(wallet), 0, "binding stale");
+        identity.transferFrom(wallet, makeAddr("elsewhere"), 0);
+        _assertNotResolved(wallet);
 
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
@@ -122,7 +132,7 @@ contract AgentIndexTest is Test {
         vm.prank(relayer);
         uint256 second = agentIndex.registerWithSig(URI, wallet, deadline, sig2);
         assertGt(second, first);
-        assertEq(agentIndex.resolve(wallet), second);
+        _assertResolved(wallet, second);
     }
 
     // ── claim / unbind / resolve ─────────────────────────────────────
@@ -131,11 +141,11 @@ contract AgentIndexTest is Test {
         // Bring-your-own canonical agent: registered directly, then claimed.
         vm.prank(wallet);
         uint256 agentId = identity.register(URI);
-        assertEq(agentIndex.resolve(wallet), 0, "not bound until claimed");
+        _assertNotResolved(wallet);
 
         vm.prank(wallet);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(wallet), agentId);
+        _assertResolved(wallet, agentId);
     }
 
     function test_claim_byVerifiedAgentWallet() public {
@@ -148,7 +158,7 @@ contract AgentIndexTest is Test {
 
         vm.prank(payWallet);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(payWallet), agentId);
+        _assertResolved(payWallet, agentId);
     }
 
     function test_claim_unauthorizedReverts() public {
@@ -174,7 +184,7 @@ contract AgentIndexTest is Test {
 
         vm.prank(wallet);
         agentIndex.unbind();
-        assertEq(agentIndex.resolve(wallet), 0);
+        _assertNotResolved(wallet);
 
         vm.prank(wallet);
         vm.expectRevert("nothing bound");
@@ -192,10 +202,10 @@ contract AgentIndexTest is Test {
         identity.transferFrom(wallet, newOwner, agentId);
 
         // Old wallet no longer resolves; new owner claims and does.
-        assertEq(agentIndex.resolve(wallet), 0, "stale binding self-heals to zero");
+        _assertNotResolved(wallet);
         vm.prank(newOwner);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(newOwner), agentId);
+        _assertResolved(newOwner, agentId);
     }
 
     function test_resolve_viaAgentWalletBranch() public {
@@ -213,7 +223,7 @@ contract AgentIndexTest is Test {
         identity.transferFrom(wallet, newOwner, agentId);
         identity.forceSetAgentWallet(agentId, wallet);
 
-        assertEq(agentIndex.resolve(wallet), agentId, "agentWallet branch keeps the binding live");
+        _assertResolved(wallet, agentId);
     }
 
     // ── misc ─────────────────────────────────────────────────────────
@@ -226,6 +236,15 @@ contract AgentIndexTest is Test {
         vm.prank(wallet);
         vm.expectRevert("unexpected token");
         other.safeTransferFrom(wallet, address(agentIndex), strayId);
+    }
+
+    function test_onERC721Received_rejectsStrayCanonicalToken() public {
+        vm.prank(wallet);
+        uint256 strayId = identity.register("stray");
+
+        vm.prank(wallet);
+        vm.expectRevert("unexpected transfer");
+        identity.safeTransferFrom(wallet, address(agentIndex), strayId);
     }
 
     function test_getIdentityRegistry() public view {
@@ -242,7 +261,7 @@ contract AgentIndexTest is Test {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sig(deadline);
         vm.expectEmit(true, true, false, true, address(agentIndex));
-        emit IAgentIndex.AgentRegistered(1, wallet, URI);
+        emit IAgentIndex.AgentRegistered(0, wallet, URI);
         vm.prank(relayer);
         agentIndex.registerWithSig(URI, wallet, deadline, sig);
     }

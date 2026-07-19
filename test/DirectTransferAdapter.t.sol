@@ -111,8 +111,7 @@ contract DirectTransferAdapterTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; payee resolution
-        // needs one (or a serviceWallet).
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -144,13 +143,20 @@ contract DirectTransferAdapterTest is Test {
         );
     }
 
+    function _reserve(uint256 value, bytes32 nonce) internal {
+        vm.prank(attributor);
+        adapter.registerDeposit(address(usdc), value, buyer, nonce);
+    }
+
     function test_attributeHappyPath() public {
         bytes32 nonce = keccak256("client-random-nonce-1");
         bytes32 ref = keccak256("ref-1");
         _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
 
-        // Funds sit on the router, unsplit, until attribution.
+        // Funds sit in an isolated router reservation until attribution.
         assertEq(usdc.balanceOf(address(router)), 100e6);
+        assertEq(router.reservedBalance(address(usdc)), 100e6);
 
         vm.expectEmit(false, true, true, true, address(adapter));
         emit DirectTransferAttributed(0, ref, buyer, nonce);
@@ -174,31 +180,28 @@ contract DirectTransferAdapterTest is Test {
     function test_attributeNotAttributorReverts() public {
         bytes32 nonce = keccak256("nonce-na");
         _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
 
         vm.prank(makeAddr("rando"));
         vm.expectRevert("not attributor");
         adapter.attribute(address(usdc), 100e6, keccak256("ref-na"), providerAgentId, serviceId, buyer, nonce);
     }
 
-    function test_attributeAuthNotConsumedReverts() public {
+    function test_registerDepositAuthNotConsumedReverts() public {
         // No external settle happened — authorizationState is false, so a
         // buggy attributor cannot invent a payment out of thin air.
         vm.prank(attributor);
         vm.expectRevert("authorization not consumed");
-        adapter.attribute(
-            address(usdc), 100e6, keccak256("ref-nc"), providerAgentId, serviceId, buyer, keccak256("never-used")
-        );
+        adapter.registerDeposit(address(usdc), 100e6, buyer, keccak256("never-used"));
     }
 
-    function test_attributeUnderFundedReverts() public {
-        // Authorization consumed for 50e6, but attribution claims 100e6.
-        // The router's balance check catches the over-claim.
+    function test_registerDepositUnderFundedReverts() public {
         bytes32 nonce = keccak256("nonce-uf");
         _externalSettle(50e6, nonce);
 
         vm.prank(attributor);
-        vm.expectRevert("router under-funded");
-        adapter.attribute(address(usdc), 100e6, keccak256("ref-uf"), providerAgentId, serviceId, buyer, nonce);
+        vm.expectRevert("deposit not funded");
+        adapter.registerDeposit(address(usdc), 100e6, buyer, nonce);
     }
 
     function test_attributeServiceRefReplayReverts() public {
@@ -207,6 +210,8 @@ contract DirectTransferAdapterTest is Test {
         bytes32 nonce2 = keccak256("nonce-r2");
         _externalSettle(50e6, nonce1);
         _externalSettle(50e6, nonce2);
+        _reserve(50e6, nonce1);
+        _reserve(50e6, nonce2);
 
         vm.prank(attributor);
         adapter.attribute(address(usdc), 50e6, ref, providerAgentId, serviceId, buyer, nonce1);
@@ -234,6 +239,8 @@ contract DirectTransferAdapterTest is Test {
         usdc.transferWithAuthorization(
             fresh, address(router), 100e6, auth.validAfter, auth.validBefore, auth.nonce, auth.v, auth.r, auth.s
         );
+        vm.prank(attributor);
+        adapter.registerDeposit(address(usdc), 100e6, fresh, nonce);
 
         vm.prank(attributor);
         vm.expectRevert("buyer has no agent");
@@ -244,9 +251,7 @@ contract DirectTransferAdapterTest is Test {
         MockUSDC other = new MockUSDC();
         vm.prank(attributor);
         vm.expectRevert("token not accepted");
-        adapter.attribute(
-            address(other), 100e6, keccak256("ref-tok"), providerAgentId, serviceId, buyer, keccak256("n")
-        );
+        adapter.registerDeposit(address(other), 100e6, buyer, keccak256("n"));
     }
 
     function test_attributeTwoPendingTransfersOrderIndependent() public {
@@ -257,6 +262,8 @@ contract DirectTransferAdapterTest is Test {
         bytes32 nonceB = keccak256("nonce-B");
         _externalSettle(30e6, nonceA);
         _externalSettle(70e6, nonceB);
+        _reserve(30e6, nonceA);
+        _reserve(70e6, nonceB);
         assertEq(usdc.balanceOf(address(router)), 100e6);
 
         vm.prank(attributor);
@@ -292,6 +299,7 @@ contract DirectTransferAdapterTest is Test {
     function test_attributeRevokedAttributorReverts() public {
         bytes32 nonce = keccak256("nonce-revoked");
         _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
 
         vm.prank(admin);
         adapter.setAttributor(attributor, false);
@@ -299,5 +307,49 @@ contract DirectTransferAdapterTest is Test {
         vm.prank(attributor);
         vm.expectRevert("not attributor");
         adapter.attribute(address(usdc), 100e6, keccak256("ref-rv"), providerAgentId, serviceId, buyer, nonce);
+    }
+
+    function test_authorizationCannotBeReservedAgainAfterRefund() public {
+        bytes32 nonce = keccak256("nonce-once");
+        _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
+
+        vm.prank(buyer);
+        adapter.refundDeposit(address(usdc), buyer, nonce);
+        assertEq(usdc.balanceOf(buyer), 1000e6);
+
+        usdc.mint(address(router), 100e6);
+        vm.prank(attributor);
+        vm.expectRevert("authorization already processed");
+        adapter.registerDeposit(address(usdc), 100e6, buyer, nonce);
+    }
+
+    function test_failedAttributionCanBeRecoveredByBuyer() public {
+        bytes32 nonce = keccak256("nonce-recover");
+        _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
+
+        vm.prank(provider);
+        services.setActive(serviceId, false);
+
+        vm.prank(attributor);
+        vm.expectRevert("service not active");
+        adapter.attribute(address(usdc), 100e6, keccak256("ref-recover"), providerAgentId, serviceId, buyer, nonce);
+
+        vm.prank(buyer);
+        adapter.refundDeposit(address(usdc), buyer, nonce);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(usdc.balanceOf(buyer), 1000e6);
+    }
+
+    function test_reservedBalanceCannotFundUnrelatedSettlement() public {
+        bytes32 nonce = keccak256("nonce-isolated");
+        _externalSettle(100e6, nonce);
+        _reserve(100e6, nonce);
+
+        vm.prank(admin);
+        router.setAdapter(address(this), true);
+        vm.expectRevert("router under-funded");
+        router.settle(address(usdc), 100e6, keccak256("unrelated"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 }

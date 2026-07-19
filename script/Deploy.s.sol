@@ -46,6 +46,7 @@ contract Deploy is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address treasury = vm.envAddress("TREASURY_ADDRESS");
+        require(treasury != address(0), "TREASURY_ADDRESS is required");
 
         // The canonical ERC-8004 IdentityRegistry for this chain. Required —
         // there is deliberately no fallback that deploys a local registry.
@@ -62,15 +63,23 @@ contract Deploy is Script {
 
         address easAddress = vm.envOr("EAS_ADDRESS", DEFAULT_EAS);
         address schemaRegistryAddress = vm.envOr("EAS_SCHEMA_REGISTRY_ADDRESS", DEFAULT_SCHEMA_REGISTRY);
+        require(easAddress.code.length > 0, "EAS_ADDRESS has no code");
+        require(schemaRegistryAddress.code.length > 0, "EAS_SCHEMA_REGISTRY_ADDRESS has no code");
+        if (usdcAddress != address(0)) {
+            require(usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
+        }
 
         address deployer = vm.addr(deployerKey);
+        address attributor = vm.envOr("ATTRIBUTOR_ADDRESS", address(0));
+        require(attributor != address(0), "ATTRIBUTOR_ADDRESS is required");
 
-        // Final admin for all proxies. Defaults to the deployer (testnet
-        // convenience). For mainnet set ADMIN_ADDRESS to a multisig or a
-        // TimelockController: the script deploys + wires as the deployer, then
-        // hands off via the 2-step transferAdmin below (the new admin must call
-        // acceptAdmin() on each contract to complete the handover).
-        address finalAdmin = vm.envOr("ADMIN_ADDRESS", deployer);
+        // Final admin for every proxy. It must be an already-deployed
+        // governance contract (multisig or timelock); an EOA deployer is
+        // deliberately never accepted as the long-term control plane.
+        address finalAdmin = vm.envOr("ADMIN_ADDRESS", address(0));
+        require(finalAdmin != address(0), "ADMIN_ADDRESS is required");
+        require(finalAdmin != deployer, "ADMIN_ADDRESS must differ from deployer");
+        require(finalAdmin.code.length > 0, "ADMIN_ADDRESS must be a governance contract");
 
         console.log("Deployer:", deployer);
         console.log("Final admin:", finalAdmin);
@@ -195,8 +204,7 @@ contract Deploy is Script {
         // ── (k) DirectTransferAdapter (external-facilitator rail) ─────
         // Attributes payments settled by an external x402 facilitator (CDP)
         // as bare EIP-3009 transfers into the router. ATTRIBUTOR_ADDRESS is
-        // the gateway's facilitator wallet; when unset, ops must call
-        // setAttributor before the external rail can settle anything.
+        // the gateway wallet that reserves and attributes observed deposits.
         DirectTransferAdapter directAdapterImpl = new DirectTransferAdapter();
         ERC1967Proxy directAdapterProxy = new ERC1967Proxy(
             address(directAdapterImpl),
@@ -205,11 +213,8 @@ contract Deploy is Script {
         console.log("DirectTransferAdapter impl:", address(directAdapterImpl));
         console.log("DirectTransferAdapter proxy:", address(directAdapterProxy));
 
-        address attributor = vm.envOr("ATTRIBUTOR_ADDRESS", address(0));
-        if (attributor != address(0)) {
-            DirectTransferAdapter(address(directAdapterProxy)).setAttributor(attributor, true);
-            console.log("Attributor whitelisted:", attributor);
-        }
+        DirectTransferAdapter(address(directAdapterProxy)).setAttributor(attributor, true);
+        console.log("Attributor whitelisted:", attributor);
 
         // ── (l) Wire whitelists ───────────────────────────────────────
         router.setAdapter(address(x402AdapterProxy), true);
@@ -220,36 +225,32 @@ contract Deploy is Script {
         router.setReputationStorage(address(reputationProxy));
 
         // ── (m) Admin handoff ─────────────────────────────────────────
-        // All wiring above is onlyAdmin and ran as the deployer. If a separate
-        // ADMIN_ADDRESS (multisig / timelock) was supplied, start the 2-step
-        // transfer for every proxy now; the new admin completes it by calling
-        // acceptAdmin() on each. Until then the deployer stays admin, so a
-        // mistyped address is recoverable.
-        if (finalAdmin != deployer) {
-            address[10] memory adminContracts = [
-                address(agentIndexProxy),
-                address(validationRegistryProxy),
-                address(providerRegistryProxy),
-                address(serviceRegistryProxy),
-                address(routerProxy),
-                address(reputationProxy),
-                address(x402AdapterProxy),
-                address(permitAdapterProxy),
-                address(approvalAdapterProxy),
-                address(directAdapterProxy)
-            ];
-            for (uint256 i = 0; i < adminContracts.length; i++) {
-                Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
-            }
-            console.log("Admin transfer started to:", finalAdmin);
-            console.log("  new admin MUST call acceptAdmin() on each proxy to complete handover");
+        // All wiring above ran as the deployer. Start the mandatory two-step
+        // handoff for every proxy; governance must accept each pending role
+        // before the deployment is considered operational.
+        address[10] memory adminContracts = [
+            address(agentIndexProxy),
+            address(validationRegistryProxy),
+            address(providerRegistryProxy),
+            address(serviceRegistryProxy),
+            address(routerProxy),
+            address(reputationProxy),
+            address(x402AdapterProxy),
+            address(permitAdapterProxy),
+            address(approvalAdapterProxy),
+            address(directAdapterProxy)
+        ];
+        for (uint256 i = 0; i < adminContracts.length; i++) {
+            Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
         }
+        console.log("Admin transfer started to:", finalAdmin);
+        console.log("  governance MUST call acceptAdmin() on each proxy");
 
         vm.stopBroadcast();
 
         // ── Summary ───────────────────────────────────────────────────
         console.log("-------------------------------------------");
-        console.log("Deployment complete");
+        console.log("Deployment broadcast complete; admin acceptance pending");
         console.log("  USDC:               ", usdcAddress);
         console.log("  IdentityRegistry (canonical, external):", identityRegistry);
         console.log("  AgentIndex:         ", address(agentIndexProxy));

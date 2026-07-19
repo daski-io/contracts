@@ -101,8 +101,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; without one (or a
-        // serviceWallet) payee resolution rejects at settle.
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -140,6 +139,17 @@ contract X402AdapterTest is Test {
             block.timestamp + 1 hours,
             keccak256(abi.encode(serviceRef, providerId, svcId))
         );
+    }
+
+    function _assertResolved(address who, uint256 expected) internal view {
+        (uint256 agentId, bool found) = agentIndex.resolve(who);
+        assertTrue(found);
+        assertEq(agentId, expected);
+    }
+
+    function _assertNotResolved(address who) internal view {
+        (, bool found) = agentIndex.resolve(who);
+        assertFalse(found);
     }
 
     function test_settleHappyPath() public {
@@ -205,11 +215,11 @@ contract X402AdapterTest is Test {
 
     function test_settleBuyerNoAgentReverts() public {
         // Buyer moves the agent NFT away — the AgentIndex binding goes stale
-        // and resolve() returns 0, so settlement rejects rather than
+        // and resolve() returns found=false, so settlement rejects rather than
         // attributing the payment to an agent the wallet no longer controls.
         vm.prank(buyer);
         identity.transferFrom(buyer, makeAddr("elsewhere"), buyerAgentId);
-        assertEq(agentIndex.resolve(buyer), 0, "binding stale after transfer");
+        _assertNotResolved(buyer);
 
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId, serviceId);
         vm.prank(relayer);
@@ -317,7 +327,7 @@ contract X402AdapterTest is Test {
         usdc.mint(freshBuyer, 100e6);
 
         // No agent yet for freshBuyer.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "precondition: not registered");
+        _assertNotResolved(freshBuyer);
 
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://fresh", 0, deadline);
@@ -335,7 +345,7 @@ contract X402AdapterTest is Test {
         // the index binding resolves live.
         assertGt(newBuyerAgentId, 0, "buyer registered");
         assertEq(identity.ownerOf(newBuyerAgentId), freshBuyer);
-        assertEq(agentIndex.resolve(freshBuyer), newBuyerAgentId);
+        _assertResolved(freshBuyer, newBuyerAgentId);
 
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, newBuyerAgentId);
@@ -344,7 +354,7 @@ contract X402AdapterTest is Test {
     }
 
     function test_settleWithRegistration_alreadyRegisteredSkipsRegistration() public {
-        // Existing buyer (from setUp) is already registered with agentId=2.
+        // Existing buyer (from setUp) is already registered.
         // The registration sig + agentURI args should be ignored and the
         // original agentId reused.
         uint256 deadline = block.timestamp + 1 hours;
@@ -381,7 +391,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: nothing moved.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "no agent minted");
+        _assertNotResolved(freshBuyer);
         assertEq(usdc.balanceOf(freshBuyer), freshBuyerUsdcBefore, "no USDC moved");
     }
 
@@ -405,7 +415,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: registration is rolled back along with the failed transfer.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "registration rolled back");
+        _assertNotResolved(freshBuyer);
         assertEq(agentIndex.registrationNonce(freshBuyer), 0, "nonce rolled back");
     }
 }

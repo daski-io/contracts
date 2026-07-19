@@ -3,11 +3,9 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IAgentIndex} from "../interfaces/IAgentIndex.sol";
-import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IERC20Permit} from "../interfaces/IERC20Permit.sol";
 import {IPermitAdapter} from "../interfaces/IPermitAdapter.sol";
-import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
+import {AdapterBaseUpgradeable} from "./AdapterBaseUpgradeable.sol";
 
 /// @notice Adapter that settles payments via EIP-2612 `permit` + transferFrom.
 ///         Buyer (msg.sender) carries a permit signature granting this
@@ -16,11 +14,8 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 /// We follow the OZ-recommended try/permit pattern: if permit reverts (e.g.
 /// frontrun by someone who submitted the same permit already), we continue
 /// and rely on the existing allowance so the flow is resilient.
-contract PermitAdapter is Admin2StepUpgradeable, IPermitAdapter {
+contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
     using SafeERC20 for IERC20;
-
-    IPaymentRouter public router;
-    IAgentIndex public agentIndex;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -28,11 +23,7 @@ contract PermitAdapter is Admin2StepUpgradeable, IPermitAdapter {
     }
 
     function initialize(address _router, address _agentIndex, address _admin) external initializer {
-        require(_router != address(0), "zero router");
-        require(_agentIndex != address(0), "zero agent index");
-        __Admin2Step_init(_admin);
-        router = IPaymentRouter(_router);
-        agentIndex = IAgentIndex(_agentIndex);
+        __AdapterBase_init(_router, _agentIndex, _admin);
     }
 
     /// @inheritdoc IPermitAdapter
@@ -47,9 +38,8 @@ contract PermitAdapter is Admin2StepUpgradeable, IPermitAdapter {
         require(router.isAcceptedToken(token), "token not accepted");
 
         // AgentIndex re-verifies the binding against the canonical ERC-8004
-        // registry, so a stale wallet resolves to zero and reverts here.
-        uint256 buyerAgentId = agentIndex.resolve(msg.sender);
-        require(buyerAgentId != 0, "buyer has no agent");
+        // registry, so a stale wallet returns found=false and reverts here.
+        uint256 buyerAgentId = _resolveBuyer(msg.sender);
 
         // Apply the permit. Using try/catch lets the flow survive a
         // frontrun where the permit was already consumed — the subsequent

@@ -13,13 +13,12 @@ interface IPaymentRouter {
         address token; // token used for this payment
         uint256 amount; // original gross amount
         // Payer wallet captured at settle (adapter-supplied, router-verified
-        // against the buyer agent). Refund fallback when the buyer agent has
-        // no live agentWallet on the canonical registry.
+        // against the buyer agent). Refunds always return to this wallet so
+        // later agent ownership or wallet changes cannot redirect them.
         address cachedBuyerWallet;
         bytes32 serviceRef; // adapter-supplied reference, single-use
         // Block timestamp at settlement. Used by ReputationStorage to derive
-        // fulfillment time from the outcome attestation rather than trusting
-        // the provider-supplied value.
+        // the outcome attestation delay.
         uint256 paidAt;
     }
 
@@ -45,6 +44,28 @@ interface IPaymentRouter {
         bytes32 serviceId
     ) external returns (uint256 paymentId);
 
+    /// @notice Reserve an externally deposited balance for one adapter-owned
+    ///         deposit identifier. Reserved funds cannot satisfy unrelated
+    ///         settlements.
+    function reserveDeposit(address token, bytes32 depositId, uint256 amount, address refundTo) external;
+
+    /// @notice Settle using the exact adapter-owned reservation. A failed
+    ///         settlement leaves the reservation intact because the entire
+    ///         transaction reverts.
+    function settleReserved(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        address buyerWallet,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        bytes32 depositId
+    ) external returns (uint256 paymentId);
+
+    /// @notice Return an adapter-owned reservation to its recorded depositor.
+    function refundReservedDeposit(address token, bytes32 depositId) external;
+
     /// @notice Provider-initiated refund. Authorized callers are: NFT owner,
     ///         ERC-721 operator (isApprovedForAll), per-token approved
     ///         spender (getApproved), or the provider's current agentWallet.
@@ -60,5 +81,6 @@ interface IPaymentRouter {
     function serviceRefUsed(bytes32 serviceRef) external view returns (bool);
     function isAdapter(address adapter) external view returns (bool);
     function isAcceptedToken(address token) external view returns (bool);
+    function reservedBalance(address token) external view returns (uint256);
     function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount);
 }

@@ -45,6 +45,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     IProviderRegistry public providerRegistry;
 
     mapping(bytes32 => Service) private _services;
+    mapping(bytes32 => bool) private _serviceExists;
     mapping(uint256 => bytes32[]) private _servicesByProvider;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -88,7 +89,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         // version) already exists, registerService MUST revert — the same
         // (slug, version) pair represents the same product offering and
         // duplicating it would create ambiguity in payment routing.
-        require(_services[serviceId].providerAgentId == 0, "service already registered");
+        require(!_serviceExists[serviceId], "service already registered");
 
         _services[serviceId] = Service({
             providerAgentId: providerAgentId,
@@ -97,9 +98,11 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
             version: version,
             serviceURI: serviceURI,
             serviceWallet: serviceWallet,
+            serviceWalletOwner: serviceWallet == address(0) ? address(0) : identity.ownerOf(providerAgentId),
             createdAt: uint64(block.timestamp),
             active: true
         });
+        _serviceExists[serviceId] = true;
 
         _servicesByProvider[providerAgentId].push(serviceId);
 
@@ -109,7 +112,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function updateServiceURI(bytes32 serviceId, string calldata newURI) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
@@ -121,9 +124,10 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     ///      register with serviceWallet = address(0) and never call this.
     function setServiceWallet(bytes32 serviceId, address newWallet) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.serviceWallet = newWallet;
+        svc.serviceWalletOwner = newWallet == address(0) ? address(0) : identity.ownerOf(svc.providerAgentId);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
 
@@ -133,7 +137,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     ///      _servicesByProvider is append-only; deactivate does not remove.
     function setActive(bytes32 serviceId, bool active) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
@@ -144,19 +148,19 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function getService(bytes32 serviceId) external view returns (Service memory) {
         Service memory svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         return svc;
     }
 
     /// @inheritdoc IServiceRegistry
     function isActive(bytes32 serviceId) external view returns (bool) {
         Service storage svc = _services[serviceId];
-        return svc.providerAgentId != 0 && svc.active;
+        return _serviceExists[serviceId] && svc.active;
     }
 
     /// @inheritdoc IServiceRegistry
     function exists(bytes32 serviceId) external view returns (bool) {
-        return _services[serviceId].providerAgentId != 0;
+        return _serviceExists[serviceId];
     }
 
     /// @inheritdoc IServiceRegistry

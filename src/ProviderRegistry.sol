@@ -38,6 +38,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     using SafeERC20 for IERC20;
 
     mapping(uint256 => Provider) internal _providers;
+    mapping(uint256 => bool) private _registered;
     uint256[] public providerIds;
 
     address public treasury;
@@ -76,6 +77,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         usdc.safeTransferFrom(msg.sender, treasury, listingFee);
 
         _providers[agentId] = Provider({agentId: agentId, registrationTime: block.timestamp, isActive: true});
+        _registered[agentId] = true;
 
         providerIds.push(agentId);
 
@@ -128,7 +130,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     // Internal
 
     function _isRegistered(uint256 agentId) internal view returns (bool) {
-        return _providers[agentId].agentId != 0;
+        return _registered[agentId];
     }
 
     uint256[50] private __gap;

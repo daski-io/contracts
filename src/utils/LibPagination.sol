@@ -46,23 +46,4 @@ library LibPagination {
             page[i] = all[offset + i];
         }
     }
-
-    function paginate(address[] storage all, uint256 offset, uint256 limit)
-        internal
-        view
-        returns (address[] memory page)
-    {
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new address[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new address[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
-    }
 }

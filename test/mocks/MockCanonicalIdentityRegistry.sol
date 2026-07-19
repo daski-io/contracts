@@ -15,10 +15,8 @@ import {IIdentityRegistry} from "../../src/interfaces/IIdentityRegistry.sol";
 ///           * setAgentURI; metadata key/value with reserved "agentWallet"
 ///           * setAgentWallet (EIP-712/ERC-1271 signature of the new wallet,
 ///             per-wallet nonce) / unsetAgentWallet / getAgentWallet
-///           * agentWallet NOT auto-set at registration (unlike the retired
-///             Daski registry — matches the observed behavior of the live
-///             Base Sepolia canonical deployment) and cleared on every
-///             transfer
+///           * identifiers start at 0, agentWallet is initialized to the
+///             registrant, and is cleared on every transfer
 ///
 ///         Deliberately ABSENT (Daski extensions the canonical registry does
 ///         not have): agentOfWallet, registerBySig, the 1:1 wallet↔agent
@@ -29,7 +27,7 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
     bytes32 public constant SET_AGENT_WALLET_TYPEHASH =
         keccak256("SetAgentWallet(uint256 agentId,address newWallet,uint256 nonce,uint256 deadline)");
 
-    uint256 private _nextAgentId = 1;
+    uint256 private _nextAgentId;
 
     mapping(uint256 => mapping(string => bytes)) private _metadata;
     mapping(uint256 => address) private _agentWallet;
@@ -71,8 +69,8 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
         if (bytes(agentURI).length > 0) {
             _setTokenURI(agentId, agentURI);
         }
-        // Canonical semantics: agentWallet stays UNSET until verified via
-        // setAgentWallet — ownership is the fresh agent's only control proof.
+        _agentWallet[agentId] = owner;
+        emit MetadataSet(agentId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, abi.encodePacked(owner));
         emit Registered(agentId, agentURI, owner);
     }
 
