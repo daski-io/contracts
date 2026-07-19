@@ -8,6 +8,10 @@ contract MockReputationSink is IReputationSink {
     uint256 public paymentCount;
     uint256 public refundCount;
 
+    function isConfigured() external pure returns (bool) {
+        return true;
+    }
+
     function recordPayment(uint256) external {
         paymentCount++;
     }

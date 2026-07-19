@@ -79,10 +79,12 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
 
     function _settle(Settlement memory request) internal returns (uint256 paymentId) {
         require(request.amount > 0, "zero amount");
-        require(acceptedTokens[request.token], "token not accepted");
-        require(!_usedServiceRefs[request.serviceRef], "serviceRef used");
+        require(_acceptedTokens[request.token], "token not accepted");
+        bytes32 paymentKey =
+            _paymentKey(request.buyerAgentId, request.providerAgentId, request.serviceId, request.serviceRef);
+        require(!_usedPaymentKeys[paymentKey], "payment key used");
         require(request.buyerWallet != address(0), "zero buyer wallet");
-        require(reputationStorage.code.length > 0, "reputation not configured");
+        _requireReputationConfigured();
         require(
             request.buyerWallet == identity.getAgentWallet(request.buyerAgentId)
                 || request.buyerWallet == identity.ownerOf(request.buyerAgentId),
@@ -96,7 +98,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         // funded it.
         require(IERC20(request.token).balanceOf(address(this)) >= request.amount, "router under-funded");
 
-        _usedServiceRefs[request.serviceRef] = true;
+        _usedPaymentKeys[paymentKey] = true;
 
         uint256 commission = (request.amount * commissionBps) / 10000;
         uint256 providerAmount = request.amount - commission;

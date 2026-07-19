@@ -7,7 +7,7 @@ import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegist
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -41,6 +41,10 @@ contract PassThroughAdapter {
 contract ToggleReputationSink {
     bool public failRefund;
 
+    function isConfigured() external pure returns (bool) {
+        return true;
+    }
+
     function setFailRefund(bool fail) external {
         failRefund = fail;
     }
@@ -50,6 +54,16 @@ contract ToggleReputationSink {
     function recordRefund(uint256, uint256) external view {
         require(!failRefund, "refund mirror failed");
     }
+}
+
+contract UnconfiguredReputationSink {
+    function isConfigured() external pure returns (bool) {
+        return false;
+    }
+
+    function recordPayment(uint256) external {}
+
+    function recordRefund(uint256, uint256) external {}
 }
 
 contract PaymentRouterTest is Test {
@@ -195,7 +209,8 @@ contract PaymentRouterTest is Test {
         assertEq(rec.paidAt, block.timestamp, "paidAt captures settlement timestamp");
 
         assertEq(router.nextPaymentId(), paymentId + 1);
-        assertTrue(router.serviceRefUsed(keccak256("ref-1")));
+        bytes32 paymentKey = router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, keccak256("ref-1"));
+        assertTrue(router.paymentKeyUsed(paymentKey));
     }
 
     function test_settleEmitsEvent() public {
@@ -448,8 +463,30 @@ contract PaymentRouterTest is Test {
         vm.prank(buyer);
         usdc.approve(address(adapter), 50e6);
         vm.prank(buyer);
-        vm.expectRevert("serviceRef used");
+        vm.expectRevert("payment key used");
         adapter.settle(address(usdc), 50e6, keccak256("dup"), buyerAgentId, buyer, providerAgentId, serviceId);
+    }
+
+    function test_settleSameServiceRefFromDifferentBuyerSucceeds() public {
+        bytes32 sharedRef = keccak256("shared-reference");
+        _settle(50e6, sharedRef);
+
+        address secondBuyer = makeAddr("secondBuyer");
+        vm.prank(secondBuyer);
+        uint256 secondBuyerAgentId = identity.register();
+        usdc.mint(secondBuyer, 50e6);
+
+        vm.prank(secondBuyer);
+        usdc.approve(address(adapter), 50e6);
+        vm.prank(secondBuyer);
+        uint256 secondPaymentId =
+            adapter.settle(address(usdc), 50e6, sharedRef, secondBuyerAgentId, secondBuyer, providerAgentId, serviceId);
+
+        assertEq(secondPaymentId, 2);
+        assertTrue(router.paymentKeyUsed(router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, sharedRef)));
+        assertTrue(
+            router.paymentKeyUsed(router.computePaymentKey(secondBuyerAgentId, providerAgentId, serviceId, sharedRef))
+        );
     }
 
     function test_settleInactiveProviderReverts() public {
@@ -798,31 +835,11 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         vm.expectRevert("reputation storage has no code");
         router.setReputationStorage(makeAddr("eoaSink"));
-    }
 
-    function test_setServiceRegistry() public {
-        address newReg = address(new ServiceRegistry());
+        UnconfiguredReputationSink unconfigured = new UnconfiguredReputationSink();
         vm.prank(admin);
-        router.setServiceRegistry(newReg);
-        assertEq(address(router.serviceRegistry()), newReg);
-    }
-
-    function test_setServiceRegistry_zeroReverts() public {
-        vm.prank(admin);
-        vm.expectRevert("zero service registry");
-        router.setServiceRegistry(address(0));
-    }
-
-    function test_setServiceRegistryWithoutCodeReverts() public {
-        vm.prank(admin);
-        vm.expectRevert("service registry has no code");
-        router.setServiceRegistry(makeAddr("eoaRegistry"));
-    }
-
-    function test_setServiceRegistry_onlyAdmin() public {
-        vm.prank(buyer);
-        vm.expectRevert("not admin");
-        router.setServiceRegistry(makeAddr("any"));
+        vm.expectRevert("reputation not configured");
+        router.setReputationStorage(address(unconfigured));
     }
 
     function test_commissionZeroBps() public {

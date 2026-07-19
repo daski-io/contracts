@@ -11,7 +11,7 @@ import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
@@ -129,6 +129,7 @@ contract ReputationStorageTest is Test {
         reputation.setEAS(address(eas));
         reputation.setOutcomeSchema(outcomeSchemaUid);
         reputation.setConfirmationSchema(confirmationSchemaUid);
+        reputation.finalizeConfiguration();
         router.setReputationStorage(address(reputation));
         router.setAdapter(address(adapter), true);
         router.setAcceptedToken(address(usdc), true);
@@ -295,10 +296,11 @@ contract ReputationStorageTest is Test {
         eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
 
         vm.prank(buyer);
-        eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+        bytes32 uid = eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
 
         ReputationStorageBase.ReputationRecord memory rec = reputation.getRecord(paymentId);
         assertEq(uint256(rec.confirmation), uint256(ReputationStorageBase.BuyerConfirmation.Confirmed));
+        assertEq(rec.currentConfirmationUid, uid);
         assertEq(rec.serviceId, serviceId);
         assertEq(reputation.confirmedCount(providerAgentId), 1);
         assertEq(reputation.confirmedByService(serviceId), 1);
@@ -359,7 +361,8 @@ contract ReputationStorageTest is Test {
 
         // Now revise to NotConfirmed via refUID (the EAS-idiomatic way).
         vm.prank(buyer);
-        eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.NotConfirmed, firstUid));
+        bytes32 secondUid =
+            eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.NotConfirmed, firstUid));
 
         assertEq(reputation.confirmedCount(providerAgentId), 0);
         assertEq(reputation.confirmedByService(serviceId), 0);
@@ -370,6 +373,7 @@ contract ReputationStorageTest is Test {
 
         ReputationStorageBase.ReputationRecord memory rec = reputation.getRecord(paymentId);
         assertEq(uint256(rec.confirmation), uint256(ReputationStorageBase.BuyerConfirmation.NotConfirmed));
+        assertEq(rec.currentConfirmationUid, secondUid);
     }
 
     function test_confirmationSecondWithoutRefUIDReverts() public {
@@ -377,7 +381,7 @@ contract ReputationStorageTest is Test {
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
 
         vm.prank(buyer);
-        vm.expectRevert("must ref prior confirmation");
+        vm.expectRevert("must ref current confirmation");
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.NotConfirmed, bytes32(0)));
     }
 
@@ -405,7 +409,7 @@ contract ReputationStorageTest is Test {
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.NotConfirmed, u1));
 
         vm.prank(buyer);
-        vm.expectRevert("refUID is not a tracked confirmation");
+        vm.expectRevert("must ref current confirmation");
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, u1));
     }
 
@@ -453,7 +457,7 @@ contract ReputationStorageTest is Test {
         providerRecipients[paymentId2] = provider2;
 
         vm.prank(buyer2);
-        vm.expectRevert("refUID belongs to different payment");
+        vm.expectRevert("refUID is not a tracked confirmation");
         eas.attest(_confirmReq(paymentId2, ReputationStorageBase.BuyerConfirmation.Confirmed, victimUid));
 
         assertEq(reputation.confirmedCount(providerAgentId), 1, "victim provider count untouched");
@@ -488,6 +492,7 @@ contract ReputationStorageTest is Test {
 
         ReputationStorageBase.ReputationRecord memory rec = reputation.getRecord(paymentId);
         assertEq(uint256(rec.confirmation), uint256(ReputationStorageBase.BuyerConfirmation.Pending));
+        assertEq(rec.currentConfirmationUid, bytes32(0));
     }
 
     // ── EAS-only guard ─────────────────────────────────────────────────
@@ -553,7 +558,6 @@ contract ReputationStorageTest is Test {
 
         assertEq(reputation.refundedAmount(paymentId), 30e6);
         assertEq(reputation.refundedAmountByService(serviceId), 30e6);
-        assertEq(reputation.getRefundedAmount(paymentId), 30e6);
     }
 
     function test_recordRefundCumulative() public {
@@ -597,55 +601,6 @@ contract ReputationStorageTest is Test {
         assertEq(reputation.refundedAmountByService(serviceId), 20e6);
     }
 
-    function test_setPaymentRouterAdminBeforeRecords() public {
-        ReputationStorage freshImpl = new ReputationStorage();
-        ReputationStorage fresh = ReputationStorage(
-            address(
-                new ERC1967Proxy(
-                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
-                )
-            )
-        );
-        address fake = address(new PaymentRouter());
-        vm.prank(admin);
-        fresh.setPaymentRouter(fake);
-        assertEq(address(fresh.paymentRouter()), fake);
-    }
-
-    function test_setPaymentRouter_revertsWhenRecordsExist() public {
-        // Recording any outcome populates recordIds. After that the router
-        // pointer is frozen: re-pointing at a router whose paymentIds restart
-        // at 1 would collide with existing records and corrupt counters, so the
-        // guard forbids the swap and forces a full-stack redeploy instead.
-        vm.prank(provider);
-        eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
-        assertEq(reputation.getRecordCount(), 1, "record created");
-
-        vm.prank(admin);
-        vm.expectRevert("records exist");
-        reputation.setPaymentRouter(makeAddr("fakeRouter"));
-    }
-
-    function test_setPaymentRouterOnlyAdmin() public {
-        vm.prank(buyer);
-        vm.expectRevert("not admin");
-        reputation.setPaymentRouter(address(0x1));
-    }
-
-    function test_setPaymentRouterZeroReverts() public {
-        ReputationStorage freshImpl = new ReputationStorage();
-        ReputationStorage fresh = ReputationStorage(
-            address(
-                new ERC1967Proxy(
-                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
-                )
-            )
-        );
-        vm.prank(admin);
-        vm.expectRevert("zero router");
-        fresh.setPaymentRouter(address(0));
-    }
-
     function test_setEASOnlyAdmin() public {
         vm.prank(buyer);
         vm.expectRevert("not admin");
@@ -666,13 +621,51 @@ contract ReputationStorageTest is Test {
         fresh.setEAS(makeAddr("eoaEas"));
     }
 
+    function test_configurationMustBeCompleteAndFinalizesOnce() public {
+        ReputationStorage freshImpl = new ReputationStorage();
+        ReputationStorage fresh = ReputationStorage(
+            address(
+                new ERC1967Proxy(
+                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                )
+            )
+        );
+
+        vm.prank(admin);
+        vm.expectRevert("eas not configured");
+        fresh.finalizeConfiguration();
+
+        vm.prank(admin);
+        fresh.setEAS(address(eas));
+        vm.prank(admin);
+        vm.expectRevert("outcome schema not configured");
+        fresh.finalizeConfiguration();
+
+        vm.prank(admin);
+        fresh.setOutcomeSchema(bytes32(uint256(1)));
+        vm.prank(admin);
+        vm.expectRevert("confirmation schema not configured");
+        fresh.finalizeConfiguration();
+
+        vm.prank(admin);
+        fresh.setConfirmationSchema(bytes32(uint256(2)));
+        vm.prank(admin);
+        fresh.finalizeConfiguration();
+        assertTrue(fresh.isConfigured());
+
+        vm.prank(admin);
+        vm.expectRevert("configuration finalized");
+        fresh.finalizeConfiguration();
+    }
+
     function test_easAndSchemasCannotChangeAfterPayment() public {
+        assertTrue(reputation.isConfigured());
         vm.startPrank(admin);
-        vm.expectRevert("records exist");
+        vm.expectRevert("configuration finalized");
         reputation.setEAS(address(0x1));
-        vm.expectRevert("records exist");
+        vm.expectRevert("configuration finalized");
         reputation.setOutcomeSchema(bytes32(uint256(123)));
-        vm.expectRevert("records exist");
+        vm.expectRevert("configuration finalized");
         reputation.setConfirmationSchema(bytes32(uint256(456)));
         vm.stopPrank();
     }

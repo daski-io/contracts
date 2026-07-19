@@ -124,29 +124,33 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         return (v.validatorAddress, v.agentId, v.response, v.responseHash, v.tag, v.lastUpdate);
     }
 
+    function hasValidationResponse(bytes32 validationKey) external view override returns (bool) {
+        Validation storage v = _validations[validationKey];
+        require(v.exists, "no such request");
+        return v.hasResponse;
+    }
+
     function getSummary(uint256 agentId, address[] calldata validatorAddresses, string calldata tag)
         external
         view
         override
         returns (uint64 count, uint8 averageResponse)
     {
-        bytes32 tagHash = keccak256(bytes(tag));
-        bool filterTag = bytes(tag).length != 0;
-        uint256 total = 0;
-        bytes32[] storage requests = _agentRequests[agentId];
-
-        for (uint256 i = 0; i < requests.length; i++) {
-            Validation storage v = _validations[requests[i]];
-            if (!v.hasResponse) continue;
-            if (filterTag && keccak256(bytes(v.tag)) != tagHash) continue;
-            if (!_validatorIncluded(v.validatorAddress, validatorAddresses)) continue;
-            count++;
-            total += v.response;
-        }
-
+        uint256 total;
+        (count, total,) = _summaryPage(agentId, validatorAddresses, tag, 0, _agentRequests[agentId].length);
         if (count != 0) {
             averageResponse = SafeCast.toUint8(total / count);
         }
+    }
+
+    function getSummaryPaginated(
+        uint256 agentId,
+        address[] calldata validatorAddresses,
+        string calldata tag,
+        uint256 offset,
+        uint256 limit
+    ) external view override returns (uint64 count, uint256 totalResponse, uint256 nextOffset) {
+        return _summaryPage(agentId, validatorAddresses, tag, offset, limit);
     }
 
     function getAgentValidations(uint256 agentId) external view override returns (bytes32[] memory) {
@@ -194,6 +198,30 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
             if (allowed[i] == validator) return true;
         }
         return false;
+    }
+
+    function _summaryPage(
+        uint256 agentId,
+        address[] calldata validatorAddresses,
+        string calldata tag,
+        uint256 offset,
+        uint256 limit
+    ) internal view returns (uint64 count, uint256 totalResponse, uint256 nextOffset) {
+        bytes32[] storage requests = _agentRequests[agentId];
+        if (offset >= requests.length) return (0, 0, requests.length);
+
+        uint256 end = requests.length - offset > limit ? offset + limit : requests.length;
+        bytes32 tagHash = keccak256(bytes(tag));
+        bool filterTag = bytes(tag).length != 0;
+        for (uint256 i = offset; i < end; i++) {
+            Validation storage v = _validations[requests[i]];
+            if (!v.hasResponse) continue;
+            if (filterTag && keccak256(bytes(v.tag)) != tagHash) continue;
+            if (!_validatorIncluded(v.validatorAddress, validatorAddresses)) continue;
+            count++;
+            totalResponse += v.response;
+        }
+        nextOffset = end;
     }
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {

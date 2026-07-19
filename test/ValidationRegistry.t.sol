@@ -121,6 +121,23 @@ contract ValidationRegistryTest is Test {
         assertEq(responseHash, keccak256("resp"));
         assertEq(keccak256(bytes(tag)), keccak256(bytes("pass")));
         assertGt(lastUpdate, 0);
+        assertTrue(validation.hasValidationResponse(_key(agentId, REQ_HASH)));
+    }
+
+    function test_zeroResponseIsDistinguishedFromPending() public {
+        vm.prank(agentOwner);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        bytes32 key = _key(agentId, REQ_HASH);
+        assertFalse(validation.hasValidationResponse(key));
+
+        vm.prank(validator);
+        validation.validationResponse(key, 0, "", bytes32(0), "fail");
+
+        assertTrue(validation.hasValidationResponse(key));
+        address[] memory validators = new address[](0);
+        (uint64 count, uint8 average) = validation.getSummary(agentId, validators, "fail");
+        assertEq(count, 1);
+        assertEq(average, 0);
     }
 
     function test_validationResponseOnlyByValidator() public {
@@ -238,5 +255,40 @@ contract ValidationRegistryTest is Test {
         (uint64 count, uint8 average) = validation.getSummary(agentId, validators, "security");
         assertEq(count, 1);
         assertEq(average, 80);
+    }
+
+    function test_getSummaryPaginatedReturnsPartialCountAndSum() public {
+        bytes32[] memory hashes = new bytes32[](4);
+        vm.startPrank(agentOwner);
+        for (uint256 i = 0; i < hashes.length; i++) {
+            hashes[i] = keccak256(abi.encode("summary-page", i));
+            validation.validationRequest(validator, agentId, "u", hashes[i]);
+        }
+        vm.stopPrank();
+
+        vm.startPrank(validator);
+        validation.validationResponse(_key(agentId, hashes[0]), 10, "", bytes32(0), "score");
+        validation.validationResponse(_key(agentId, hashes[1]), 20, "", bytes32(0), "other");
+        validation.validationResponse(_key(agentId, hashes[2]), 30, "", bytes32(0), "score");
+        vm.stopPrank();
+
+        address[] memory validators = new address[](0);
+        (uint64 firstCount, uint256 firstTotal, uint256 firstNext) =
+            validation.getSummaryPaginated(agentId, validators, "score", 0, 2);
+        assertEq(firstCount, 1);
+        assertEq(firstTotal, 10);
+        assertEq(firstNext, 2);
+
+        (uint64 secondCount, uint256 secondTotal, uint256 secondNext) =
+            validation.getSummaryPaginated(agentId, validators, "score", firstNext, 2);
+        assertEq(secondCount, 1);
+        assertEq(secondTotal, 30);
+        assertEq(secondNext, 4);
+
+        (uint64 pastCount, uint256 pastTotal, uint256 pastNext) =
+            validation.getSummaryPaginated(agentId, validators, "score", 99, 2);
+        assertEq(pastCount, 0);
+        assertEq(pastTotal, 0);
+        assertEq(pastNext, 4);
     }
 }

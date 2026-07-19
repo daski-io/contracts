@@ -136,23 +136,15 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         require(record.paymentId != 0, "payment not recorded");
         BuyerConfirmation confirmation = BuyerConfirmation(raw);
 
-        if (a.refUID != bytes32(0)) {
+        bytes32 currentUid = record.currentConfirmationUid;
+        if (currentUid != bytes32(0)) {
+            require(a.refUID == currentUid, "must ref current confirmation");
             require(a.refUID != a.uid, "self refUID");
-            BuyerConfirmation previous = confirmationByUid[a.refUID];
-            require(previous != BuyerConfirmation.Pending, "refUID is not a tracked confirmation");
-            require(paymentIdByUid[a.refUID] == paymentId, "refUID belongs to different payment");
-            _decrementConfirmation(payment, record.serviceId, previous);
-            delete confirmationByUid[a.refUID];
-            delete paymentIdByUid[a.refUID];
         } else {
-            require(record.confirmation == BuyerConfirmation.Pending, "must ref prior confirmation");
+            require(a.refUID == bytes32(0), "refUID is not a tracked confirmation");
         }
 
-        record.confirmation = confirmation;
-        record.confirmationTimestamp = block.timestamp;
-        _incrementConfirmation(payment, record.serviceId, confirmation);
-        confirmationByUid[a.uid] = confirmation;
-        paymentIdByUid[a.uid] = paymentId;
+        _transitionConfirmation(payment, record, confirmation, a.uid);
 
         emit BuyerConfirmationSubmitted(
             paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, confirmation, a.uid, a.refUID
@@ -160,19 +152,35 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _onConfirmationRevoke(Attestation calldata a) internal {
-        BuyerConfirmation previous = confirmationByUid[a.uid];
-        if (previous == BuyerConfirmation.Pending) return;
-
         uint256 paymentId = paymentIdByUid[a.uid];
+        if (paymentId == 0) return;
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
         ReputationRecord storage record = _records[paymentId];
-        _decrementConfirmation(payment, record.serviceId, previous);
-        delete confirmationByUid[a.uid];
-        delete paymentIdByUid[a.uid];
+        if (record.currentConfirmationUid != a.uid) return;
+        _transitionConfirmation(payment, record, BuyerConfirmation.Pending, bytes32(0));
+    }
 
-        if (record.confirmation == previous) {
-            record.confirmation = BuyerConfirmation.Pending;
-            record.confirmationTimestamp = 0;
+    function _transitionConfirmation(
+        IPaymentRouter.PaymentRecord memory payment,
+        ReputationRecord storage record,
+        BuyerConfirmation next,
+        bytes32 nextUid
+    ) private {
+        bytes32 previousUid = record.currentConfirmationUid;
+        if (previousUid != bytes32(0)) {
+            BuyerConfirmation previous = confirmationByUid[previousUid];
+            _decrementConfirmation(payment, record.serviceId, previous);
+            delete confirmationByUid[previousUid];
+            delete paymentIdByUid[previousUid];
+        }
+
+        record.confirmation = next;
+        record.currentConfirmationUid = nextUid;
+        record.confirmationTimestamp = nextUid == bytes32(0) ? 0 : block.timestamp;
+        if (nextUid != bytes32(0)) {
+            _incrementConfirmation(payment, record.serviceId, next);
+            confirmationByUid[nextUid] = next;
+            paymentIdByUid[nextUid] = record.paymentId;
         }
     }
 

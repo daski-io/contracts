@@ -30,6 +30,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
         uint256 outcomeTimestamp;
         uint256 confirmationTimestamp;
         bool outcomeRecorded;
+        bytes32 currentConfirmationUid;
     }
 
     mapping(uint256 => ReputationRecord) internal _records;
@@ -52,6 +53,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
     IEAS public eas;
     bytes32 public outcomeSchema;
     bytes32 public confirmationSchema;
+    bool internal _configured;
     mapping(bytes32 => BuyerConfirmation) public confirmationByUid;
     mapping(bytes32 => uint256) public paymentIdByUid;
 
@@ -87,10 +89,12 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
     event PaymentRecorded(
         uint256 indexed paymentId, uint256 indexed providerAgentId, uint256 indexed buyerAgentId, bytes32 serviceId
     );
-    event PaymentRouterUpdated(address indexed oldRouter, address indexed newRouter);
     event EASUpdated(address indexed oldEAS, address indexed newEAS);
     event OutcomeSchemaUpdated(bytes32 indexed oldSchema, bytes32 indexed newSchema);
     event ConfirmationSchemaUpdated(bytes32 indexed oldSchema, bytes32 indexed newSchema);
+    event ConfigurationFinalized(
+        address indexed paymentRouter, address indexed eas, bytes32 indexed outcomeSchema, bytes32 confirmationSchema
+    );
 
     modifier onlyPaymentRouter() {
         require(msg.sender == address(paymentRouter), "not payment router");

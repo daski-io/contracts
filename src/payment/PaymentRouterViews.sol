@@ -19,15 +19,23 @@ abstract contract PaymentRouterViews is PaymentRouterStorage {
         return _refundedAmount[paymentId];
     }
 
-    function serviceRefUsed(bytes32 serviceRef) external view returns (bool) {
-        return _usedServiceRefs[serviceRef];
+    function computePaymentKey(uint256 buyerAgentId, uint256 providerAgentId, bytes32 serviceId, bytes32 serviceRef)
+        external
+        pure
+        returns (bytes32)
+    {
+        return _paymentKey(buyerAgentId, providerAgentId, serviceId, serviceRef);
+    }
+
+    function paymentKeyUsed(bytes32 paymentKey) external view returns (bool) {
+        return _usedPaymentKeys[paymentKey];
     }
 
     function isAdapter(address adapter) external view returns (bool) {
-        return adapters[adapter];
+        return _adapters[adapter];
     }
 
     function isAcceptedToken(address token) external view returns (bool) {
-        return acceptedTokens[token];
+        return _acceptedTokens[token];
     }
 }

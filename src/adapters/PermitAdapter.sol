@@ -49,7 +49,9 @@ contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
             catch {}
 
         // Pull funds from buyer straight into the router.
+        uint256 balanceBefore = _routerBalance(token);
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
+        _requireExactFunding(token, balanceBefore, amount);
 
         paymentId = router.settle(token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId);
     }

@@ -60,7 +60,13 @@ interface IPaymentRouter {
     // ── Views ────────────────────────────────────────────────────────
     function getPayment(uint256 paymentId) external view returns (PaymentRecord memory);
     function refundedAmount(uint256 paymentId) external view returns (uint256);
-    function serviceRefUsed(bytes32 serviceRef) external view returns (bool);
+    /// @notice Returns the replay-protection key for one buyer/provider/service
+    ///         namespace and its gateway-supplied reference.
+    function computePaymentKey(uint256 buyerAgentId, uint256 providerAgentId, bytes32 serviceId, bytes32 serviceRef)
+        external
+        pure
+        returns (bytes32);
+    function paymentKeyUsed(bytes32 paymentKey) external view returns (bool);
     function isAdapter(address adapter) external view returns (bool);
     function isAcceptedToken(address token) external view returns (bool);
     function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount);

@@ -10,7 +10,6 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
@@ -54,7 +53,8 @@ contract Deploy is Script {
         );
         require(identityRegistry.code.length > 0, "IDENTITY_REGISTRY_ADDRESS has no code on this chain");
 
-        address usdcAddress = vm.envOr("USDC_ADDRESS", address(0));
+        address usdcAddress = vm.envAddress("USDC_ADDRESS");
+        require(usdcAddress != address(0), "USDC_ADDRESS is required");
         uint256 listingFee = vm.envOr("LISTING_FEE", uint256(1_000_000));
         uint256 commissionBps = vm.envOr("COMMISSION_BPS", uint256(500));
 
@@ -62,9 +62,7 @@ contract Deploy is Script {
         address schemaRegistryAddress = vm.envOr("EAS_SCHEMA_REGISTRY_ADDRESS", DEFAULT_SCHEMA_REGISTRY);
         require(easAddress.code.length > 0, "EAS_ADDRESS has no code");
         require(schemaRegistryAddress.code.length > 0, "EAS_SCHEMA_REGISTRY_ADDRESS has no code");
-        if (usdcAddress != address(0)) {
-            require(usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
-        }
+        require(usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
 
         address deployer = vm.addr(deployerKey);
         // Final admin for every proxy. It must be an already-deployed
@@ -84,14 +82,7 @@ contract Deploy is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // ── (a) USDC ──────────────────────────────────────────────────
-        if (usdcAddress == address(0)) {
-            MockUSDC mockUsdc = new MockUSDC();
-            usdcAddress = address(mockUsdc);
-            console.log("MockUSDC deployed:", usdcAddress);
-        } else {
-            console.log("Using existing USDC:", usdcAddress);
-        }
+        console.log("Using existing USDC:", usdcAddress);
 
         // ── (b) AgentIndex (Daski companion to the canonical registry) ─
         AgentIndex agentIndexImpl = new AgentIndex();
@@ -166,6 +157,7 @@ contract Deploy is Script {
         reputation.setEAS(easAddress);
         reputation.setOutcomeSchema(outcomeSchemaUid);
         reputation.setConfirmationSchema(confirmationSchemaUid);
+        reputation.finalizeConfiguration();
 
         // ── (h) X402Adapter ───────────────────────────────────────────
         X402Adapter x402AdapterImpl = new X402Adapter();

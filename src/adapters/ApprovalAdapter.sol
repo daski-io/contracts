@@ -38,7 +38,9 @@ contract ApprovalAdapter is AdapterBaseUpgradeable, IApprovalAdapter {
         // registry, so a stale wallet returns found=false and reverts here.
         uint256 buyerAgentId = _resolveBuyer(msg.sender);
 
+        uint256 balanceBefore = _routerBalance(token);
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
+        _requireExactFunding(token, balanceBefore, amount);
 
         paymentId = router.settle(token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId);
     }

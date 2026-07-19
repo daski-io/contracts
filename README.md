@@ -33,6 +33,12 @@ still in flux and has no canonical deployment yet. Daski's EAS layer
 (`ReputationStorage`) is the payment-verified internal ledger that drives
 ranking — it is Daski-native, not ERC-8004 reputation.
 
+Provider approval, marketplace listing visibility, and the reputation shown
+in discovery are gateway trust boundaries for the MVP. The contracts require
+an active Daski provider and service before settlement, but their raw public
+transaction counters are not a permissionless Sybil-resistance mechanism and
+must not be treated as marketplace eligibility or ranking on their own.
+
 ## Three-layer identity model
 
 | Layer       | Where it lives                                     | Identifier        | Example                |
@@ -50,12 +56,12 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. `resolve` returns an explicit found flag because agent ID 0 is valid. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
-| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
+| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle and namespaces replay protection by buyer, provider, service, and service reference. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
-| **ValidationRegistry** | ERC-8004 request/response attestations and summary queries (Daski-hosted until a canonical validation registry exists). Documented deviation from the draft spec: records are keyed by `computeValidationKey(agentId, requestHash)` — also returned by `validationRequest` — NOT by the raw `requestHash`; external clients must use that key for `validationResponse`/reads. The namespacing closes a cross-agent request-hash squatting vector the draft spec doesn't address. |
-| **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
+| **ValidationRegistry** | ERC-8004 request/response attestations and paginated summary queries (Daski-hosted until a canonical validation registry exists). `hasValidationResponse` distinguishes a pending request from a completed response of zero. Documented deviation from the draft spec: records are keyed by `computeValidationKey(agentId, requestHash)` — also returned by `validationRequest` — NOT by the raw `requestHash`; external clients must use that key for `validationResponse`/reads. The namespacing closes a cross-agent request-hash squatting vector the draft spec doesn't address. |
+| **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. Resolver addresses and schema UIDs are permanently locked by one-time configuration finalization before payment rails can be enabled. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
@@ -137,15 +143,15 @@ forge fmt
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 61 |
+| PaymentRouter         | 58 |
 | ReputationStorage     | 33 |
 | ServiceRegistry       | 24 |
 | AgentIndex            | 19 |
 | ProviderRegistry      | 18 |
 | X402Adapter           | 14 |
-| ValidationRegistry    | 17 |
+| ValidationRegistry    | 19 |
 | PermitAdapter         | 5  |
-| ApprovalAdapter       | 4  |
+| ApprovalAdapter       | 5  |
 | Integration           | 3  |
 
 Tests run against `test/mocks/MockCanonicalIdentityRegistry.sol`, a faithful
@@ -164,10 +170,9 @@ export ADMIN_ADDRESS=<deployed multisig or timelock>
 #   Base mainnet: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
 export IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
 
-# USDC token. Defaults shown:
+# REQUIRED: deployed USDC-compatible token for the target chain.
 #   Base Sepolia (Circle): 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 #   Base mainnet:          0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-# Omit to deploy MockUSDC instead (test deploys only).
 export USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
 
 # Optional (defaults shown)
@@ -176,6 +181,19 @@ export COMMISSION_BPS=500    # 5%
 
 forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
+
+For an isolated non-mainnet environment without a token, deploy the
+unrestricted-mint test double separately, then supply its logged address to
+the production-shaped deployment:
+
+```bash
+forge script script/DeployMockUSDC.s.sol --rpc-url <RPC_URL> --broadcast
+export USDC_ADDRESS=<logged MockUSDC address>
+forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+`Deploy.s.sol` never creates a mock token or silently substitutes one for a
+missing production dependency.
 
 Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
 of `forge script` output. The governance contract must then call

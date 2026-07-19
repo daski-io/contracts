@@ -50,10 +50,24 @@ interface IValidationRegistry {
             uint256 lastUpdate
         );
 
+    /// @notice Distinguishes a pending request from a completed zero response.
+    function hasValidationResponse(bytes32 validationKey) external view returns (bool);
+
     function getSummary(uint256 agentId, address[] calldata validatorAddresses, string calldata tag)
         external
         view
         returns (uint64 count, uint8 averageResponse);
+
+    /// @notice Returns the matching count and response sum for one page.
+    /// @dev Callers aggregate pages and divide the total sum by total count.
+    ///      `nextOffset` is the next request-list position to scan.
+    function getSummaryPaginated(
+        uint256 agentId,
+        address[] calldata validatorAddresses,
+        string calldata tag,
+        uint256 offset,
+        uint256 limit
+    ) external view returns (uint64 count, uint256 totalResponse, uint256 nextOffset);
 
     /// @notice Returns namespaced validation keys requested for `agentId`.
     function getAgentValidations(uint256 agentId) external view returns (bytes32[] memory validationKeys);

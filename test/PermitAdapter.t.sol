@@ -9,7 +9,7 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IPermitAdapter} from "../src/interfaces/IPermitAdapter.sol";
 import {PermitSigner} from "./helpers/PermitSigner.sol";

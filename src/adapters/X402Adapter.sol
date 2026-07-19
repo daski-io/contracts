@@ -106,6 +106,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
 
         // Pull funds: buyer -> router via EIP-3009. Token signature binds
         // the signer to exactly this `to=router` value.
+        uint256 balanceBefore = _routerBalance(token);
         IERC3009(token)
             .transferWithAuthorization(
                 auth.from,
@@ -118,6 +119,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
                 auth.r,
                 auth.s
             );
+        _requireExactFunding(token, balanceBefore, amount);
 
         // Router holds the funds now; delegate the split and bookkeeping.
         // auth.from is the payer wallet — cached by the router as the refund

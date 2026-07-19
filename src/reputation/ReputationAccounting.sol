@@ -2,12 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
-import {IEAS} from "../interfaces/IEAS.sol";
-import {ReputationStorageBase} from "./ReputationStorageBase.sol";
+import {ReputationAdmin} from "./ReputationAdmin.sol";
 
-/// @notice Payment/refund accounting, aggregate views, and immutable-history
-///         configuration guards.
-abstract contract ReputationAccounting is ReputationStorageBase {
+/// @notice Payment/refund accounting and aggregate reputation views.
+abstract contract ReputationAccounting is ReputationAdmin {
     function recordPayment(uint256 paymentId) external onlyPaymentRouter {
         require(_records[paymentId].paymentId == 0, "payment already recorded");
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
@@ -22,7 +20,8 @@ abstract contract ReputationAccounting is ReputationStorageBase {
             outcomeAttestationDelay: 0,
             outcomeTimestamp: 0,
             confirmationTimestamp: 0,
-            outcomeRecorded: false
+            outcomeRecorded: false,
+            currentConfirmationUid: bytes32(0)
         });
         recordIds.push(paymentId);
         providerTransactionCount[payment.providerAgentId]++;
@@ -46,10 +45,6 @@ abstract contract ReputationAccounting is ReputationStorageBase {
 
     function getRecordCount() external view returns (uint256) {
         return recordIds.length;
-    }
-
-    function getRefundedAmount(uint256 paymentId) external view returns (uint256) {
-        return refundedAmount[paymentId];
     }
 
     function getProviderStats(uint256 id) external view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
@@ -81,41 +76,5 @@ abstract contract ReputationAccounting is ReputationStorageBase {
 
     function getBuyerStats(uint256 id) external view returns (uint256, uint256, uint256) {
         return (buyerTransactionCount[id], buyerConfirmedCount[id], buyerNotConfirmedCount[id]);
-    }
-
-    function setPaymentRouter(address newRouter) external onlyAdmin {
-        require(recordIds.length == 0, "records exist");
-        require(newRouter != address(0), "zero router");
-        require(newRouter.code.length > 0, "router has no code");
-        address oldRouter = address(paymentRouter);
-        paymentRouter = IPaymentRouter(newRouter);
-        emit PaymentRouterUpdated(oldRouter, newRouter);
-    }
-
-    function setEAS(address newEAS) external onlyAdmin {
-        require(recordIds.length == 0, "records exist");
-        require(newEAS != address(0), "zero eas");
-        require(newEAS.code.length > 0, "eas has no code");
-        address oldEAS = address(eas);
-        eas = IEAS(newEAS);
-        emit EASUpdated(oldEAS, newEAS);
-    }
-
-    function setOutcomeSchema(bytes32 newSchema) external onlyAdmin {
-        require(newSchema != bytes32(0), "zero schema");
-        require(recordIds.length == 0, "records exist");
-        require(newSchema != confirmationSchema, "schemas must differ");
-        bytes32 oldSchema = outcomeSchema;
-        outcomeSchema = newSchema;
-        emit OutcomeSchemaUpdated(oldSchema, newSchema);
-    }
-
-    function setConfirmationSchema(bytes32 newSchema) external onlyAdmin {
-        require(newSchema != bytes32(0), "zero schema");
-        require(recordIds.length == 0, "records exist");
-        require(newSchema != outcomeSchema, "schemas must differ");
-        bytes32 oldSchema = confirmationSchema;
-        confirmationSchema = newSchema;
-        emit ConfirmationSchemaUpdated(oldSchema, newSchema);
     }
 }

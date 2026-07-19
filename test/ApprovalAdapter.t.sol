@@ -9,7 +9,8 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
@@ -158,5 +159,22 @@ contract ApprovalAdapterTest is Test {
         vm.prank(buyer);
         vm.expectRevert("buyer has no agent");
         adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId, serviceId);
+    }
+
+    function test_settleFeeOnTransferTokenRevertsAtomically() public {
+        FeeOnTransferToken feeToken = new FeeOnTransferToken();
+        feeToken.mint(buyer, 100e18);
+        vm.prank(admin);
+        router.setAcceptedToken(address(feeToken), true);
+
+        vm.prank(buyer);
+        feeToken.approve(address(adapter), 100e18);
+        vm.prank(buyer);
+        vm.expectRevert("unexpected token amount");
+        adapter.settle(address(feeToken), 100e18, keccak256("a-fee"), providerAgentId, serviceId);
+
+        assertEq(feeToken.balanceOf(buyer), 100e18);
+        assertEq(feeToken.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
     }
 }
