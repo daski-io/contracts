@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IAgentIndex} from "./interfaces/IAgentIndex.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
@@ -40,7 +41,7 @@ import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 /// registration and clears it when the NFT is transferred to the buyer. The
 /// buyer's control is therefore proven by ERC-721 ownership until it verifies
 /// another agentWallet. `resolve` accepts either.
-contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, IERC721Receiver, IAgentIndex {
+contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard, IERC721Receiver, IAgentIndex {
     /// @dev EIP-712 struct hash for gasless registration consent. The struct
     ///      layout is kept identical to the retired Daski IdentityRegistry's
     ///      RegisterAgent, so off-chain signers only swap the domain
@@ -77,6 +78,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, IERC721Receiver
     /// @inheritdoc IAgentIndex
     function registerWithSig(string calldata agentURI, address wallet, uint256 deadline, bytes calldata signature)
         external
+        nonReentrant
         returns (uint256 agentId)
     {
         require(block.timestamp <= deadline, "signature expired");
@@ -118,7 +120,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, IERC721Receiver
     // ------------------------------------------------------------------
 
     /// @inheritdoc IAgentIndex
-    function claim(uint256 agentId) external {
+    function claim(uint256 agentId) external nonReentrant {
         require(_controlsAgent(agentId, msg.sender), "not agent owner or wallet");
         _agentIdOf[msg.sender] = agentId;
         _hasBinding[msg.sender] = true;
@@ -126,7 +128,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, IERC721Receiver
     }
 
     /// @inheritdoc IAgentIndex
-    function unbind() external {
+    function unbind() external nonReentrant {
         require(_hasBinding[msg.sender], "nothing bound");
         uint256 agentId = _agentIdOf[msg.sender];
         delete _agentIdOf[msg.sender];

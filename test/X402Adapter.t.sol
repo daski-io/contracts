@@ -14,6 +14,7 @@ import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
+import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
 contract X402AdapterTest is Test {
     MockCanonicalIdentityRegistry identity;
@@ -94,6 +95,9 @@ contract X402AdapterTest is Test {
             )
         );
 
+        MockReputationSink sink = new MockReputationSink();
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);

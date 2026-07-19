@@ -19,24 +19,26 @@ interface IValidationRegistry {
 
     function getIdentityRegistry() external view returns (address identityRegistry);
 
+    function computeValidationKey(uint256 agentId, bytes32 requestHash) external pure returns (bytes32 validationKey);
+
     function validationRequest(
         address validatorAddress,
         uint256 agentId,
         string calldata requestURI,
         bytes32 requestHash
-    ) external;
+    ) external returns (bytes32 validationKey);
 
-    /// @notice Submit (or overwrite) the response for `requestHash`. Caller
+    /// @notice Submit (or overwrite) the response for `validationKey`. Caller
     ///         MUST be the validator named in the request.
     function validationResponse(
-        bytes32 requestHash,
+        bytes32 validationKey,
         uint8 response,
         string calldata responseURI,
         bytes32 responseHash,
         string calldata tag
     ) external;
 
-    function getValidationStatus(bytes32 requestHash)
+    function getValidationStatus(bytes32 validationKey)
         external
         view
         returns (
@@ -53,8 +55,8 @@ interface IValidationRegistry {
         view
         returns (uint64 count, uint8 averageResponse);
 
-    /// @notice Returns the request hashes requested for `agentId`.
-    function getAgentValidations(uint256 agentId) external view returns (bytes32[] memory requestHashes);
+    /// @notice Returns namespaced validation keys requested for `agentId`.
+    function getAgentValidations(uint256 agentId) external view returns (bytes32[] memory validationKeys);
 
     function getAgentValidationCount(uint256 agentId) external view returns (uint256);
 
@@ -63,8 +65,8 @@ interface IValidationRegistry {
         view
         returns (bytes32[] memory page);
 
-    /// @notice Returns the request hashes assigned to `validatorAddress`.
-    function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory requestHashes);
+    /// @notice Returns namespaced validation keys assigned to `validatorAddress`.
+    function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory validationKeys);
 
     function getValidatorRequestCount(address validatorAddress) external view returns (uint256);
 

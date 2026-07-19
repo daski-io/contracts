@@ -84,7 +84,7 @@ contract PaymentRouterTest is Test {
     event AdapterSet(address indexed adapter, bool allowed);
     event AcceptedTokenSet(address indexed token, bool allowed);
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
-    event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     function setUp() public {
         usdc = new MockUSDC();
@@ -128,6 +128,9 @@ contract PaymentRouterTest is Test {
         );
 
         adapter = new PassThroughAdapter(router);
+        ToggleReputationSink sink = new ToggleReputationSink();
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
@@ -186,6 +189,8 @@ contract PaymentRouterTest is Test {
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
         assertEq(rec.cachedBuyerWallet, buyer);
+        assertEq(rec.cachedProviderOwner, provider);
+        assertEq(rec.cachedProviderWallet, provider);
         assertEq(rec.serviceRef, keccak256("ref-1"));
         assertEq(rec.paidAt, block.timestamp, "paidAt captures settlement timestamp");
 
@@ -715,7 +720,7 @@ contract PaymentRouterTest is Test {
     // ── Admin ────────────────────────────────────────────────────────
 
     function test_setAdapter() public {
-        address someAdapter = makeAddr("someAdapter");
+        address someAdapter = address(new PassThroughAdapter(router));
         assertFalse(router.isAdapter(someAdapter));
 
         vm.expectEmit(true, true, true, true, address(router));
@@ -735,8 +740,14 @@ contract PaymentRouterTest is Test {
         router.setAdapter(address(0), true);
     }
 
+    function test_setAdapterWithoutCodeReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("adapter has no code");
+        router.setAdapter(makeAddr("eoaAdapter"), true);
+    }
+
     function test_setAcceptedToken() public {
-        address someToken = makeAddr("someToken");
+        address someToken = address(new MockUSDC());
         vm.expectEmit(true, true, true, true, address(router));
         emit AcceptedTokenSet(someToken, true);
         vm.prank(admin);
@@ -750,8 +761,47 @@ contract PaymentRouterTest is Test {
         router.setAcceptedToken(address(0), true);
     }
 
+    function test_setAcceptedTokenWithoutCodeReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("token has no code");
+        router.setAcceptedToken(makeAddr("eoaToken"), true);
+    }
+
+    function test_paymentEntryPointsRequireReputationConfiguration() public {
+        PaymentRouter freshImpl = new PaymentRouter();
+        PaymentRouter fresh = PaymentRouter(
+            address(
+                new ERC1967Proxy(
+                    address(freshImpl),
+                    abi.encodeCall(
+                        PaymentRouter.initialize,
+                        (address(identity), address(registry), address(serviceRegistry), treasury, 500, admin)
+                    )
+                )
+            )
+        );
+
+        vm.prank(admin);
+        vm.expectRevert("reputation not configured");
+        fresh.setAdapter(address(adapter), true);
+
+        vm.prank(admin);
+        vm.expectRevert("reputation not configured");
+        fresh.setAcceptedToken(address(usdc), true);
+    }
+
+    function test_setReputationStorageRejectsInvalidAddress() public {
+        vm.prank(admin);
+        vm.expectRevert("zero reputation storage");
+        router.setReputationStorage(address(0));
+
+        vm.prank(admin);
+        vm.expectRevert("reputation storage has no code");
+        router.setReputationStorage(makeAddr("eoaSink"));
+    }
+
     function test_setServiceRegistry() public {
-        address newReg = makeAddr("newReg");
+        address newReg = address(new ServiceRegistry());
         vm.prank(admin);
         router.setServiceRegistry(newReg);
         assertEq(address(router.serviceRegistry()), newReg);
@@ -761,6 +811,12 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         vm.expectRevert("zero service registry");
         router.setServiceRegistry(address(0));
+    }
+
+    function test_setServiceRegistryWithoutCodeReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("service registry has no code");
+        router.setServiceRegistry(makeAddr("eoaRegistry"));
     }
 
     function test_setServiceRegistry_onlyAdmin() public {
@@ -891,6 +947,12 @@ contract PaymentRouterTest is Test {
         vm.prank(newAdmin);
         router.setCommissionBps(100);
         assertEq(router.commissionBps(), 100);
+    }
+
+    function test_transferAdminZeroReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("zero admin");
+        router.transferAdmin(address(0));
     }
 
     // ── Views ────────────────────────────────────────────────────────

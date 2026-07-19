@@ -18,10 +18,8 @@ import {MockEAS} from "./helpers/MockEAS.sol";
 import {
     AttestationRequest,
     AttestationRequestData,
-    DelegatedAttestationRequest,
     RevocationRequest,
-    RevocationRequestData,
-    Signature
+    RevocationRequestData
 } from "../src/interfaces/IEAS.sol";
 
 contract ReputationStorageTest is Test {
@@ -50,6 +48,7 @@ contract ReputationStorageTest is Test {
     uint256 buyerAgentId;
     bytes32 serviceId;
     uint256 paymentId;
+    mapping(uint256 => address) providerRecipients;
 
     event ReputationRefunded(
         uint256 indexed paymentId, bytes32 indexed serviceId, uint256 amountToBuyer, uint256 cumulativeRefunded
@@ -113,11 +112,6 @@ contract ReputationStorageTest is Test {
             )
         );
 
-        vm.prank(admin);
-        router.setAdapter(address(adapter), true);
-        vm.prank(admin);
-        router.setAcceptedToken(address(usdc), true);
-
         ReputationStorage repImpl = new ReputationStorage();
         reputation = ReputationStorage(
             address(
@@ -136,6 +130,8 @@ contract ReputationStorageTest is Test {
         reputation.setOutcomeSchema(outcomeSchemaUid);
         reputation.setConfirmationSchema(confirmationSchemaUid);
         router.setReputationStorage(address(reputation));
+        router.setAdapter(address(adapter), true);
+        router.setAcceptedToken(address(usdc), true);
         vm.stopPrank();
 
         vm.prank(provider);
@@ -160,6 +156,7 @@ contract ReputationStorageTest is Test {
         agentIndex.claim(buyerAgentId);
         usdc.mint(buyer, 100e6);
         paymentId = _payAsBuyer(100e6, keccak256("service-1"), serviceId);
+        providerRecipients[paymentId] = provider;
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -183,7 +180,7 @@ contract ReputationStorageTest is Test {
         return AttestationRequest({
             schema: outcomeSchemaUid,
             data: AttestationRequestData({
-                recipient: address(0),
+                recipient: _providerRecipient(pid),
                 expirationTime: 0,
                 revocable: false,
                 refUID: bytes32(0),
@@ -201,7 +198,7 @@ contract ReputationStorageTest is Test {
         return AttestationRequest({
             schema: confirmationSchemaUid,
             data: AttestationRequestData({
-                recipient: address(0),
+                recipient: _providerRecipient(pid),
                 expirationTime: 0,
                 revocable: true,
                 refUID: refUid,
@@ -211,25 +208,8 @@ contract ReputationStorageTest is Test {
         });
     }
 
-    function _delegatedConfirm(address attester, uint256 pid, ReputationStorageBase.BuyerConfirmation c, bytes32 refUid)
-        internal
-        view
-        returns (DelegatedAttestationRequest memory)
-    {
-        return DelegatedAttestationRequest({
-            schema: confirmationSchemaUid,
-            data: AttestationRequestData({
-                recipient: address(0),
-                expirationTime: 0,
-                revocable: true,
-                refUID: refUid,
-                data: abi.encode(pid, uint8(c)),
-                value: 0
-            }),
-            signature: Signature({v: 0, r: bytes32(0), s: bytes32(0)}),
-            attester: attester,
-            deadline: type(uint64).max
-        });
+    function _providerRecipient(uint256 pid) internal view returns (address) {
+        return providerRecipients[pid];
     }
 
     // ── Outcome via EAS ─────────────────────────────────────────────────
@@ -265,6 +245,29 @@ contract ReputationStorageTest is Test {
         vm.prank(buyer);
         vm.expectRevert("not provider for this payment");
         eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
+    }
+
+    function test_outcomeRejectsWrongRecipient() public {
+        AttestationRequest memory request = _outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed);
+        request.data.recipient = unauthorized;
+
+        vm.prank(provider);
+        vm.expectRevert("wrong reputation recipient");
+        eas.attest(request);
+    }
+
+    function test_providerTransferDoesNotTransferHistoricalAttestationAuthority() public {
+        address newOwner = makeAddr("newProviderOwner");
+        vm.prank(provider);
+        identity.transferFrom(provider, newOwner, providerAgentId);
+
+        vm.prank(newOwner);
+        vm.expectRevert("not provider for this payment");
+        eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
+
+        vm.prank(provider);
+        eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
+        assertTrue(reputation.getRecord(paymentId).outcomeRecorded);
     }
 
     function test_recordOutcomeDoubleReverts() public {
@@ -316,6 +319,33 @@ contract ReputationStorageTest is Test {
         vm.prank(provider);
         vm.expectRevert("not buyer for this payment");
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+    }
+
+    function test_confirmationRejectsWrongRecipient() public {
+        AttestationRequest memory request =
+            _confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0));
+        request.data.recipient = unauthorized;
+
+        vm.prank(buyer);
+        vm.expectRevert("wrong reputation recipient");
+        eas.attest(request);
+    }
+
+    function test_buyerTransferDoesNotTransferHistoricalConfirmationAuthority() public {
+        address newOwner = makeAddr("newBuyerOwner");
+        vm.prank(buyer);
+        identity.transferFrom(buyer, newOwner, buyerAgentId);
+
+        vm.prank(newOwner);
+        vm.expectRevert("not buyer for this payment");
+        eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+
+        vm.prank(buyer);
+        eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+        assertEq(
+            uint256(reputation.getRecord(paymentId).confirmation),
+            uint256(ReputationStorageBase.BuyerConfirmation.Confirmed)
+        );
     }
 
     // ── Confirmation revision via refUID (EAS-idiomatic) ────────────────
@@ -420,6 +450,7 @@ contract ReputationStorageTest is Test {
         );
         vm.prank(relayer);
         uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, svc2, auth);
+        providerRecipients[paymentId2] = provider2;
 
         vm.prank(buyer2);
         vm.expectRevert("refUID belongs to different payment");
@@ -437,26 +468,6 @@ contract ReputationStorageTest is Test {
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.NotConfirmed, victimUid));
         assertEq(reputation.confirmedCount(providerAgentId), 0);
         assertEq(reputation.notConfirmedCount(providerAgentId), 1);
-    }
-
-    // ── Confirmation via delegated attestation ──────────────────────────
-
-    function test_delegatedConfirmationCreditsBuyer() public {
-        vm.prank(relayer);
-        eas.attestByDelegation(
-            _delegatedConfirm(buyer, paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0))
-        );
-        assertEq(reputation.confirmedCount(providerAgentId), 1);
-        assertEq(reputation.confirmedByService(serviceId), 1);
-        assertEq(reputation.buyerConfirmedCount(buyerAgentId), 1);
-    }
-
-    function test_delegatedConfirmationAttesterMustBeBuyer() public {
-        vm.prank(relayer);
-        vm.expectRevert("not buyer for this payment");
-        eas.attestByDelegation(
-            _delegatedConfirm(provider, paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0))
-        );
     }
 
     // ── Confirmation revocation decrements counters ─────────────────────
@@ -596,7 +607,7 @@ contract ReputationStorageTest is Test {
                 )
             )
         );
-        address fake = makeAddr("fakeRouter");
+        address fake = address(new PaymentRouter());
         vm.prank(admin);
         fresh.setPaymentRouter(fake);
         assertEq(address(fresh.paymentRouter()), fake);
@@ -623,15 +634,39 @@ contract ReputationStorageTest is Test {
     }
 
     function test_setPaymentRouterZeroReverts() public {
+        ReputationStorage freshImpl = new ReputationStorage();
+        ReputationStorage fresh = ReputationStorage(
+            address(
+                new ERC1967Proxy(
+                    address(freshImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                )
+            )
+        );
         vm.prank(admin);
         vm.expectRevert("zero router");
-        reputation.setPaymentRouter(address(0));
+        fresh.setPaymentRouter(address(0));
     }
 
     function test_setEASOnlyAdmin() public {
         vm.prank(buyer);
         vm.expectRevert("not admin");
         reputation.setEAS(address(0x1));
+    }
+
+    function test_setEASRejectsAddressWithoutCode() public {
+        ReputationStorage freshImpl = new ReputationStorage();
+        ReputationStorage fresh = ReputationStorage(
+            address(
+                new ERC1967Proxy(
+                    address(freshImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(identity), address(router), admin))
+                )
+            )
+        );
+        vm.prank(admin);
+        vm.expectRevert("eas has no code");
+        fresh.setEAS(makeAddr("eoaEas"));
     }
 
     function test_easAndSchemasCannotChangeAfterPayment() public {

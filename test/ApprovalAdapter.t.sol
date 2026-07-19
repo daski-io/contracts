@@ -11,6 +11,7 @@ import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
+import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
 contract ApprovalAdapterTest is Test {
     MockCanonicalIdentityRegistry identity;
@@ -86,6 +87,9 @@ contract ApprovalAdapterTest is Test {
             )
         );
 
+        MockReputationSink sink = new MockReputationSink();
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);

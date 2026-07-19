@@ -3,8 +3,7 @@ pragma solidity ^0.8.24;
 
 /// @notice Minimal subset of EIP-3009 used by X402Adapter to pull tokens from
 /// a buyer (directly into the PaymentRouter) on behalf of an off-chain
-/// facilitator, and by DirectTransferAdapter to check that an authorization
-/// submitted by an EXTERNAL facilitator has been consumed.
+/// facilitator.
 interface IERC3009 {
     function transferWithAuthorization(
         address from,

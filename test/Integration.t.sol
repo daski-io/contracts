@@ -18,18 +18,13 @@ import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
-import {
-    AttestationRequest,
-    AttestationRequestData,
-    DelegatedAttestationRequest,
-    Signature
-} from "../src/interfaces/IEAS.sol";
+import {AttestationRequest, AttestationRequestData} from "../src/interfaces/IEAS.sol";
 
 /// @notice End-to-end: agents register on the (mocked) canonical ERC-8004
 ///         IdentityRegistry, a Daski provider lists, services are registered
 ///         in ServiceRegistry, x402 payment settles through the
 ///         ServiceRegistry-validated route, provider attests outcome, buyer
-///         confirms via delegated EAS, refund mirrors per-service into
+///         confirms via EAS, refund mirrors per-service into
 ///         ReputationStorage, and a final test verifies per-service vs.
 ///         per-provider counters. Public ERC-8004 feedback lives in the
 ///         canonical ReputationRegistry singleton (gateway-written,
@@ -124,9 +119,6 @@ contract IntegrationTest is Test {
             )
         );
 
-        router.setAdapter(address(adapter), true);
-        router.setAcceptedToken(address(usdc), true);
-
         ReputationStorage repStoreImpl = new ReputationStorage();
         reputation = ReputationStorage(
             address(
@@ -144,6 +136,8 @@ contract IntegrationTest is Test {
         reputation.setConfirmationSchema(confirmationSchemaUid);
 
         router.setReputationStorage(address(reputation));
+        router.setAdapter(address(adapter), true);
+        router.setAcceptedToken(address(usdc), true);
     }
 
     function _signedAuthAndSettle(
@@ -170,7 +164,7 @@ contract IntegrationTest is Test {
         return AttestationRequest({
             schema: outcomeSchemaUid,
             data: AttestationRequestData({
-                recipient: address(0),
+                recipient: _providerRecipient(pid),
                 expirationTime: 0,
                 revocable: false,
                 refUID: bytes32(0),
@@ -180,25 +174,23 @@ contract IntegrationTest is Test {
         });
     }
 
-    function _delegatedConfirm(address attester, uint256 pid)
-        internal
-        view
-        returns (DelegatedAttestationRequest memory)
-    {
-        return DelegatedAttestationRequest({
+    function _confirmReq(uint256 pid) internal view returns (AttestationRequest memory) {
+        return AttestationRequest({
             schema: confirmationSchemaUid,
             data: AttestationRequestData({
-                recipient: address(0),
+                recipient: _providerRecipient(pid),
                 expirationTime: 0,
                 revocable: true,
                 refUID: bytes32(0),
                 data: abi.encode(pid, uint8(ReputationStorageBase.BuyerConfirmation.Confirmed)),
                 value: 0
-            }),
-            signature: Signature({v: 0, r: bytes32(0), s: bytes32(0)}),
-            attester: attester,
-            deadline: type(uint64).max
+            })
         });
+    }
+
+    function _providerRecipient(uint256 pid) internal view returns (address) {
+        pid;
+        return provider;
     }
 
     function test_fullProtocolFlow() public {
@@ -260,9 +252,9 @@ contract IntegrationTest is Test {
         vm.prank(provider);
         eas.attest(outcomeReq);
 
-        // 6. Buyer submits confirmation via delegated attestation; relayer pays gas.
-        vm.prank(relayer);
-        eas.attestByDelegation(_delegatedConfirm(buyer, paymentId));
+        // 6. Buyer submits confirmation via EAS.
+        vm.prank(buyer);
+        eas.attest(_confirmReq(paymentId));
 
         // 7. Provider refunds a goodwill amount; reputation mirrors it per-service.
         vm.prank(provider);
@@ -285,11 +277,11 @@ contract IntegrationTest is Test {
         address validator = makeAddr("validator");
         bytes32 reqHash = keccak256("validation-req-1");
         vm.prank(provider);
-        validationRegistry.validationRequest(validator, providerAgentId, "ipfs://req", reqHash);
+        bytes32 validationKey = validationRegistry.validationRequest(validator, providerAgentId, "ipfs://req", reqHash);
         vm.prank(validator);
-        validationRegistry.validationResponse(reqHash, 100, "ipfs://resp", keccak256("resp"), "pass");
+        validationRegistry.validationResponse(validationKey, 100, "ipfs://resp", keccak256("resp"), "pass");
 
-        (, uint256 validatedAgentId, uint8 response,,,) = validationRegistry.getValidationStatus(reqHash);
+        (, uint256 validatedAgentId, uint8 response,,,) = validationRegistry.getValidationStatus(validationKey);
         assertEq(validatedAgentId, providerAgentId);
         assertEq(response, 100);
 
@@ -345,14 +337,14 @@ contract IntegrationTest is Test {
         for (uint256 i = 0; i < 3; i++) {
             vm.prank(provider);
             eas.attest(_outcomeReq(aPayments[i], ReputationStorageBase.TransactionOutcome.Completed));
-            vm.prank(relayer);
-            eas.attestByDelegation(_delegatedConfirm(buyer, aPayments[i]));
+            vm.prank(buyer);
+            eas.attest(_confirmReq(aPayments[i]));
         }
         for (uint256 i = 0; i < 2; i++) {
             vm.prank(provider);
             eas.attest(_outcomeReq(bPayments[i], ReputationStorageBase.TransactionOutcome.Completed));
-            vm.prank(relayer);
-            eas.attestByDelegation(_delegatedConfirm(buyer, bPayments[i]));
+            vm.prank(buyer);
+            eas.attest(_confirmReq(bPayments[i]));
         }
 
         // Refund 5 USDC against the FIRST service-A payment only.
@@ -442,12 +434,12 @@ contract IntegrationTest is Test {
         eas.attest(_outcomeReq(pid2, ReputationStorageBase.TransactionOutcome.Completed));
         vm.prank(provider);
         eas.attest(_outcomeReq(pid3, ReputationStorageBase.TransactionOutcome.Completed));
-        vm.prank(relayer);
-        eas.attestByDelegation(_delegatedConfirm(buyer, pid1));
-        vm.prank(relayer);
-        eas.attestByDelegation(_delegatedConfirm(buyer, pid2));
-        vm.prank(relayer);
-        eas.attestByDelegation(_delegatedConfirm(buyer, pid3));
+        vm.prank(buyer);
+        eas.attest(_confirmReq(pid1));
+        vm.prank(buyer);
+        eas.attest(_confirmReq(pid2));
+        vm.prank(buyer);
+        eas.attest(_confirmReq(pid3));
 
         // Reputation rolls up at the service level: 3 completed,
         // 3 confirmed against the SAME serviceId. Provider-level numbers

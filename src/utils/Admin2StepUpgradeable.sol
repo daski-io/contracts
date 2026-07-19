@@ -39,6 +39,7 @@ abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable {
     ///         step is recoverable. `newAdmin` must call `acceptAdmin` to
     ///         complete the handover.
     function transferAdmin(address newAdmin) external onlyAdmin {
+        require(newAdmin != address(0), "zero admin");
         pendingAdmin = newAdmin;
         emit AdminTransferStarted(admin, newAdmin);
     }

@@ -7,9 +7,7 @@ import {
     Attestation,
     AttestationRequest,
     AttestationRequestData,
-    DelegatedAttestationRequest,
     RevocationRequest,
-    DelegatedRevocationRequest,
     SchemaRecord
 } from "../../src/interfaces/IEAS.sol";
 import {ISchemaResolver} from "../../src/interfaces/ISchemaResolver.sol";
@@ -20,17 +18,9 @@ import {ISchemaResolver} from "../../src/interfaces/ISchemaResolver.sol";
 ///   * register()         — stores the schema + resolver, returns a UID.
 ///   * attest()           — builds an Attestation, calls resolver.attest().
 ///                          If the resolver reverts, the attest reverts too.
-///   * attestByDelegation — identical, but uses `request.attester` as the
-///                          attester field (signatures are NOT verified in
-///                          the mock — tests assert behavior given a valid
-///                          caller).
 ///   * revoke()           — calls resolver.revoke(); only the original
 ///                          attester may revoke, and only if the schema is
 ///                          revocable.
-///
-/// Not implemented: signature verification, nonce tracking, expiration
-/// enforcement, multi-attest batch externals. Production EAS has all of
-/// these — the resolver is agnostic to them.
 contract MockEAS is IEAS, ISchemaRegistry {
     mapping(bytes32 => SchemaRecord) internal _schemas;
     mapping(bytes32 => Attestation) internal _attestations;
@@ -55,16 +45,8 @@ contract MockEAS is IEAS, ISchemaRegistry {
         return _attest(request.schema, msg.sender, request.data);
     }
 
-    function attestByDelegation(DelegatedAttestationRequest calldata request) external payable returns (bytes32) {
-        return _attest(request.schema, request.attester, request.data);
-    }
-
     function revoke(RevocationRequest calldata request) external payable {
         _revoke(request.data.uid, msg.sender);
-    }
-
-    function revokeByDelegation(DelegatedRevocationRequest calldata request) external payable {
-        _revoke(request.data.uid, request.revoker);
     }
 
     function getAttestation(bytes32 uid) external view returns (Attestation memory) {

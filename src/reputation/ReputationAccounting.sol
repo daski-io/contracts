@@ -3,11 +3,11 @@ pragma solidity ^0.8.24;
 
 import {IPaymentRouter} from "../interfaces/IPaymentRouter.sol";
 import {IEAS} from "../interfaces/IEAS.sol";
-import {ReputationConfirmation} from "./ReputationConfirmation.sol";
+import {ReputationStorageBase} from "./ReputationStorageBase.sol";
 
 /// @notice Payment/refund accounting, aggregate views, and immutable-history
 ///         configuration guards.
-abstract contract ReputationAccounting is ReputationConfirmation {
+abstract contract ReputationAccounting is ReputationStorageBase {
     function recordPayment(uint256 paymentId) external onlyPaymentRouter {
         require(_records[paymentId].paymentId == 0, "payment already recorded");
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
@@ -84,16 +84,18 @@ abstract contract ReputationAccounting is ReputationConfirmation {
     }
 
     function setPaymentRouter(address newRouter) external onlyAdmin {
-        require(newRouter != address(0), "zero router");
         require(recordIds.length == 0, "records exist");
+        require(newRouter != address(0), "zero router");
+        require(newRouter.code.length > 0, "router has no code");
         address oldRouter = address(paymentRouter);
         paymentRouter = IPaymentRouter(newRouter);
         emit PaymentRouterUpdated(oldRouter, newRouter);
     }
 
     function setEAS(address newEAS) external onlyAdmin {
-        require(newEAS != address(0), "zero eas");
         require(recordIds.length == 0, "records exist");
+        require(newEAS != address(0), "zero eas");
+        require(newEAS.code.length > 0, "eas has no code");
         address oldEAS = address(eas);
         eas = IEAS(newEAS);
         emit EASUpdated(oldEAS, newEAS);

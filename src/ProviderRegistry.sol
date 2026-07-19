@@ -49,7 +49,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     event ProviderRegistered(uint256 indexed agentId, address indexed wallet);
     event ProviderActiveStatusChanged(uint256 indexed agentId, bool isActive);
     event ListingFeeUpdated(uint256 oldFee, uint256 newFee);
-    event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

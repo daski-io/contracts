@@ -25,7 +25,7 @@ abstract contract AdapterBaseUpgradeable is Admin2StepUpgradeable {
     }
 
     function _tryResolveBuyer(address wallet) internal view returns (uint256 agentId, bool found) {
-        return agentIndex.resolve(wallet);
+        (agentId, found) = agentIndex.resolve(wallet);
     }
 
     uint256[48] private _gap;

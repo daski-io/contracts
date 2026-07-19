@@ -87,7 +87,8 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         require(raw <= uint8(TransactionOutcome.Canceled), "bad outcome");
         TransactionOutcome outcome = TransactionOutcome(raw);
         IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
-        require(_controlsAgent(payment.providerAgentId, a.attester), "not provider for this payment");
+        require(_isHistoricalProvider(payment, a.attester), "not provider for this payment");
+        require(a.recipient == _providerRecipient(payment), "wrong reputation recipient");
 
         ReputationRecord storage record = _records[paymentId];
         require(record.paymentId != 0, "payment not recorded");
@@ -113,5 +114,105 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         emit OutcomeRecorded(
             paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, outcome, attestationDelay, a.uid
         );
+    }
+
+    function _onConfirmationAttest(Attestation calldata a) internal {
+        (uint256 paymentId, uint8 raw) = abi.decode(a.data, (uint256, uint8));
+        require(
+            raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed),
+            "binary confirmation only"
+        );
+
+        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+        require(a.attester == payment.cachedBuyerWallet, "not buyer for this payment");
+        require(a.recipient == _providerRecipient(payment), "wrong reputation recipient");
+
+        ReputationRecord storage record = _records[paymentId];
+        require(record.paymentId != 0, "payment not recorded");
+        BuyerConfirmation confirmation = BuyerConfirmation(raw);
+
+        if (a.refUID != bytes32(0)) {
+            require(a.refUID != a.uid, "self refUID");
+            BuyerConfirmation previous = confirmationByUid[a.refUID];
+            require(previous != BuyerConfirmation.Pending, "refUID is not a tracked confirmation");
+            require(paymentIdByUid[a.refUID] == paymentId, "refUID belongs to different payment");
+            _decrementConfirmation(payment, record.serviceId, previous);
+            delete confirmationByUid[a.refUID];
+            delete paymentIdByUid[a.refUID];
+        } else {
+            require(record.confirmation == BuyerConfirmation.Pending, "must ref prior confirmation");
+        }
+
+        record.confirmation = confirmation;
+        record.confirmationTimestamp = block.timestamp;
+        _incrementConfirmation(payment, record.serviceId, confirmation);
+        confirmationByUid[a.uid] = confirmation;
+        paymentIdByUid[a.uid] = paymentId;
+
+        emit BuyerConfirmationSubmitted(
+            paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, confirmation, a.uid, a.refUID
+        );
+    }
+
+    function _onConfirmationRevoke(Attestation calldata a) internal {
+        BuyerConfirmation previous = confirmationByUid[a.uid];
+        if (previous == BuyerConfirmation.Pending) return;
+
+        uint256 paymentId = paymentIdByUid[a.uid];
+        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
+        ReputationRecord storage record = _records[paymentId];
+        _decrementConfirmation(payment, record.serviceId, previous);
+        delete confirmationByUid[a.uid];
+        delete paymentIdByUid[a.uid];
+
+        if (record.confirmation == previous) {
+            record.confirmation = BuyerConfirmation.Pending;
+            record.confirmationTimestamp = 0;
+        }
+    }
+
+    function _incrementConfirmation(
+        IPaymentRouter.PaymentRecord memory payment,
+        bytes32 serviceId,
+        BuyerConfirmation confirmation
+    ) private {
+        if (confirmation == BuyerConfirmation.Confirmed) {
+            confirmedCount[payment.providerAgentId]++;
+            confirmedByService[serviceId]++;
+            buyerConfirmedCount[payment.buyerAgentId]++;
+        } else {
+            notConfirmedCount[payment.providerAgentId]++;
+            notConfirmedByService[serviceId]++;
+            buyerNotConfirmedCount[payment.buyerAgentId]++;
+        }
+    }
+
+    function _decrementConfirmation(
+        IPaymentRouter.PaymentRecord memory payment,
+        bytes32 serviceId,
+        BuyerConfirmation confirmation
+    ) private {
+        if (confirmation == BuyerConfirmation.Confirmed) {
+            confirmedCount[payment.providerAgentId]--;
+            confirmedByService[serviceId]--;
+            buyerConfirmedCount[payment.buyerAgentId]--;
+        } else {
+            notConfirmedCount[payment.providerAgentId]--;
+            notConfirmedByService[serviceId]--;
+            buyerNotConfirmedCount[payment.buyerAgentId]--;
+        }
+    }
+
+    function _isHistoricalProvider(IPaymentRouter.PaymentRecord memory payment, address account)
+        private
+        pure
+        returns (bool)
+    {
+        return account == payment.cachedProviderOwner || account == payment.cachedProviderWallet;
+    }
+
+    function _providerRecipient(IPaymentRouter.PaymentRecord memory payment) private pure returns (address) {
+        if (payment.cachedProviderWallet != address(0)) return payment.cachedProviderWallet;
+        return payment.cachedProviderOwner;
     }
 }

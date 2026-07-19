@@ -10,7 +10,7 @@ registries**. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
 **Status:** the Base Sepolia addresses below run the previous pre-production
-revision. The current revision requires a fresh deployment. 199 unit and
+revision. The current revision requires a fresh deployment. 198 unit and
 integration tests pass; an external audit is still pending.
 
 ## Canonical ERC-8004 registries
@@ -54,7 +54,6 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
-| **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): reserves a gateway-observed bare EIP-3009 deposit before attribution. Reservations are isolated, single-use, and refundable to the payer. |
 | **ValidationRegistry** | ERC-8004 request/response attestations and summary queries (Daski-hosted until a canonical validation registry exists). |
 | **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
@@ -88,7 +87,7 @@ ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 | X402Adapter           | `0xab6E1a96D0262F484EEdAf3AEEd81f6c41758BD2` |
 | PermitAdapter         | `0x486B72084399716F0C058F5238F6e7f0B0D58038` |
 | ApprovalAdapter       | `0x71783d4FdEC13569DA6311F1941F3c4E0b0B89F7` |
-| DirectTransferAdapter | `0x41147a69e01d658c0290B0e30D7BFEBFC9c481A6` |
+| DirectTransferAdapter (retired) | `0x41147a69e01d658c0290B0e30D7BFEBFC9c481A6` |
 | EAS                   | `0x4200000000000000000000000000000000000021` |
 | Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
@@ -119,7 +118,7 @@ deployed by Daski):
 4. ServiceRegistry         (canonical IdentityRegistry, ProviderRegistry)
 5. PaymentRouter           (canonical IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
 6. ReputationStorage       (canonical IdentityRegistry, PaymentRouter, EAS, schema UIDs)
-7. Adapters (X402/Permit/Approval/DirectTransfer) — initialized with AgentIndex, registered with PaymentRouter
+7. Adapters (X402/Permit/Approval) — initialized with AgentIndex, registered with PaymentRouter
 ```
 
 ## Development
@@ -128,21 +127,20 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 199 tests across 11 suites
+forge test       # 198 tests across 10 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 55 |
-| ReputationStorage     | 30 |
+| PaymentRouter         | 61 |
+| ReputationStorage     | 33 |
 | ServiceRegistry       | 24 |
 | AgentIndex            | 19 |
 | ProviderRegistry      | 18 |
 | X402Adapter           | 14 |
-| ValidationRegistry    | 14 |
-| DirectTransferAdapter | 13 |
+| ValidationRegistry    | 17 |
 | PermitAdapter         | 5  |
 | ApprovalAdapter       | 4  |
 | Integration           | 3  |
@@ -158,8 +156,6 @@ agentWallet, IDs beginning at 0, registration-time wallet initialization, and
 export DEPLOYER_PRIVATE_KEY=<key>
 export TREASURY_ADDRESS=<address>
 export ADMIN_ADDRESS=<deployed multisig or timelock>
-export ATTRIBUTOR_ADDRESS=<gateway attributor>
-
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
 #   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
 #   Base mainnet: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
@@ -182,10 +178,9 @@ Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
 of `forge script` output. The governance contract must then call
 `acceptAdmin()` on every logged proxy before the deployment is operational.
 
-For external-facilitator payments, the gateway calls
-`registerDeposit(token, amount, payer, authorizationNonce)` after confirming
-the transfer transaction, then calls `attribute(...)`. If attribution cannot
-complete, the payer or attributor calls `refundDeposit(...)`.
+EIP-3009 payments use `X402Adapter`, which executes the token authorization
+and router settlement atomically. The authorization nonce commits to
+`(serviceRef, providerAgentId, serviceId)` so a relayer cannot redirect it.
 
 Release coordination — develop→main merges, semver tags, the cross-repo
 address cascade (gateway/provider env, test-suite config, website `llms.txt`),
