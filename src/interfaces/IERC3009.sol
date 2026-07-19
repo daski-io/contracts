@@ -16,10 +16,4 @@ interface IERC3009 {
         bytes32 r,
         bytes32 s
     ) external;
-
-    /// @notice True once the (authorizer, nonce) authorization has been used.
-    ///         Note this records ONLY that some authorization with this nonce
-    ///         was consumed — the recipient and value of that transfer are
-    ///         not recoverable from this state.
-    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool);
 }

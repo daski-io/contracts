@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
@@ -41,7 +41,7 @@ import {LibPagination} from "./utils/LibPagination.sol";
 contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     // ── Storage ──────────────────────────────────────────────────────
 
-    IERC721 public identity;
+    ICanonicalIdentity public identity;
     IProviderRegistry public providerRegistry;
 
     mapping(bytes32 => Service) private _services;
@@ -57,7 +57,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         require(_identity != address(0), "zero identity");
         require(_providerRegistry != address(0), "zero provider registry");
         __Admin2Step_init(_admin);
-        identity = IERC721(_identity);
+        identity = ICanonicalIdentity(_identity);
         providerRegistry = IProviderRegistry(_providerRegistry);
     }
 
@@ -97,11 +97,13 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
             serviceSlug: serviceSlug,
             version: version,
             serviceURI: serviceURI,
-            serviceWallet: serviceWallet,
-            serviceWalletOwner: serviceWallet == address(0) ? address(0) : identity.ownerOf(providerAgentId),
+            serviceWallet: address(0),
+            serviceWalletOwner: address(0),
+            serviceWalletAgentWallet: address(0),
             createdAt: uint64(block.timestamp),
             active: true
         });
+        _setServiceWalletAuthorization(_services[serviceId], serviceWallet);
         _serviceExists[serviceId] = true;
 
         _servicesByProvider[providerAgentId].push(serviceId);
@@ -122,12 +124,13 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @dev Passing `address(0)` is an explicit "clear and inherit from the
     ///      provider's ERC-8004 agentWallet at settle". Most providers will
     ///      register with serviceWallet = address(0) and never call this.
+    ///      Non-zero overrides are valid only while the authorizing owner and
+    ///      agentWallet both remain current.
     function setServiceWallet(bytes32 serviceId, address newWallet) external {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        svc.serviceWallet = newWallet;
-        svc.serviceWalletOwner = newWallet == address(0) ? address(0) : identity.ownerOf(svc.providerAgentId);
+        _setServiceWalletAuthorization(svc, newWallet);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
 
@@ -153,6 +156,24 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     }
 
     /// @inheritdoc IServiceRegistry
+    function resolveSettlement(bytes32 serviceId)
+        external
+        view
+        returns (uint256 providerAgentId, bool active, address providerOwner, address providerWallet, address payee)
+    {
+        Service storage svc = _services[serviceId];
+        require(_serviceExists[serviceId], "service not found");
+
+        providerAgentId = svc.providerAgentId;
+        active = svc.active;
+        providerOwner = identity.ownerOf(providerAgentId);
+        providerWallet = identity.getAgentWallet(providerAgentId);
+        bool overrideCurrent = svc.serviceWallet != address(0) && svc.serviceWalletOwner == providerOwner
+            && svc.serviceWalletAgentWallet != address(0) && svc.serviceWalletAgentWallet == providerWallet;
+        payee = overrideCurrent ? svc.serviceWallet : providerWallet;
+    }
+
+    /// @inheritdoc IServiceRegistry
     function isActive(bytes32 serviceId) external view returns (bool) {
         Service storage svc = _services[serviceId];
         return _serviceExists[serviceId] && svc.active;
@@ -161,11 +182,6 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function exists(bytes32 serviceId) external view returns (bool) {
         return _serviceExists[serviceId];
-    }
-
-    /// @inheritdoc IServiceRegistry
-    function getServicesByProvider(uint256 providerAgentId) external view returns (bytes32[] memory) {
-        return _servicesByProvider[providerAgentId];
     }
 
     /// @inheritdoc IServiceRegistry
@@ -197,6 +213,20 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         returns (bytes32)
     {
         return keccak256(abi.encode(providerAgentId, serviceSlug, version));
+    }
+
+    function _setServiceWalletAuthorization(Service storage svc, address newWallet) internal {
+        svc.serviceWallet = newWallet;
+        if (newWallet == address(0)) {
+            svc.serviceWalletOwner = address(0);
+            svc.serviceWalletAgentWallet = address(0);
+            return;
+        }
+
+        address agentWallet = identity.getAgentWallet(svc.providerAgentId);
+        require(agentWallet != address(0), "no agent wallet");
+        svc.serviceWalletOwner = identity.ownerOf(svc.providerAgentId);
+        svc.serviceWalletAgentWallet = agentWallet;
     }
 
     uint256[50] private __gap;

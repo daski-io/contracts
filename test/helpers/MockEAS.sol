@@ -57,6 +57,10 @@ contract MockEAS is IEAS, ISchemaRegistry {
         return _attestations[uid].uid != bytes32(0);
     }
 
+    function getSchemaRegistry() external view returns (ISchemaRegistry) {
+        return ISchemaRegistry(address(this));
+    }
+
     // ── Internal ────────────────────────────────────────────────────────
 
     function _attest(bytes32 schema, address attester, AttestationRequestData calldata data)
@@ -95,6 +99,7 @@ contract MockEAS is IEAS, ISchemaRegistry {
 
         SchemaRecord memory s = _schemas[a.schema];
         require(s.revocable, "schema not revocable");
+        require(a.revocable, "attestation not revocable");
 
         a.revocationTime = uint64(block.timestamp);
 

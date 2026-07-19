@@ -313,6 +313,16 @@ contract ReputationStorageTest is Test {
         eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Pending, bytes32(0)));
     }
 
+    function test_submitConfirmationMustBeRevocable() public {
+        AttestationRequest memory request =
+            _confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0));
+        request.data.revocable = false;
+
+        vm.prank(buyer);
+        vm.expectRevert("confirmation must be revocable");
+        eas.attest(request);
+    }
+
     function test_submitConfirmationUnauthorizedReverts() public {
         vm.prank(unauthorized);
         vm.expectRevert("not buyer for this payment");
@@ -534,6 +544,28 @@ contract ReputationStorageTest is Test {
         assertEq(reputation.providerTransactionCount(providerAgentId), 1);
         assertEq(reputation.serviceTransactionCount(serviceId), 1);
         assertEq(reputation.buyerTransactionCount(buyerAgentId), 1);
+    }
+
+    function test_ineligiblePaymentIsRecordedButCannotAffectReputation() public {
+        uint256 tinyAmount = router.MINIMUM_REPUTATION_AMOUNT() - 1;
+        usdc.mint(buyer, tinyAmount);
+        uint256 tinyPaymentId = _payAsBuyer(tinyAmount, keccak256("tiny-reputation"), serviceId);
+        providerRecipients[tinyPaymentId] = provider;
+
+        ReputationStorageBase.ReputationRecord memory rec = reputation.getRecord(tinyPaymentId);
+        assertEq(rec.paymentId, tinyPaymentId);
+        assertFalse(rec.reputationEligible);
+        assertEq(reputation.providerTransactionCount(providerAgentId), 1);
+        assertEq(reputation.serviceTransactionCount(serviceId), 1);
+        assertEq(reputation.buyerTransactionCount(buyerAgentId), 1);
+
+        vm.prank(provider);
+        vm.expectRevert("payment not reputation eligible");
+        eas.attest(_outcomeReq(tinyPaymentId, ReputationStorageBase.TransactionOutcome.Completed));
+
+        vm.prank(buyer);
+        vm.expectRevert("payment not reputation eligible");
+        eas.attest(_confirmReq(tinyPaymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
     }
 
     function test_expiringAttestationRejected() public {

@@ -26,6 +26,7 @@ interface IServiceRegistry {
         string serviceURI; // ipfs:// or https:// JSON: skills manifest, pricing, schema, etc.
         address serviceWallet; // optional override; address(0) => use provider's agentWallet
         address serviceWalletOwner; // NFT owner that authorized the override
+        address serviceWalletAgentWallet; // canonical agentWallet that authorized the override
         uint64 createdAt;
         bool active;
     }
@@ -58,6 +59,8 @@ interface IServiceRegistry {
     /// @param serviceURI      JSON describing pricing/schema/skills manifest.
     /// @param serviceWallet   Optional payee override. address(0) => inherit
     ///                        the provider's ERC-8004 agentWallet at settle.
+    ///                        A non-zero value requires a live agentWallet and
+    ///                        is bound to the current owner and agentWallet.
     function registerService(
         uint256 providerAgentId,
         string calldata serviceSlug,
@@ -67,15 +70,25 @@ interface IServiceRegistry {
     ) external returns (bytes32 serviceId);
 
     function updateServiceURI(bytes32 serviceId, string calldata newURI) external;
+    /// @notice Sets an override bound to the provider's current NFT owner and
+    ///         canonical agentWallet. Passing zero clears all authorization.
     function setServiceWallet(bytes32 serviceId, address newWallet) external;
     function setActive(bytes32 serviceId, bool active) external;
 
     // ── Views ────────────────────────────────────────────────────────
 
     function getService(bytes32 serviceId) external view returns (Service memory);
+    /// @notice Returns the settlement-critical service and payee state.
+    /// @dev A service-wallet override is state-bound rather than historical:
+    ///      restoring the exact authorizing owner and agentWallet restores the
+    ///      authorization. Callers that require permanent revocation must
+    ///      clear the override explicitly.
+    function resolveSettlement(bytes32 serviceId)
+        external
+        view
+        returns (uint256 providerAgentId, bool active, address providerOwner, address providerWallet, address payee);
     function isActive(bytes32 serviceId) external view returns (bool);
     function exists(bytes32 serviceId) external view returns (bool);
-    function getServicesByProvider(uint256 providerAgentId) external view returns (bytes32[] memory);
     function getServicesByProviderPaginated(uint256 providerAgentId, uint256 offset, uint256 limit)
         external
         view

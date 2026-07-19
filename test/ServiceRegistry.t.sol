@@ -97,6 +97,8 @@ contract ServiceRegistryTest is Test {
         assertEq(svc.version, "1");
         assertEq(svc.serviceURI, "ipfs://meta");
         assertEq(svc.serviceWallet, address(0));
+        assertEq(svc.serviceWalletOwner, address(0));
+        assertEq(svc.serviceWalletAgentWallet, address(0));
         assertTrue(svc.active);
         assertEq(svc.createdAt, uint64(block.timestamp));
     }
@@ -219,12 +221,28 @@ contract ServiceRegistryTest is Test {
         address svcWallet = makeAddr("serviceWallet");
         vm.prank(provider);
         services.setServiceWallet(svcId, svcWallet);
-        assertEq(services.getService(svcId).serviceWallet, svcWallet);
+        IServiceRegistry.Service memory authorized = services.getService(svcId);
+        assertEq(authorized.serviceWallet, svcWallet);
+        assertEq(authorized.serviceWalletOwner, provider);
+        assertEq(authorized.serviceWalletAgentWallet, identity.getAgentWallet(providerAgentId));
 
         // Clear back to zero (signals "inherit provider's agentWallet")
         vm.prank(provider);
         services.setServiceWallet(svcId, address(0));
-        assertEq(services.getService(svcId).serviceWallet, address(0));
+        IServiceRegistry.Service memory cleared = services.getService(svcId);
+        assertEq(cleared.serviceWallet, address(0));
+        assertEq(cleared.serviceWalletOwner, address(0));
+        assertEq(cleared.serviceWalletAgentWallet, address(0));
+    }
+
+    function test_setServiceWallet_requiresLiveAgentWallet() public {
+        bytes32 svcId = _registerSimple(provider, "skill", "1");
+        vm.prank(provider);
+        identity.unsetAgentWallet(providerAgentId);
+
+        vm.prank(provider);
+        vm.expectRevert("no agent wallet");
+        services.setServiceWallet(svcId, makeAddr("serviceWallet"));
     }
 
     function test_setServiceWallet_nonAuthReverts() public {
@@ -232,6 +250,28 @@ contract ServiceRegistryTest is Test {
         vm.prank(otherUser);
         vm.expectRevert("not owner or operator");
         services.setServiceWallet(svcId, otherUser);
+    }
+
+    function test_resolveSettlementRestoresExactStateBoundOverride() public {
+        bytes32 svcId = _registerSimple(provider, "skill", "1");
+        address serviceWallet = makeAddr("serviceWallet");
+        vm.prank(provider);
+        services.setServiceWallet(svcId, serviceWallet);
+
+        address interimOwner = makeAddr("interimOwner");
+        vm.prank(provider);
+        identity.transferFrom(provider, interimOwner, providerAgentId);
+        vm.prank(interimOwner);
+        identity.transferFrom(interimOwner, provider, providerAgentId);
+        identity.forceSetAgentWallet(providerAgentId, provider);
+
+        (uint256 resolvedProvider, bool active, address owner, address wallet, address payee) =
+            services.resolveSettlement(svcId);
+        assertEq(resolvedProvider, providerAgentId);
+        assertTrue(active);
+        assertEq(owner, provider);
+        assertEq(wallet, provider);
+        assertEq(payee, serviceWallet);
     }
 
     function test_updateServiceURI() public {
@@ -310,7 +350,7 @@ contract ServiceRegistryTest is Test {
         bytes32 c = _registerSimple(provider, "c", "1");
 
         assertEq(services.getServiceCountByProvider(providerAgentId), 3);
-        bytes32[] memory all = services.getServicesByProvider(providerAgentId);
+        bytes32[] memory all = services.getServicesByProviderPaginated(providerAgentId, 0, 3);
         assertEq(all.length, 3);
         assertEq(all[0], a);
         assertEq(all[1], b);

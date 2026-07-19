@@ -51,6 +51,8 @@ struct RevocationRequest {
 }
 
 interface IEAS {
+    function getSchemaRegistry() external view returns (ISchemaRegistry);
+
     function attest(AttestationRequest calldata request) external payable returns (bytes32);
 
     function revoke(RevocationRequest calldata request) external payable;

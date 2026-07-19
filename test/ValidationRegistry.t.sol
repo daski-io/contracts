@@ -239,6 +239,25 @@ contract ValidationRegistryTest is Test {
         assertEq(page[1], _key(agentId, hashes[1]));
     }
 
+    function test_compatibilityGettersRequirePaginationPastCap() public {
+        uint256 cap = validation.MAX_COMPATIBILITY_RESULTS();
+        vm.startPrank(agentOwner);
+        for (uint256 i = 0; i <= cap; i++) {
+            validation.validationRequest(validator, agentId, "u", keccak256(abi.encode(i)));
+        }
+        vm.stopPrank();
+
+        vm.expectRevert("use paginated getter");
+        validation.getAgentValidations(agentId);
+        vm.expectRevert("use paginated getter");
+        validation.getValidatorRequests(validator);
+        vm.expectRevert("use paginated getter");
+        validation.getSummary(agentId, new address[](0), "");
+
+        bytes32[] memory tail = validation.getAgentValidationsPaginated(agentId, cap, 1);
+        assertEq(tail.length, 1);
+    }
+
     function test_getSummaryFiltersCompletedResponses() public {
         bytes32 h1 = keccak256("summary-1");
         bytes32 h2 = keccak256("summary-2");

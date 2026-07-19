@@ -14,7 +14,8 @@ import {IIdentityRegistry} from "../../src/interfaces/IIdentityRegistry.sol";
 ///             register(uri, metadata) minting to msg.sender
 ///           * setAgentURI; metadata key/value with reserved "agentWallet"
 ///           * setAgentWallet (EIP-712/ERC-1271 signature of the new wallet,
-///             per-wallet nonce) / unsetAgentWallet / getAgentWallet
+///             current owner binding, five-minute deadline) /
+///             unsetAgentWallet / getAgentWallet
 ///           * identifiers start at 0, agentWallet is initialized to the
 ///             registrant, and is cleared on every transfer
 ///
@@ -23,17 +24,17 @@ import {IIdentityRegistry} from "../../src/interfaces/IIdentityRegistry.sol";
 ///         invariant.
 contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityRegistry {
     string internal constant AGENT_WALLET_KEY = "agentWallet";
+    uint256 public constant MAX_DEADLINE_DELAY = 5 minutes;
 
     bytes32 public constant SET_AGENT_WALLET_TYPEHASH =
-        keccak256("SetAgentWallet(uint256 agentId,address newWallet,uint256 nonce,uint256 deadline)");
+        keccak256("AgentWalletSet(uint256 agentId,address newWallet,address owner,uint256 deadline)");
 
     uint256 private _nextAgentId;
 
     mapping(uint256 => mapping(string => bytes)) private _metadata;
     mapping(uint256 => address) private _agentWallet;
-    mapping(address => uint256) private _walletRotationNonces;
 
-    constructor() ERC721("ERC-8004 Trustless Agents", "AGENT") EIP712("MockCanonicalIdentityRegistry", "1") {}
+    constructor() ERC721("AgentIdentity", "AGENT") EIP712("ERC8004IdentityRegistry", "1") {}
 
     // ------------------------------------------------------------------
     // Registration
@@ -65,11 +66,11 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
 
     function _register(address owner, string memory agentURI) internal returns (uint256 agentId) {
         agentId = _nextAgentId++;
+        _agentWallet[agentId] = owner;
         _safeMint(owner, agentId);
         if (bytes(agentURI).length > 0) {
             _setTokenURI(agentId, agentURI);
         }
-        _agentWallet[agentId] = owner;
         emit MetadataSet(agentId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, abi.encodePacked(owner));
         emit Registered(agentId, agentURI, owner);
     }
@@ -89,7 +90,6 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
     // ------------------------------------------------------------------
 
     function getMetadata(uint256 agentId, string memory metadataKey) external view override returns (bytes memory) {
-        _requireOwned(agentId);
         if (keccak256(bytes(metadataKey)) == keccak256(bytes(AGENT_WALLET_KEY))) {
             address w = _agentWallet[agentId];
             return w == address(0) ? bytes("") : abi.encodePacked(w);
@@ -114,26 +114,21 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
     {
         _requireOwnerOrApproved(agentId);
         require(block.timestamp <= deadline, "signature expired");
+        require(deadline <= block.timestamp + MAX_DEADLINE_DELAY, "deadline too far");
         require(newWallet != address(0), "zero wallet");
 
-        uint256 nonce = _walletRotationNonces[newWallet];
-        bytes32 structHash = keccak256(abi.encode(SET_AGENT_WALLET_TYPEHASH, agentId, newWallet, nonce, deadline));
+        address owner = ownerOf(agentId);
+        bytes32 structHash = keccak256(abi.encode(SET_AGENT_WALLET_TYPEHASH, agentId, newWallet, owner, deadline));
         require(
             SignatureChecker.isValidSignatureNow(newWallet, _hashTypedDataV4(structHash), signature),
             "invalid wallet signature"
         );
-        _walletRotationNonces[newWallet] = nonce + 1;
 
         _agentWallet[agentId] = newWallet;
         emit MetadataSet(agentId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, abi.encodePacked(newWallet));
     }
 
-    function walletRotationNonce(address wallet) external view returns (uint256) {
-        return _walletRotationNonces[wallet];
-    }
-
     function getAgentWallet(uint256 agentId) external view override returns (address) {
-        _requireOwned(agentId);
         return _agentWallet[agentId];
     }
 
@@ -156,13 +151,14 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
     // ------------------------------------------------------------------
 
     function _update(address to, uint256 tokenId, address auth) internal override returns (address from) {
-        from = super._update(to, tokenId, auth);
-        if (from != address(0) && from != to && _ownerOf(tokenId) != address(0)) {
+        from = _ownerOf(tokenId);
+        if (from != address(0) && to != address(0)) {
             if (_agentWallet[tokenId] != address(0)) {
                 delete _agentWallet[tokenId];
                 emit MetadataSet(tokenId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, bytes(""));
             }
         }
+        return super._update(to, tokenId, auth);
     }
 
     // ------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
 import {IProviderRegistry} from "../src/interfaces/IProviderRegistry.sol";
 
 contract ProviderRegistryTest is Test {
@@ -139,6 +140,34 @@ contract ProviderRegistryTest is Test {
         vm.prank(otherUser);
         vm.expectRevert();
         registry.register(agentId);
+    }
+
+    function test_registerRejectsFeeOnTransferListingToken() public {
+        FeeOnTransferToken feeToken = new FeeOnTransferToken();
+        ProviderRegistry feeRegistryImpl = new ProviderRegistry();
+        ProviderRegistry feeRegistry = ProviderRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(feeRegistryImpl),
+                    abi.encodeCall(
+                        ProviderRegistry.initialize,
+                        (address(identity), address(feeToken), treasury, LISTING_FEE, admin)
+                    )
+                )
+            )
+        );
+
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        feeToken.mint(provider, LISTING_FEE);
+        vm.prank(provider);
+        feeToken.approve(address(feeRegistry), LISTING_FEE);
+
+        vm.prank(provider);
+        vm.expectRevert("unexpected listing fee");
+        feeRegistry.register(agentId);
+        assertFalse(feeRegistry.isRegistered(agentId));
+        assertEq(feeToken.balanceOf(treasury), 0);
     }
 
     function test_setTreasuryZeroReverts() public {

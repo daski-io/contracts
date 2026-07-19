@@ -24,6 +24,9 @@ interface IPaymentRouter {
         // Block timestamp at settlement. Used by ReputationStorage to derive
         // the outcome attestation delay.
         uint256 paidAt;
+        // Only qualified payments may affect Daski reputation or be mirrored
+        // into the canonical ERC-8004 ReputationRegistry.
+        bool reputationEligible;
     }
 
     /// @notice Adapter-facing settlement entry point. The adapter MUST have
@@ -33,8 +36,8 @@ interface IPaymentRouter {
     ///         stores the PaymentRecord, emits PaymentSettled, returns the
     ///         new paymentId.
     /// @dev    `serviceId` MUST belong to `providerAgentId` and the service
-    ///         MUST be active. Payee resolution: serviceWallet if set, else
-    ///         the provider's ERC-8004 agentWallet on the canonical registry.
+    ///         MUST be active. ServiceRegistry is authoritative for resolving
+    ///         the current payee.
     ///         `buyerWallet` is the payer wallet; the router verifies it
     ///         currently controls `buyerAgentId` (verified agentWallet or
     ///         ERC-721 owner) and caches it as the refund fallback.
@@ -57,9 +60,14 @@ interface IPaymentRouter {
     ///         original payment amount.
     function refund(uint256 paymentId, uint256 amountToBuyer) external;
 
+    /// @notice Retry payment/refund synchronization with ReputationStorage.
+    ///         Anyone may call this after a transient sink failure.
+    function syncReputation(uint256 paymentId) external;
+
     // ── Views ────────────────────────────────────────────────────────
     function getPayment(uint256 paymentId) external view returns (PaymentRecord memory);
     function refundedAmount(uint256 paymentId) external view returns (uint256);
+    function reputationSyncState(uint256 paymentId) external view returns (bool paymentSynced, uint256 refundSynced);
     /// @notice Returns the replay-protection key for one buyer/provider/service
     ///         namespace and its gateway-supplied reference.
     function computePaymentKey(uint256 buyerAgentId, uint256 providerAgentId, bytes32 serviceId, bytes32 serviceRef)
@@ -68,6 +76,10 @@ interface IPaymentRouter {
         returns (bytes32);
     function paymentKeyUsed(bytes32 paymentKey) external view returns (bool);
     function isAdapter(address adapter) external view returns (bool);
+    function getAdapterCount() external view returns (uint256);
+    function getAdapterAt(uint256 index) external view returns (address);
     function isAcceptedToken(address token) external view returns (bool);
+    function getAcceptedTokenCount() external view returns (uint256);
+    function getAcceptedTokenAt(uint256 index) external view returns (address);
     function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount);
 }

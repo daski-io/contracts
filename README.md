@@ -55,13 +55,13 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 |---------------------|---------|
 | **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. `resolve` returns an explicit found flag because agent ID 0 is valid. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
-| **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
-| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle and namespaces replay protection by buyer, provider, service, and service reference. |
+| **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. Optional service payee overrides are bound to both the authorizing NFT owner and the live canonical `agentWallet`; skills are declared off-chain. |
+| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle, namespaces replay protection by buyer/provider/service/reference, and classifies self-funded, sub-$0.25, or zero-fee payments as reputation-ineligible. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
 | **ValidationRegistry** | ERC-8004 request/response attestations and paginated summary queries (Daski-hosted until a canonical validation registry exists). `hasValidationResponse` distinguishes a pending request from a completed response of zero. Documented deviation from the draft spec: records are keyed by `computeValidationKey(agentId, requestHash)` — also returned by `validationRequest` — NOT by the raw `requestHash`; external clients must use that key for `validationResponse`/reads. The namespacing closes a cross-agent request-hash squatting vector the draft spec doesn't address. |
-| **ReputationStorage**  | Bilateral reputation resolver: every payment is counted atomically, provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. Resolver addresses and schema UIDs are permanently locked by one-time configuration finalization before payment rails can be enabled. |
+| **ReputationStorage**  | Bilateral reputation resolver: qualified payments contribute to counters, providers record outcomes, and buyers confirm. Payment/refund mirroring is retryable so a resolver outage cannot block settlement. EAS-backed; counters split per-provider AND per-service. Resolver addresses and schema UIDs are permanently locked by one-time configuration finalization before payment rails can be enabled. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
@@ -106,6 +106,14 @@ EAS schema UIDs (resolver = ReputationStorage):
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
+Retiring this legacy stack is an operator action, not a proxy upgrade. At the
+retirement block, re-check that the router holds no USDC, call
+`setAcceptedToken(USDC, false)`, disable DirectTransfer/X402/Permit/Approval,
+and scan all historical `AdapterSet` and `AcceptedTokenSet` events for any
+other enabled entries. Then replace the old router address in every dependent
+service. Bare token transfers can arrive at any time, so repeat the balance
+check immediately before and after quiescing the router.
+
 The previous (pre-canonical-migration) stack at PaymentRouter
 `0x78f9b15F…459d8f` is orphaned, along with Daski's legacy
 Identity/Reputation registries — historical record in the deploy-testnet
@@ -136,23 +144,25 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 198 tests across 10 suites
+forge test       # 214 tests across 12 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 58 |
-| ReputationStorage     | 33 |
-| ServiceRegistry       | 24 |
+| PaymentRouter         | 65 |
+| ReputationStorage     | 35 |
+| ServiceRegistry       | 26 |
 | AgentIndex            | 19 |
-| ProviderRegistry      | 18 |
+| ProviderRegistry      | 19 |
 | X402Adapter           | 14 |
-| ValidationRegistry    | 19 |
+| ValidationRegistry    | 20 |
 | PermitAdapter         | 5  |
 | ApprovalAdapter       | 5  |
 | Integration           | 3  |
+| Canonical identity mock | 2 |
+| EAS mock              | 1 |
 
 Tests run against `test/mocks/MockCanonicalIdentityRegistry.sol`, a faithful
 double of the canonical registry surface (ERC-721 + registration +
@@ -182,6 +192,14 @@ export COMMISSION_BPS=500    # 5%
 forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
+On Base mainnet and Base Sepolia, deployment enforces the pinned canonical
+IdentityRegistry, Circle USDC, EAS, and SchemaRegistry addresses. It also
+checks ERC-165/ERC-721 support, six-decimal USDC semantics, the EAS
+SchemaRegistry binding, both registered schemas, and every cross-contract
+wiring relationship. Unsupported chains are rejected unless the operator
+explicitly sets `ALLOW_UNSUPPORTED_CHAIN=true`; semantic dependency checks
+still apply.
+
 For an isolated non-mainnet environment without a token, deploy the
 unrestricted-mint test double separately, then supply its logged address to
 the production-shaped deployment:
@@ -189,6 +207,7 @@ the production-shaped deployment:
 ```bash
 forge script script/DeployMockUSDC.s.sol --rpc-url <RPC_URL> --broadcast
 export USDC_ADDRESS=<logged MockUSDC address>
+export ALLOW_UNSUPPORTED_CHAIN=true
 forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
@@ -198,6 +217,43 @@ missing production dependency.
 Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
 of `forge script` output. The governance contract must then call
 `acceptAdmin()` on every logged proxy before the deployment is operational.
+After acceptance, export the logged component addresses and schema UIDs, then
+run the read-only verifier:
+
+```bash
+export IDENTITY_REGISTRY_ADDRESS=<canonical-address>
+export USDC_ADDRESS=<circle-usdc-address>
+export EAS_ADDRESS=0x4200000000000000000000000000000000000021
+export EAS_SCHEMA_REGISTRY_ADDRESS=0x4200000000000000000000000000000000000020
+export TREASURY_ADDRESS=<address>
+export ADMIN_ADDRESS=<governance-contract-address>
+export AGENT_INDEX_ADDRESS=<address>
+export VALIDATION_REGISTRY_ADDRESS=<address>
+export PROVIDER_REGISTRY_ADDRESS=<address>
+export SERVICE_REGISTRY_ADDRESS=<address>
+export PAYMENT_ROUTER_ADDRESS=<address>
+export REPUTATION_STORAGE_ADDRESS=<address>
+export X402_ADAPTER_ADDRESS=<address>
+export PERMIT_ADAPTER_ADDRESS=<address>
+export APPROVAL_ADAPTER_ADDRESS=<address>
+export OUTCOME_SCHEMA_UID=<bytes32>
+export CONFIRMATION_SCHEMA_UID=<bytes32>
+export LISTING_FEE=1000000
+export COMMISSION_BPS=500
+
+# Copy the nine implementation code hashes logged by Deploy.s.sol.
+export AGENT_INDEX_IMPLEMENTATION_CODEHASH=<bytes32>
+export VALIDATION_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export PROVIDER_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export SERVICE_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export PAYMENT_ROUTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export REPUTATION_STORAGE_IMPLEMENTATION_CODEHASH=<bytes32>
+export X402_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export PERMIT_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export APPROVAL_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+
+forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
+```
 
 EIP-3009 payments use `X402Adapter`, which executes the token authorization
 and router settlement atomically. The authorization nonce commits to

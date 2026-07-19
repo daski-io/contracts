@@ -15,6 +15,7 @@ import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
+import {DeploymentValidation} from "./DeploymentValidation.sol";
 
 /// @notice Deploy the Daski stack against the CANONICAL ERC-8004
 ///         IdentityRegistry — Daski deploys no identity registry (and no
@@ -36,9 +37,6 @@ contract Deploy is Script {
     address internal constant DEFAULT_EAS = 0x4200000000000000000000000000000000000021;
     address internal constant DEFAULT_SCHEMA_REGISTRY = 0x4200000000000000000000000000000000000020;
 
-    string internal constant OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome";
-    string internal constant CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation";
-
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address treasury = vm.envAddress("TREASURY_ADDRESS");
@@ -51,8 +49,6 @@ contract Deploy is Script {
             identityRegistry != address(0),
             "IDENTITY_REGISTRY_ADDRESS not set. Use the canonical ERC-8004 registry: Base mainnet 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432, Base Sepolia 0x8004A818BFB912233c491871b3d84c89A494BD9e"
         );
-        require(identityRegistry.code.length > 0, "IDENTITY_REGISTRY_ADDRESS has no code on this chain");
-
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         require(usdcAddress != address(0), "USDC_ADDRESS is required");
         uint256 listingFee = vm.envOr("LISTING_FEE", uint256(1_000_000));
@@ -60,9 +56,9 @@ contract Deploy is Script {
 
         address easAddress = vm.envOr("EAS_ADDRESS", DEFAULT_EAS);
         address schemaRegistryAddress = vm.envOr("EAS_SCHEMA_REGISTRY_ADDRESS", DEFAULT_SCHEMA_REGISTRY);
-        require(easAddress.code.length > 0, "EAS_ADDRESS has no code");
-        require(schemaRegistryAddress.code.length > 0, "EAS_SCHEMA_REGISTRY_ADDRESS has no code");
-        require(usdcAddress.code.length > 0, "USDC_ADDRESS has no code");
+        DeploymentValidation.validateExternalDependencies(
+            identityRegistry, usdcAddress, easAddress, schemaRegistryAddress, vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false)
+        );
 
         address deployer = vm.addr(deployerKey);
         // Final admin for every proxy. It must be an already-deployed
@@ -73,13 +69,6 @@ contract Deploy is Script {
         require(finalAdmin != deployer, "ADMIN_ADDRESS must differ from deployer");
         require(finalAdmin.code.length > 0, "ADMIN_ADDRESS must be a governance contract");
 
-        console.log("Deployer:", deployer);
-        console.log("Final admin:", finalAdmin);
-        console.log("Treasury:", treasury);
-        console.log("Canonical IdentityRegistry:", identityRegistry);
-        console.log("EAS:     ", easAddress);
-        console.log("SchemaRegistry:", schemaRegistryAddress);
-
         vm.startBroadcast(deployerKey);
 
         console.log("Using existing USDC:", usdcAddress);
@@ -89,7 +78,6 @@ contract Deploy is Script {
         ERC1967Proxy agentIndexProxy = new ERC1967Proxy(
             address(agentIndexImpl), abi.encodeCall(AgentIndex.initialize, (identityRegistry, deployer))
         );
-        console.log("AgentIndex impl:", address(agentIndexImpl));
         console.log("AgentIndex proxy:", address(agentIndexProxy));
 
         // ── (c) ValidationRegistry (ERC-8004, Daski-hosted) ───────────
@@ -99,7 +87,6 @@ contract Deploy is Script {
         ERC1967Proxy validationRegistryProxy = new ERC1967Proxy(
             address(validationRegistryImpl), abi.encodeCall(ValidationRegistry.initialize, (identityRegistry, deployer))
         );
-        console.log("ValidationRegistry impl:", address(validationRegistryImpl));
         console.log("ValidationRegistry proxy:", address(validationRegistryProxy));
 
         // ── (d) ProviderRegistry (Daski) ──────────────────────────────
@@ -108,7 +95,6 @@ contract Deploy is Script {
             address(providerRegistryImpl),
             abi.encodeCall(ProviderRegistry.initialize, (identityRegistry, usdcAddress, treasury, listingFee, deployer))
         );
-        console.log("ProviderRegistry impl:", address(providerRegistryImpl));
         console.log("ProviderRegistry proxy:", address(providerRegistryProxy));
 
         // ── (e) ServiceRegistry (Daski) ───────────────────────────────
@@ -117,7 +103,6 @@ contract Deploy is Script {
             address(serviceRegistryImpl),
             abi.encodeCall(ServiceRegistry.initialize, (identityRegistry, address(providerRegistryProxy), deployer))
         );
-        console.log("ServiceRegistry impl:", address(serviceRegistryImpl));
         console.log("ServiceRegistry proxy:", address(serviceRegistryProxy));
 
         // ── (f) PaymentRouter (Daski) ─────────────────────────────────
@@ -137,7 +122,6 @@ contract Deploy is Script {
             )
         );
         PaymentRouter router = PaymentRouter(address(routerProxy));
-        console.log("PaymentRouter impl:", address(routerImpl));
         console.log("PaymentRouter proxy:", address(routerProxy));
 
         // ── (g) ReputationStorage (EAS resolver + refund sink) ────────
@@ -146,18 +130,28 @@ contract Deploy is Script {
             address(reputationImpl), abi.encodeCall(ReputationStorage.initialize, (address(routerProxy), deployer))
         );
         ReputationStorage reputation = ReputationStorage(address(reputationProxy));
-        console.log("ReputationStorage impl:", address(reputationImpl));
         console.log("ReputationStorage proxy:", address(reputationProxy));
 
         // Register the two EAS schemas against this resolver.
         ISchemaRegistry schemaRegistry = ISchemaRegistry(schemaRegistryAddress);
-        bytes32 outcomeSchemaUid = schemaRegistry.register(OUTCOME_SCHEMA, address(reputationProxy), false);
-        bytes32 confirmationSchemaUid = schemaRegistry.register(CONFIRMATION_SCHEMA, address(reputationProxy), true);
+        string memory outcomeSchema = DeploymentValidation.outcomeSchema();
+        string memory confirmationSchema = DeploymentValidation.confirmationSchema();
+        bytes32 outcomeSchemaUid = schemaRegistry.register(outcomeSchema, address(reputationProxy), false);
+        bytes32 confirmationSchemaUid = schemaRegistry.register(confirmationSchema, address(reputationProxy), true);
 
         reputation.setEAS(easAddress);
         reputation.setOutcomeSchema(outcomeSchemaUid);
         reputation.setConfirmationSchema(confirmationSchemaUid);
         reputation.finalizeConfiguration();
+        DeploymentValidation.validateSchemas(
+            easAddress,
+            schemaRegistryAddress,
+            address(reputationProxy),
+            outcomeSchemaUid,
+            confirmationSchemaUid,
+            outcomeSchema,
+            confirmationSchema
+        );
 
         // ── (h) X402Adapter ───────────────────────────────────────────
         X402Adapter x402AdapterImpl = new X402Adapter();
@@ -165,7 +159,6 @@ contract Deploy is Script {
             address(x402AdapterImpl),
             abi.encodeCall(X402Adapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
-        console.log("X402Adapter impl:", address(x402AdapterImpl));
         console.log("X402Adapter proxy:", address(x402AdapterProxy));
 
         // ── (i) PermitAdapter ─────────────────────────────────────────
@@ -174,7 +167,6 @@ contract Deploy is Script {
             address(permitAdapterImpl),
             abi.encodeCall(PermitAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
-        console.log("PermitAdapter impl:", address(permitAdapterImpl));
         console.log("PermitAdapter proxy:", address(permitAdapterProxy));
 
         // ── (j) ApprovalAdapter ───────────────────────────────────────
@@ -183,7 +175,6 @@ contract Deploy is Script {
             address(approvalAdapterImpl),
             abi.encodeCall(ApprovalAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
         );
-        console.log("ApprovalAdapter impl:", address(approvalAdapterImpl));
         console.log("ApprovalAdapter proxy:", address(approvalAdapterProxy));
 
         // ── (k) Wire reputation before enabling payment entry points ──
@@ -193,24 +184,33 @@ contract Deploy is Script {
         router.setAdapter(address(approvalAdapterProxy), true);
         router.setAcceptedToken(usdcAddress, true);
 
+        DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
+            identity: identityRegistry,
+            usdc: usdcAddress,
+            treasury: treasury,
+            agentIndex: address(agentIndexProxy),
+            validationRegistry: address(validationRegistryProxy),
+            providerRegistry: address(providerRegistryProxy),
+            serviceRegistry: address(serviceRegistryProxy),
+            router: address(routerProxy),
+            reputation: address(reputationProxy),
+            x402Adapter: address(x402AdapterProxy),
+            permitAdapter: address(permitAdapterProxy),
+            approvalAdapter: address(approvalAdapterProxy),
+            listingFee: listingFee,
+            commissionBps: commissionBps
+        });
+        DeploymentValidation.validateWiring(deployment);
+
         // ── (l) Admin handoff ─────────────────────────────────────────
         // All wiring above ran as the deployer. Start the mandatory two-step
         // handoff for every proxy; governance must accept each pending role
         // before the deployment is considered operational.
-        address[9] memory adminContracts = [
-            address(agentIndexProxy),
-            address(validationRegistryProxy),
-            address(providerRegistryProxy),
-            address(serviceRegistryProxy),
-            address(routerProxy),
-            address(reputationProxy),
-            address(x402AdapterProxy),
-            address(permitAdapterProxy),
-            address(approvalAdapterProxy)
-        ];
+        address[9] memory adminContracts = DeploymentValidation.adminContracts(deployment);
         for (uint256 i = 0; i < adminContracts.length; i++) {
             Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
         }
+        DeploymentValidation.validatePendingAdmins(adminContracts, deployer, finalAdmin);
         console.log("Admin transfer started to:", finalAdmin);
         console.log("  governance MUST call acceptAdmin() on each proxy");
 
@@ -230,6 +230,15 @@ contract Deploy is Script {
         console.log("  X402Adapter:        ", address(x402AdapterProxy));
         console.log("  PermitAdapter:      ", address(permitAdapterProxy));
         console.log("  ApprovalAdapter:    ", address(approvalAdapterProxy));
+        _logImplementation("AgentIndex", address(agentIndexImpl));
+        _logImplementation("ValidationRegistry", address(validationRegistryImpl));
+        _logImplementation("ProviderRegistry", address(providerRegistryImpl));
+        _logImplementation("ServiceRegistry", address(serviceRegistryImpl));
+        _logImplementation("PaymentRouter", address(routerImpl));
+        _logImplementation("ReputationStorage", address(reputationImpl));
+        _logImplementation("X402Adapter", address(x402AdapterImpl));
+        _logImplementation("PermitAdapter", address(permitAdapterImpl));
+        _logImplementation("ApprovalAdapter", address(approvalAdapterImpl));
         console.log("  EAS:                ", easAddress);
         console.log("  SchemaRegistry:     ", schemaRegistryAddress);
         console.log("  Outcome schema UID:");
@@ -237,5 +246,11 @@ contract Deploy is Script {
         console.log("  Confirmation schema UID:");
         console.logBytes32(confirmationSchemaUid);
         console.log("-------------------------------------------");
+    }
+
+    function _logImplementation(string memory name, address implementation) private view {
+        console.log(string.concat("  ", name, " implementation:"), implementation);
+        console.log("    codehash:");
+        console.logBytes32(implementation.codehash);
     }
 }

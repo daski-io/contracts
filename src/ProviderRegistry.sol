@@ -24,8 +24,8 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///
 /// Wallet model: this registry stores no wallet. The payee surface is the
 /// canonical registry's `agentWallet` (PaymentRouter payee resolution and
-/// refund auth read it live; providers MUST verify one there — or set a
-/// per-service serviceWallet — before they can be paid). Wallet→agent
+/// refund auth read it live; providers MUST verify one there before they can
+/// be paid or authorize a per-service serviceWallet). Wallet→agent
 /// resolution for payment attribution goes through the Daski `AgentIndex`,
 /// off-chain callers resolve agentIds before calling `getProvider`.
 ///
@@ -74,7 +74,10 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         require(identity.ownerOf(agentId) == msg.sender, "not agent owner");
         require(!_isRegistered(agentId), "already registered");
 
+        uint256 balanceBefore = usdc.balanceOf(treasury);
         usdc.safeTransferFrom(msg.sender, treasury, listingFee);
+        uint256 balanceAfter = usdc.balanceOf(treasury);
+        require(balanceAfter >= balanceBefore && balanceAfter - balanceBefore == listingFee, "unexpected listing fee");
 
         _providers[agentId] = Provider({agentId: agentId, registrationTime: block.timestamp, isActive: true});
         _registered[agentId] = true;

@@ -2,9 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {PaymentRouterStorage} from "./PaymentRouterStorage.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /// @notice Read-only access to router accounting and configuration.
 abstract contract PaymentRouterViews is PaymentRouterStorage {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount) {
         commission = (amount * commissionBps) / 10000;
         providerAmount = amount - commission;
@@ -17,6 +20,10 @@ abstract contract PaymentRouterViews is PaymentRouterStorage {
 
     function refundedAmount(uint256 paymentId) external view returns (uint256) {
         return _refundedAmount[paymentId];
+    }
+
+    function reputationSyncState(uint256 paymentId) external view returns (bool paymentSynced, uint256 refundSynced) {
+        return (_reputationPaymentSynced[paymentId], _reputationRefundSynced[paymentId]);
     }
 
     function computePaymentKey(uint256 buyerAgentId, uint256 providerAgentId, bytes32 serviceId, bytes32 serviceRef)
@@ -32,10 +39,26 @@ abstract contract PaymentRouterViews is PaymentRouterStorage {
     }
 
     function isAdapter(address adapter) external view returns (bool) {
-        return _adapters[adapter];
+        return _adapters.contains(adapter);
+    }
+
+    function getAdapterCount() external view returns (uint256) {
+        return _adapters.length();
+    }
+
+    function getAdapterAt(uint256 index) external view returns (address) {
+        return _adapters.at(index);
     }
 
     function isAcceptedToken(address token) external view returns (bool) {
-        return _acceptedTokens[token];
+        return _acceptedTokens.contains(token);
+    }
+
+    function getAcceptedTokenCount() external view returns (uint256) {
+        return _acceptedTokens.length();
+    }
+
+    function getAcceptedTokenAt(uint256 index) external view returns (address) {
+        return _acceptedTokens.at(index);
     }
 }

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ICanonicalIdentity} from "../interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "../interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "../interfaces/IServiceRegistry.sol";
@@ -12,6 +13,11 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 /// @notice Storage and events shared by the router's operational and
 ///         administrative surfaces.
 abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    /// @notice Minimum six-decimal token amount that can create reputation.
+    uint256 public constant MINIMUM_REPUTATION_AMOUNT = 250_000;
+
     address public treasury;
     ICanonicalIdentity public identity;
     IProviderRegistry public registry;
@@ -20,9 +26,11 @@ abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard
 
     mapping(uint256 => PaymentRecord) internal _payments;
     mapping(bytes32 => bool) internal _usedPaymentKeys;
-    mapping(address => bool) internal _adapters;
-    mapping(address => bool) internal _acceptedTokens;
+    EnumerableSet.AddressSet internal _adapters;
+    EnumerableSet.AddressSet internal _acceptedTokens;
     mapping(uint256 => uint256) internal _refundedAmount;
+    mapping(uint256 => bool) internal _reputationPaymentSynced;
+    mapping(uint256 => uint256) internal _reputationRefundSynced;
 
     address public reputationStorage;
     IServiceRegistry public serviceRegistry;
@@ -44,9 +52,12 @@ abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ReputationStorageUpdated(address indexed oldStorage, address indexed newStorage);
+    event ReputationPaymentSynced(uint256 indexed paymentId);
+    event ReputationRefundSynced(uint256 indexed paymentId, uint256 amount, uint256 cumulativeAmount);
+    event ReputationSyncFailed(uint256 indexed paymentId, bytes4 indexed operation);
     event ERC20Rescued(address indexed token, address indexed to, uint256 amount);
     modifier onlyAdapter() {
-        require(_adapters[msg.sender], "not adapter");
+        require(_adapters.contains(msg.sender), "not adapter");
         _;
     }
 

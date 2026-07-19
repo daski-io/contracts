@@ -63,7 +63,7 @@ contract MockUSDC is ERC20, ERC20Permit, IERC3009 {
         _mint(to, amount);
     }
 
-    function authorizationState(address authorizer, bytes32 nonce) external view override returns (bool) {
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
         return _authorizationStates[authorizer][nonce];
     }
 

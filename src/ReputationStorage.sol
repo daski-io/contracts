@@ -7,9 +7,9 @@ import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 import {ReputationAccounting} from "./reputation/ReputationAccounting.sol";
 
 /// @notice EAS-backed bilateral reputation aggregator. PaymentRouter creates
-///         every record atomically at settlement, so missing provider outcomes
-///         remain visible in provider/service transaction totals. Providers
-///         attest outcomes and buyers submit revocable confirmations.
+///         every record through a retryable sink, while only qualified
+///         payments contribute to aggregate reputation. Providers attest
+///         outcomes and buyers submit revocable confirmations.
 contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -97,6 +97,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
 
         ReputationRecord storage record = _records[paymentId];
         require(record.paymentId != 0, "payment not recorded");
+        require(record.reputationEligible, "payment not reputation eligible");
         require(!record.outcomeRecorded, "outcome already recorded");
 
         uint256 attestationDelay = block.timestamp - payment.paidAt;
@@ -122,6 +123,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _onConfirmationAttest(Attestation calldata a) internal {
+        require(a.revocable, "confirmation must be revocable");
         (uint256 paymentId, uint8 raw) = abi.decode(a.data, (uint256, uint8));
         require(
             raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed),
@@ -134,6 +136,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
 
         ReputationRecord storage record = _records[paymentId];
         require(record.paymentId != 0, "payment not recorded");
+        require(record.reputationEligible, "payment not reputation eligible");
         BuyerConfirmation confirmation = BuyerConfirmation(raw);
 
         bytes32 currentUid = record.currentConfirmationUid;

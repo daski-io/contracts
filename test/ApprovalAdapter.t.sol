@@ -88,7 +88,7 @@ contract ApprovalAdapterTest is Test {
             )
         );
 
-        MockReputationSink sink = new MockReputationSink();
+        MockReputationSink sink = new MockReputationSink(address(router));
         vm.prank(admin);
         router.setReputationStorage(address(sink));
         vm.prank(admin);
@@ -163,17 +163,17 @@ contract ApprovalAdapterTest is Test {
 
     function test_settleFeeOnTransferTokenRevertsAtomically() public {
         FeeOnTransferToken feeToken = new FeeOnTransferToken();
-        feeToken.mint(buyer, 100e18);
+        feeToken.mint(buyer, 100e6);
         vm.prank(admin);
         router.setAcceptedToken(address(feeToken), true);
 
         vm.prank(buyer);
-        feeToken.approve(address(adapter), 100e18);
+        feeToken.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("unexpected token amount");
-        adapter.settle(address(feeToken), 100e18, keccak256("a-fee"), providerAgentId, serviceId);
+        adapter.settle(address(feeToken), 100e6, keccak256("a-fee"), providerAgentId, serviceId);
 
-        assertEq(feeToken.balanceOf(buyer), 100e18);
+        assertEq(feeToken.balanceOf(buyer), 100e6);
         assertEq(feeToken.balanceOf(address(router)), 0);
         assertEq(router.nextPaymentId(), 1);
     }

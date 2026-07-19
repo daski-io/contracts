@@ -91,7 +91,7 @@ contract PermitAdapterTest is Test {
             )
         );
 
-        MockReputationSink sink = new MockReputationSink();
+        MockReputationSink sink = new MockReputationSink(address(router));
         vm.prank(admin);
         router.setReputationStorage(address(sink));
         vm.prank(admin);

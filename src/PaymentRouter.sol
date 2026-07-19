@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
@@ -17,6 +18,7 @@ import {PaymentRouterViews} from "./payment/PaymentRouterViews.sol";
 ///         catalog route, splits funds, and stores immutable counterparties.
 contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
     using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     struct Settlement {
         address token;
@@ -79,12 +81,11 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
 
     function _settle(Settlement memory request) internal returns (uint256 paymentId) {
         require(request.amount > 0, "zero amount");
-        require(_acceptedTokens[request.token], "token not accepted");
+        require(_acceptedTokens.contains(request.token), "token not accepted");
         bytes32 paymentKey =
             _paymentKey(request.buyerAgentId, request.providerAgentId, request.serviceId, request.serviceRef);
         require(!_usedPaymentKeys[paymentKey], "payment key used");
         require(request.buyerWallet != address(0), "zero buyer wallet");
-        _requireReputationConfigured();
         require(
             request.buyerWallet == identity.getAgentWallet(request.buyerAgentId)
                 || request.buyerWallet == identity.ownerOf(request.buyerAgentId),
@@ -92,6 +93,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         );
 
         (address payee, address providerOwner, address providerWallet) = _providerContext(request);
+        uint256 commission = (request.amount * commissionBps) / 10000;
+        bool reputationEligible = _isReputationEligible(request, commission, payee, providerOwner, providerWallet);
         // Adapters are trusted to have delivered `amount` to the router within
         // this transaction, and accepted tokens must not be fee-on-transfer:
         // the balance check proves the router is funded, not that THIS call
@@ -100,7 +103,6 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
 
         _usedPaymentKeys[paymentKey] = true;
 
-        uint256 commission = (request.amount * commissionBps) / 10000;
         uint256 providerAmount = request.amount - commission;
         IERC20(request.token).safeTransfer(payee, providerAmount);
         if (commission > 0) {
@@ -118,7 +120,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
             cachedProviderOwner: providerOwner,
             cachedProviderWallet: providerWallet,
             serviceRef: request.serviceRef,
-            paidAt: block.timestamp
+            paidAt: block.timestamp,
+            reputationEligible: reputationEligible
         });
 
         emit PaymentSettled(
@@ -133,7 +136,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
             commission
         );
 
-        IReputationSink(reputationStorage).recordPayment(paymentId);
+        _attemptReputationSync(paymentId);
     }
 
     function _providerContext(Settlement memory request)
@@ -143,17 +146,13 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
     {
         require(registry.getProvider(request.providerAgentId).isActive, "provider not active");
 
-        IServiceRegistry.Service memory service = serviceRegistry.getService(request.serviceId);
-        require(service.providerAgentId == request.providerAgentId, "service/provider mismatch");
-        require(service.active, "service not active");
-
-        providerOwner = identity.ownerOf(request.providerAgentId);
-        providerWallet = identity.getAgentWallet(request.providerAgentId);
-        if (service.serviceWallet != address(0) && service.serviceWalletOwner == providerOwner) {
-            payee = service.serviceWallet;
-        } else {
-            payee = providerWallet;
-        }
+        (uint256 providerAgentId, bool active, address owner, address wallet, address resolvedPayee) =
+            serviceRegistry.resolveSettlement(request.serviceId);
+        require(providerAgentId == request.providerAgentId, "service/provider mismatch");
+        require(active, "service not active");
+        providerOwner = owner;
+        providerWallet = wallet;
+        payee = resolvedPayee;
         require(payee != address(0), "no payee wallet");
     }
 
@@ -176,6 +175,64 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
 
         IERC20(record.token).safeTransferFrom(msg.sender, record.cachedBuyerWallet, amountToBuyer);
         emit Refunded(paymentId, amountToBuyer, cumulative);
-        IReputationSink(reputationStorage).recordRefund(paymentId, amountToBuyer);
+        _attemptReputationSync(paymentId);
+    }
+
+    /// @inheritdoc IPaymentRouter
+    function syncReputation(uint256 paymentId) external nonReentrant {
+        require(_payments[paymentId].amount > 0, "payment not found");
+        _syncPayment(paymentId);
+        _syncRefund(paymentId);
+    }
+
+    function _isReputationEligible(
+        Settlement memory request,
+        uint256 commission,
+        address payee,
+        address providerOwner,
+        address providerWallet
+    ) private pure returns (bool) {
+        if (request.amount < MINIMUM_REPUTATION_AMOUNT) return false;
+        if (commission == 0) return false;
+        if (request.buyerAgentId == request.providerAgentId) return false;
+        return
+            request.buyerWallet != providerOwner && request.buyerWallet != providerWallet
+                && request.buyerWallet != payee;
+    }
+
+    function _attemptReputationSync(uint256 paymentId) private {
+        if (!_reputationPaymentSynced[paymentId]) {
+            try IReputationSink(reputationStorage).recordPayment(paymentId) {
+                _reputationPaymentSynced[paymentId] = true;
+                emit ReputationPaymentSynced(paymentId);
+            } catch {
+                emit ReputationSyncFailed(paymentId, IReputationSink.recordPayment.selector);
+                return;
+            }
+        }
+
+        uint256 unsyncedRefund = _refundedAmount[paymentId] - _reputationRefundSynced[paymentId];
+        if (unsyncedRefund == 0) return;
+        try IReputationSink(reputationStorage).recordRefund(paymentId, unsyncedRefund) {
+            _reputationRefundSynced[paymentId] += unsyncedRefund;
+            emit ReputationRefundSynced(paymentId, unsyncedRefund, _reputationRefundSynced[paymentId]);
+        } catch {
+            emit ReputationSyncFailed(paymentId, IReputationSink.recordRefund.selector);
+        }
+    }
+
+    function _syncPayment(uint256 paymentId) private {
+        if (_reputationPaymentSynced[paymentId]) return;
+        IReputationSink(reputationStorage).recordPayment(paymentId);
+        _reputationPaymentSynced[paymentId] = true;
+        emit ReputationPaymentSynced(paymentId);
+    }
+
+    function _syncRefund(uint256 paymentId) private {
+        uint256 unsyncedRefund = _refundedAmount[paymentId] - _reputationRefundSynced[paymentId];
+        if (unsyncedRefund == 0) return;
+        IReputationSink(reputationStorage).recordRefund(paymentId, unsyncedRefund);
+        _reputationRefundSynced[paymentId] += unsyncedRefund;
+        emit ReputationRefundSynced(paymentId, unsyncedRefund, _reputationRefundSynced[paymentId]);
     }
 }

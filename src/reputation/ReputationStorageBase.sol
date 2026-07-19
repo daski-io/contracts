@@ -31,6 +31,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
         uint256 confirmationTimestamp;
         bool outcomeRecorded;
         bytes32 currentConfirmationUid;
+        bool reputationEligible;
     }
 
     mapping(uint256 => ReputationRecord) internal _records;
@@ -87,7 +88,11 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
         uint256 indexed paymentId, bytes32 indexed serviceId, uint256 amountToBuyer, uint256 cumulativeRefunded
     );
     event PaymentRecorded(
-        uint256 indexed paymentId, uint256 indexed providerAgentId, uint256 indexed buyerAgentId, bytes32 serviceId
+        uint256 indexed paymentId,
+        uint256 indexed providerAgentId,
+        uint256 indexed buyerAgentId,
+        bytes32 serviceId,
+        bool reputationEligible
     );
     event EASUpdated(address indexed oldEAS, address indexed newEAS);
     event OutcomeSchemaUpdated(bytes32 indexed oldSchema, bytes32 indexed newSchema);

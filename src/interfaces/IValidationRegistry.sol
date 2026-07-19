@@ -53,6 +53,8 @@ interface IValidationRegistry {
     /// @notice Distinguishes a pending request from a completed zero response.
     function hasValidationResponse(bytes32 validationKey) external view returns (bool);
 
+    /// @dev ERC-8004 compatibility getter for bounded histories. Reverts once
+    ///      the list exceeds the implementation cap; use pagination then.
     function getSummary(uint256 agentId, address[] calldata validatorAddresses, string calldata tag)
         external
         view
@@ -70,6 +72,8 @@ interface IValidationRegistry {
     ) external view returns (uint64 count, uint256 totalResponse, uint256 nextOffset);
 
     /// @notice Returns namespaced validation keys requested for `agentId`.
+    /// @dev ERC-8004 compatibility getter for bounded histories. Prefer the
+    ///      paginated variant.
     function getAgentValidations(uint256 agentId) external view returns (bytes32[] memory validationKeys);
 
     function getAgentValidationCount(uint256 agentId) external view returns (uint256);
@@ -80,6 +84,8 @@ interface IValidationRegistry {
         returns (bytes32[] memory page);
 
     /// @notice Returns namespaced validation keys assigned to `validatorAddress`.
+    /// @dev ERC-8004 compatibility getter for bounded histories. Prefer the
+    ///      paginated variant.
     function getValidatorRequests(address validatorAddress) external view returns (bytes32[] memory validationKeys);
 
     function getValidatorRequestCount(address validatorAddress) external view returns (uint256);

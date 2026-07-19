@@ -5,8 +5,17 @@ import {IReputationSink} from "../../src/interfaces/IReputationSink.sol";
 
 /// @notice Minimal reputation sink for payment and adapter unit tests.
 contract MockReputationSink is IReputationSink {
+    address private immutable PAYMENT_ROUTER;
     uint256 public paymentCount;
     uint256 public refundCount;
+
+    constructor(address paymentRouter_) {
+        PAYMENT_ROUTER = paymentRouter_;
+    }
+
+    function paymentRouter() external view returns (address) {
+        return PAYMENT_ROUTER;
+    }
 
     function isConfigured() external pure returns (bool) {
         return true;

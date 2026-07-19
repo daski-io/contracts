@@ -21,13 +21,18 @@ abstract contract ReputationAccounting is ReputationAdmin {
             outcomeTimestamp: 0,
             confirmationTimestamp: 0,
             outcomeRecorded: false,
-            currentConfirmationUid: bytes32(0)
+            currentConfirmationUid: bytes32(0),
+            reputationEligible: payment.reputationEligible
         });
         recordIds.push(paymentId);
-        providerTransactionCount[payment.providerAgentId]++;
-        serviceTransactionCount[payment.serviceId]++;
-        buyerTransactionCount[payment.buyerAgentId]++;
-        emit PaymentRecorded(paymentId, payment.providerAgentId, payment.buyerAgentId, payment.serviceId);
+        if (payment.reputationEligible) {
+            providerTransactionCount[payment.providerAgentId]++;
+            serviceTransactionCount[payment.serviceId]++;
+            buyerTransactionCount[payment.buyerAgentId]++;
+        }
+        emit PaymentRecorded(
+            paymentId, payment.providerAgentId, payment.buyerAgentId, payment.serviceId, payment.reputationEligible
+        );
     }
 
     function recordRefund(uint256 paymentId, uint256 amountToBuyer) external onlyPaymentRouter {

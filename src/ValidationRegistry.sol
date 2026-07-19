@@ -14,6 +14,8 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///         is recoverable from events). Daski namespaces storage handles by
 ///         agentId to prevent cross-agent request-hash squatting.
 contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
+    uint256 public constant MAX_COMPATIBILITY_RESULTS = 256;
+
     struct Validation {
         address validatorAddress;
         uint256 agentId;
@@ -136,6 +138,7 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         override
         returns (uint64 count, uint8 averageResponse)
     {
+        _requireCompatibilityBound(_agentRequests[agentId].length);
         uint256 total;
         (count, total,) = _summaryPage(agentId, validatorAddresses, tag, 0, _agentRequests[agentId].length);
         if (count != 0) {
@@ -154,10 +157,12 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
     }
 
     function getAgentValidations(uint256 agentId) external view override returns (bytes32[] memory) {
+        _requireCompatibilityBound(_agentRequests[agentId].length);
         return _agentRequests[agentId];
     }
 
     function getValidatorRequests(address validatorAddress) external view override returns (bytes32[] memory) {
+        _requireCompatibilityBound(_validatorRequests[validatorAddress].length);
         return _validatorRequests[validatorAddress];
     }
 
@@ -226,6 +231,10 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {
         return keccak256(abi.encode(agentId, requestHash));
+    }
+
+    function _requireCompatibilityBound(uint256 length) private pure {
+        require(length <= MAX_COMPATIBILITY_RESULTS, "use paginated getter");
     }
 
     uint256[50] private __gap;
