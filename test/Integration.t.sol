@@ -6,7 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {AgentIndex} from "../src/AgentIndex.sol";
-import {ValidationRegistry} from "../src/ValidationRegistry.sol";
+import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -34,7 +34,7 @@ contract IntegrationTest is Test {
     MockEAS eas;
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
-    ValidationRegistry validationRegistry;
+    DaskiValidationRegistry validationRegistry;
     ProviderRegistry registry;
     ServiceRegistry services;
     PaymentRouter router;
@@ -65,11 +65,11 @@ contract IntegrationTest is Test {
             )
         );
 
-        ValidationRegistry valRegImpl = new ValidationRegistry();
-        validationRegistry = ValidationRegistry(
+        DaskiValidationRegistry valRegImpl = new DaskiValidationRegistry();
+        validationRegistry = DaskiValidationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(valRegImpl), abi.encodeCall(ValidationRegistry.initialize, (address(identity), admin))
+                    address(valRegImpl), abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), admin))
                 )
             )
         );
@@ -138,6 +138,7 @@ contract IntegrationTest is Test {
         router.setReputationStorage(address(reputation));
         router.setAdapter(address(adapter), true);
         router.setAcceptedToken(address(usdc), true);
+        router.setTokenReputationConfig(address(usdc), true, 250_000);
     }
 
     function _signedAuthAndSettle(
@@ -272,7 +273,7 @@ contract IntegrationTest is Test {
         //    Sepolia), written by the gateway per confirmed delivery — an
         //    off-chain integration, not part of this contract suite.
 
-        // 9. ERC-8004 ValidationRegistry (Daski-hosted; the canonical
+        // 9. DaskiValidationRegistry (ERC-8004-inspired; the canonical
         //    validation registry does not exist yet)
         address validator = makeAddr("validator");
         bytes32 reqHash = keccak256("validation-req-1");

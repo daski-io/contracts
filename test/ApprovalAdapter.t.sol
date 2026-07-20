@@ -15,6 +15,8 @@ import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
 contract ApprovalAdapterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -95,6 +97,8 @@ contract ApprovalAdapterTest is Test {
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");

@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IValidationRegistry} from "./interfaces/IValidationRegistry.sol";
+import {IDaskiValidationRegistry} from "./interfaces/IDaskiValidationRegistry.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
-/// @notice ERC-8004 Validation Registry. Stores the latest response
-///         per validation (the spec allows multiple calls; each overwrites
-///         response/responseHash/tag and bumps lastUpdate — the full history
-///         is recoverable from events). Daski namespaces storage handles by
-///         agentId to prevent cross-agent request-hash squatting.
-contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
-    uint256 public constant MAX_COMPATIBILITY_RESULTS = 256;
-
+/// @notice Daski-specific, ERC-8004-inspired validation registry. Storage and
+///         calls use an agent-namespaced validationKey to prevent cross-agent
+///         request-hash squatting; events retain the raw requestHash.
+contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegistry {
     struct Validation {
         address validatorAddress;
         uint256 agentId;
@@ -84,7 +79,7 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         _agentRequests[agentId].push(validationKey);
         _validatorRequests[validatorAddress].push(validationKey);
 
-        emit ValidationRequest(validatorAddress, agentId, requestURI, requestHash);
+        emit ValidationRequest(validatorAddress, agentId, requestURI, requestHash, validationKey);
     }
 
     function validationResponse(
@@ -105,7 +100,9 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         v.lastUpdate = block.timestamp;
         v.hasResponse = true;
 
-        emit ValidationResponse(v.validatorAddress, v.agentId, v.requestHash, response, responseURI, responseHash, tag);
+        emit ValidationResponse(
+            v.validatorAddress, v.agentId, v.requestHash, validationKey, response, responseURI, responseHash, tag
+        );
     }
 
     function getValidationStatus(bytes32 validationKey)
@@ -132,20 +129,6 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         return v.hasResponse;
     }
 
-    function getSummary(uint256 agentId, address[] calldata validatorAddresses, string calldata tag)
-        external
-        view
-        override
-        returns (uint64 count, uint8 averageResponse)
-    {
-        _requireCompatibilityBound(_agentRequests[agentId].length);
-        uint256 total;
-        (count, total,) = _summaryPage(agentId, validatorAddresses, tag, 0, _agentRequests[agentId].length);
-        if (count != 0) {
-            averageResponse = SafeCast.toUint8(total / count);
-        }
-    }
-
     function getSummaryPaginated(
         uint256 agentId,
         address[] calldata validatorAddresses,
@@ -154,16 +137,6 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         uint256 limit
     ) external view override returns (uint64 count, uint256 totalResponse, uint256 nextOffset) {
         return _summaryPage(agentId, validatorAddresses, tag, offset, limit);
-    }
-
-    function getAgentValidations(uint256 agentId) external view override returns (bytes32[] memory) {
-        _requireCompatibilityBound(_agentRequests[agentId].length);
-        return _agentRequests[agentId];
-    }
-
-    function getValidatorRequests(address validatorAddress) external view override returns (bytes32[] memory) {
-        _requireCompatibilityBound(_validatorRequests[validatorAddress].length);
-        return _validatorRequests[validatorAddress];
     }
 
     /// @notice Length of the agent's validation list. Pair with
@@ -231,10 +204,6 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {
         return keccak256(abi.encode(agentId, requestHash));
-    }
-
-    function _requireCompatibilityBound(uint256 length) private pure {
-        require(length <= MAX_COMPATIBILITY_RESULTS, "use paginated getter");
     }
 
     uint256[50] private __gap;

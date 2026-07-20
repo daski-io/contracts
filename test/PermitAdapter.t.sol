@@ -10,12 +10,15 @@ import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IPermitAdapter} from "../src/interfaces/IPermitAdapter.sol";
 import {PermitSigner} from "./helpers/PermitSigner.sol";
 import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
 contract PermitAdapterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -98,6 +101,8 @@ contract PermitAdapterTest is Test {
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
@@ -180,5 +185,25 @@ contract PermitAdapterTest is Test {
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
         adapter.settle(address(other), 100e6, keccak256("p-unk"), providerAgentId, serviceId, p);
+    }
+
+    function test_settleFeeOnTransferTokenRevertsAtomicallyWithAllowance() public {
+        FeeOnTransferToken feeToken = new FeeOnTransferToken();
+        feeToken.mint(buyer, 100e6);
+        vm.prank(admin);
+        router.setAcceptedToken(address(feeToken), true);
+        vm.prank(buyer);
+        feeToken.approve(address(adapter), 100e6);
+
+        IPermitAdapter.PermitData memory unsupportedPermit = IPermitAdapter.PermitData({
+            value: 100e6, deadline: block.timestamp + 1 hours, v: 27, r: bytes32(0), s: bytes32(0)
+        });
+        vm.prank(buyer);
+        vm.expectRevert("unexpected token amount");
+        adapter.settle(address(feeToken), 100e6, keccak256("p-fee"), providerAgentId, serviceId, unsupportedPermit);
+
+        assertEq(feeToken.balanceOf(buyer), 100e6);
+        assertEq(feeToken.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
     }
 }

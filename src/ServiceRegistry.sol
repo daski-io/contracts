@@ -34,7 +34,7 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///
 /// Auth model — every mutating call on an existing service requires the
 /// caller to be authorized over the provider's ERC-8004 NFT, matching the
-/// surface used by IdentityRegistry / ReputationRegistry / ValidationRegistry:
+/// surface used by IdentityRegistry / ReputationRegistry / DaskiValidationRegistry:
 ///   1. NFT owner (ownerOf), OR
 ///   2. operator approved via setApprovalForAll, OR
 ///   3. per-token approved spender (getApproved).

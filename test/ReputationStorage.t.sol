@@ -24,6 +24,8 @@ import {
 } from "../src/interfaces/IEAS.sol";
 
 contract ReputationStorageTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -133,6 +135,7 @@ contract ReputationStorageTest is Test {
         router.setReputationStorage(address(reputation));
         router.setAdapter(address(adapter), true);
         router.setAcceptedToken(address(usdc), true);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
         vm.stopPrank();
 
         vm.prank(provider);
@@ -547,7 +550,7 @@ contract ReputationStorageTest is Test {
     }
 
     function test_ineligiblePaymentIsRecordedButCannotAffectReputation() public {
-        uint256 tinyAmount = router.MINIMUM_REPUTATION_AMOUNT() - 1;
+        uint256 tinyAmount = REPUTATION_MINIMUM - 1;
         usdc.mint(buyer, tinyAmount);
         uint256 tinyPaymentId = _payAsBuyer(tinyAmount, keccak256("tiny-reputation"), serviceId);
         providerRecipients[tinyPaymentId] = provider;
@@ -673,14 +676,16 @@ contract ReputationStorageTest is Test {
         vm.expectRevert("outcome schema not configured");
         fresh.finalizeConfiguration();
 
+        bytes32 freshOutcome = eas.register("uint256 paymentId,uint8 outcome", address(fresh), false);
         vm.prank(admin);
-        fresh.setOutcomeSchema(bytes32(uint256(1)));
+        fresh.setOutcomeSchema(freshOutcome);
         vm.prank(admin);
         vm.expectRevert("confirmation schema not configured");
         fresh.finalizeConfiguration();
 
+        bytes32 freshConfirmation = eas.register("uint256 paymentId,uint8 confirmation", address(fresh), true);
         vm.prank(admin);
-        fresh.setConfirmationSchema(bytes32(uint256(2)));
+        fresh.setConfirmationSchema(freshConfirmation);
         vm.prank(admin);
         fresh.finalizeConfiguration();
         assertTrue(fresh.isConfigured());

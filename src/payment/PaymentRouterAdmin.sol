@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {IAdapterBinding} from "../interfaces/IAdapterBinding.sol";
 import {IReputationSink} from "../interfaces/IReputationSink.sol";
 import {PaymentRouterStorage} from "./PaymentRouterStorage.sol";
 
@@ -18,6 +19,7 @@ abstract contract PaymentRouterAdmin is PaymentRouterStorage {
         if (allowed) {
             require(adapter.code.length > 0, "adapter has no code");
             _requireReputationConfigured();
+            require(IAdapterBinding(adapter).router() == address(this), "wrong adapter router");
         }
         if (allowed) {
             _adapters.add(adapter);
@@ -36,8 +38,21 @@ abstract contract PaymentRouterAdmin is PaymentRouterStorage {
             _acceptedTokens.add(token);
         } else {
             _acceptedTokens.remove(token);
+            TokenReputationConfig storage config = _tokenReputationConfigs[token];
+            if (config.enabled || config.minimumAmount != 0) {
+                delete _tokenReputationConfigs[token];
+                emit TokenReputationConfigured(token, false, 0);
+            }
         }
         emit AcceptedTokenSet(token, allowed);
+    }
+
+    function setTokenReputationConfig(address token, bool enabled, uint256 minimumAmount) external onlyAdmin {
+        require(_acceptedTokens.contains(token), "token not accepted");
+        require(!enabled || minimumAmount > 0, "zero reputation minimum");
+        if (!enabled) minimumAmount = 0;
+        _tokenReputationConfigs[token] = TokenReputationConfig({enabled: enabled, minimumAmount: minimumAmount});
+        emit TokenReputationConfigured(token, enabled, minimumAmount);
     }
 
     function setTreasury(address newTreasury) external onlyAdmin {

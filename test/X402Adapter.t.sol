@@ -10,6 +10,7 @@ import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferUSDC} from "./mocks/FeeOnTransferUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
@@ -17,6 +18,8 @@ import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
 import {MockReputationSink} from "./helpers/MockReputationSink.sol";
 
 contract X402AdapterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -102,6 +105,8 @@ contract X402AdapterTest is Test {
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
@@ -249,6 +254,29 @@ contract X402AdapterTest is Test {
         vm.prank(relayer);
         vm.expectRevert("token not accepted");
         adapter.settle(address(other), 100e6, ref, providerAgentId, serviceId, auth);
+    }
+
+    function test_settleFeeOnTransferTokenRevertsAtomically() public {
+        FeeOnTransferUSDC feeToken = new FeeOnTransferUSDC();
+        feeToken.mint(buyer, 100e6);
+        vm.prank(admin);
+        router.setAcceptedToken(address(feeToken), true);
+
+        bytes32 ref = keccak256("ref-fee");
+        bytes32 nonce = keccak256(abi.encode(ref, providerAgentId, serviceId));
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
+            vm, BUYER_KEY, address(feeToken), buyer, address(router), 100e6, 0, block.timestamp + 1 hours, nonce
+        );
+
+        vm.prank(relayer);
+        vm.expectRevert("unexpected token amount");
+        adapter.settle(address(feeToken), 100e6, ref, providerAgentId, serviceId, auth);
+
+        assertEq(feeToken.balanceOf(buyer), 100e6);
+        assertEq(feeToken.balanceOf(address(router)), 0);
+        assertFalse(feeToken.authorizationState(buyer, nonce));
+        assertFalse(router.paymentKeyUsed(router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, ref)));
+        assertEq(router.nextPaymentId(), 1);
     }
 
     // ── Auth binding to (serviceRef, providerAgentId, serviceId) ─────────

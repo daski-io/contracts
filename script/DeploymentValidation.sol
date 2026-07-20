@@ -6,18 +6,15 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 import {AgentIndex} from "../src/AgentIndex.sol";
-import {ValidationRegistry} from "../src/ValidationRegistry.sol";
+import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {IEAS, ISchemaRegistry, SchemaRecord} from "../src/interfaces/IEAS.sol";
+import {IAdapterBinding} from "../src/interfaces/IAdapterBinding.sol";
+import {ReputationSchemas} from "../src/reputation/ReputationSchemas.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
-
-interface IAdapterBinding {
-    function router() external view returns (address);
-    function agentIndex() external view returns (address);
-}
 
 /// @notice Shared deployment invariants used during deployment and by the
 ///         read-only post-deployment verifier.
@@ -31,15 +28,14 @@ library DeploymentValidation {
     address internal constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
     address internal constant BASE_EAS = 0x4200000000000000000000000000000000000021;
     address internal constant BASE_SCHEMA_REGISTRY = 0x4200000000000000000000000000000000000020;
-    string internal constant OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome";
-    string internal constant CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation";
 
     struct Stack {
         address identity;
         address usdc;
-        address treasury;
+        address providerTreasury;
+        address paymentTreasury;
         address agentIndex;
-        address validationRegistry;
+        address daskiValidationRegistry;
         address providerRegistry;
         address serviceRegistry;
         address router;
@@ -49,14 +45,15 @@ library DeploymentValidation {
         address approvalAdapter;
         uint256 listingFee;
         uint256 commissionBps;
+        uint256 reputationMinimum;
     }
 
     function outcomeSchema() internal pure returns (string memory) {
-        return OUTCOME_SCHEMA;
+        return ReputationSchemas.outcomeSchema();
     }
 
     function confirmationSchema() internal pure returns (string memory) {
-        return CONFIRMATION_SCHEMA;
+        return ReputationSchemas.confirmationSchema();
     }
 
     function adapters(Stack memory deployment) internal pure returns (address[3] memory) {
@@ -66,7 +63,7 @@ library DeploymentValidation {
     function adminContracts(Stack memory deployment) internal pure returns (address[9] memory) {
         return [
             deployment.agentIndex,
-            deployment.validationRegistry,
+            deployment.daskiValidationRegistry,
             deployment.providerRegistry,
             deployment.serviceRegistry,
             deployment.router,
@@ -107,6 +104,12 @@ library DeploymentValidation {
         require(address(IEAS(eas).getSchemaRegistry()) == schemaRegistry, "wrong EAS schema registry");
     }
 
+    function validateFinalAdmin(address finalAdmin, address deployer) internal view {
+        require(finalAdmin != address(0), "ADMIN_ADDRESS is required");
+        require(finalAdmin != deployer, "ADMIN_ADDRESS must differ from deployer");
+        require(finalAdmin.code.length > 0, "ADMIN_ADDRESS must be a governance contract");
+    }
+
     function validateSchemas(
         address eas,
         address schemaRegistry,
@@ -118,6 +121,14 @@ library DeploymentValidation {
     ) internal view {
         ReputationStorage reputationStorage = ReputationStorage(reputation);
         require(address(reputationStorage.eas()) == eas, "wrong reputation EAS");
+        require(
+            reputationStorage.expectedOutcomeSchemaHash() == keccak256(bytes(expectedOutcomeSchema)),
+            "outcome schema definition mismatch"
+        );
+        require(
+            reputationStorage.expectedConfirmationSchemaHash() == keccak256(bytes(expectedConfirmationSchema)),
+            "confirmation schema definition mismatch"
+        );
         require(reputationStorage.outcomeSchema() == outcomeUid, "wrong stored outcome schema");
         require(reputationStorage.confirmationSchema() == confirmationUid, "wrong stored confirmation schema");
 
@@ -137,14 +148,14 @@ library DeploymentValidation {
         );
     }
 
-    function validateWiring(Stack memory deployment) internal view {
+    function validateCoreWiring(Stack memory deployment) internal view {
         require(
             AgentIndex(deployment.agentIndex).getIdentityRegistry() == deployment.identity,
             "AgentIndex identity mismatch"
         );
         require(
-            ValidationRegistry(deployment.validationRegistry).getIdentityRegistry() == deployment.identity,
-            "ValidationRegistry identity mismatch"
+            DaskiValidationRegistry(deployment.daskiValidationRegistry).getIdentityRegistry() == deployment.identity,
+            "DaskiValidationRegistry identity mismatch"
         );
         require(
             address(ProviderRegistry(deployment.providerRegistry).identity()) == deployment.identity,
@@ -155,7 +166,7 @@ library DeploymentValidation {
             "ProviderRegistry USDC mismatch"
         );
         require(
-            ProviderRegistry(deployment.providerRegistry).treasury() == deployment.treasury,
+            ProviderRegistry(deployment.providerRegistry).treasury() == deployment.providerTreasury,
             "ProviderRegistry treasury mismatch"
         );
         require(
@@ -175,7 +186,7 @@ library DeploymentValidation {
         require(address(router.identity()) == deployment.identity, "router identity mismatch");
         require(address(router.registry()) == deployment.providerRegistry, "router provider mismatch");
         require(address(router.serviceRegistry()) == deployment.serviceRegistry, "router service mismatch");
-        require(router.treasury() == deployment.treasury, "router treasury mismatch");
+        require(router.treasury() == deployment.paymentTreasury, "router treasury mismatch");
         require(router.commissionBps() == deployment.commissionBps, "router commission mismatch");
         require(router.reputationStorage() == deployment.reputation, "router reputation mismatch");
         require(
@@ -183,24 +194,32 @@ library DeploymentValidation {
             "reputation router mismatch"
         );
         require(ReputationStorage(deployment.reputation).isConfigured(), "reputation not configured");
+        _validateAdapterBindings(deployment);
+    }
+
+    function validateDarkState(Stack memory deployment) internal view {
+        PaymentRouter router = PaymentRouter(deployment.router);
+        require(router.getAcceptedTokenCount() == 0, "payment token already active");
+        require(router.getAdapterCount() == 0, "payment adapter already active");
+        (bool enabled, uint256 minimumAmount) = router.getTokenReputationConfig(deployment.usdc);
+        require(!enabled && minimumAmount == 0, "token reputation already active");
+        _validateAdapterBindings(deployment);
+    }
+
+    function validateOperationalState(Stack memory deployment) internal view {
+        PaymentRouter router = PaymentRouter(deployment.router);
         require(router.getAcceptedTokenCount() == 1, "unexpected accepted token count");
         require(router.getAcceptedTokenAt(0) == deployment.usdc, "unexpected accepted token");
+        (bool enabled, uint256 minimumAmount) = router.getTokenReputationConfig(deployment.usdc);
+        require(enabled, "token reputation disabled");
+        require(minimumAmount == deployment.reputationMinimum, "wrong reputation minimum");
 
         address[3] memory expectedAdapters = adapters(deployment);
-        require(
-            expectedAdapters[0] != expectedAdapters[1] && expectedAdapters[0] != expectedAdapters[2]
-                && expectedAdapters[1] != expectedAdapters[2],
-            "duplicate expected adapter"
-        );
         require(router.getAdapterCount() == expectedAdapters.length, "unexpected adapter count");
         for (uint256 i = 0; i < expectedAdapters.length; i++) {
             require(router.isAdapter(expectedAdapters[i]), "adapter not enabled");
-            require(IAdapterBinding(expectedAdapters[i]).router() == deployment.router, "adapter router mismatch");
-            require(
-                IAdapterBinding(expectedAdapters[i]).agentIndex() == deployment.agentIndex,
-                "adapter AgentIndex mismatch"
-            );
         }
+        _validateAdapterBindings(deployment);
     }
 
     function validatePendingAdmins(address[9] memory contracts_, address currentAdmin, address pendingAdmin)
@@ -218,6 +237,22 @@ library DeploymentValidation {
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == expectedAdmin, "admin not accepted");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == address(0), "pending admin remains");
+        }
+    }
+
+    function _validateAdapterBindings(Stack memory deployment) private view {
+        address[3] memory expectedAdapters = adapters(deployment);
+        require(
+            expectedAdapters[0] != expectedAdapters[1] && expectedAdapters[0] != expectedAdapters[2]
+                && expectedAdapters[1] != expectedAdapters[2],
+            "duplicate expected adapter"
+        );
+        for (uint256 i = 0; i < expectedAdapters.length; i++) {
+            require(IAdapterBinding(expectedAdapters[i]).router() == deployment.router, "adapter router mismatch");
+            require(
+                IAdapterBinding(expectedAdapters[i]).agentIndex() == deployment.agentIndex,
+                "adapter AgentIndex mismatch"
+            );
         }
     }
 

@@ -5,7 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {AgentIndex} from "../src/AgentIndex.sol";
-import {ValidationRegistry} from "../src/ValidationRegistry.sol";
+import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
@@ -39,8 +39,10 @@ contract Deploy is Script {
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address treasury = vm.envAddress("TREASURY_ADDRESS");
-        require(treasury != address(0), "TREASURY_ADDRESS is required");
+        address providerTreasury = vm.envAddress("PROVIDER_TREASURY_ADDRESS");
+        require(providerTreasury != address(0), "PROVIDER_TREASURY_ADDRESS is required");
+        address paymentTreasury = vm.envAddress("PAYMENT_TREASURY_ADDRESS");
+        require(paymentTreasury != address(0), "PAYMENT_TREASURY_ADDRESS is required");
 
         // The canonical ERC-8004 IdentityRegistry for this chain. Required —
         // there is deliberately no fallback that deploys a local registry.
@@ -65,9 +67,7 @@ contract Deploy is Script {
         // governance contract (multisig or timelock); an EOA deployer is
         // deliberately never accepted as the long-term control plane.
         address finalAdmin = vm.envOr("ADMIN_ADDRESS", address(0));
-        require(finalAdmin != address(0), "ADMIN_ADDRESS is required");
-        require(finalAdmin != deployer, "ADMIN_ADDRESS must differ from deployer");
-        require(finalAdmin.code.length > 0, "ADMIN_ADDRESS must be a governance contract");
+        DeploymentValidation.validateFinalAdmin(finalAdmin, deployer);
 
         vm.startBroadcast(deployerKey);
 
@@ -80,20 +80,23 @@ contract Deploy is Script {
         );
         console.log("AgentIndex proxy:", address(agentIndexProxy));
 
-        // ── (c) ValidationRegistry (ERC-8004, Daski-hosted) ───────────
-        // Stays self-hosted: the ERC-8004 Validation Registry spec section is
-        // still in flux and has no canonical deployment yet.
-        ValidationRegistry validationRegistryImpl = new ValidationRegistry();
+        // ── (c) DaskiValidationRegistry ───────────────────────────────
+        // Namespaced request keys and paginated reads intentionally differ
+        // from the draft ERC-8004 validation surface.
+        DaskiValidationRegistry validationRegistryImpl = new DaskiValidationRegistry();
         ERC1967Proxy validationRegistryProxy = new ERC1967Proxy(
-            address(validationRegistryImpl), abi.encodeCall(ValidationRegistry.initialize, (identityRegistry, deployer))
+            address(validationRegistryImpl),
+            abi.encodeCall(DaskiValidationRegistry.initialize, (identityRegistry, deployer))
         );
-        console.log("ValidationRegistry proxy:", address(validationRegistryProxy));
+        console.log("DaskiValidationRegistry proxy:", address(validationRegistryProxy));
 
         // ── (d) ProviderRegistry (Daski) ──────────────────────────────
         ProviderRegistry providerRegistryImpl = new ProviderRegistry();
         ERC1967Proxy providerRegistryProxy = new ERC1967Proxy(
             address(providerRegistryImpl),
-            abi.encodeCall(ProviderRegistry.initialize, (identityRegistry, usdcAddress, treasury, listingFee, deployer))
+            abi.encodeCall(
+                ProviderRegistry.initialize, (identityRegistry, usdcAddress, providerTreasury, listingFee, deployer)
+            )
         );
         console.log("ProviderRegistry proxy:", address(providerRegistryProxy));
 
@@ -115,7 +118,7 @@ contract Deploy is Script {
                     identityRegistry,
                     address(providerRegistryProxy),
                     address(serviceRegistryProxy),
-                    treasury,
+                    paymentTreasury,
                     commissionBps,
                     deployer
                 )
@@ -177,19 +180,16 @@ contract Deploy is Script {
         );
         console.log("ApprovalAdapter proxy:", address(approvalAdapterProxy));
 
-        // ── (k) Wire reputation before enabling payment entry points ──
+        // ── (k) Wire reputation; payment entry points remain dark ─────
         router.setReputationStorage(address(reputationProxy));
-        router.setAdapter(address(x402AdapterProxy), true);
-        router.setAdapter(address(permitAdapterProxy), true);
-        router.setAdapter(address(approvalAdapterProxy), true);
-        router.setAcceptedToken(usdcAddress, true);
 
         DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
             identity: identityRegistry,
             usdc: usdcAddress,
-            treasury: treasury,
+            providerTreasury: providerTreasury,
+            paymentTreasury: paymentTreasury,
             agentIndex: address(agentIndexProxy),
-            validationRegistry: address(validationRegistryProxy),
+            daskiValidationRegistry: address(validationRegistryProxy),
             providerRegistry: address(providerRegistryProxy),
             serviceRegistry: address(serviceRegistryProxy),
             router: address(routerProxy),
@@ -198,9 +198,11 @@ contract Deploy is Script {
             permitAdapter: address(permitAdapterProxy),
             approvalAdapter: address(approvalAdapterProxy),
             listingFee: listingFee,
-            commissionBps: commissionBps
+            commissionBps: commissionBps,
+            reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
         });
-        DeploymentValidation.validateWiring(deployment);
+        DeploymentValidation.validateCoreWiring(deployment);
+        DeploymentValidation.validateDarkState(deployment);
 
         // ── (l) Admin handoff ─────────────────────────────────────────
         // All wiring above ran as the deployer. Start the mandatory two-step
@@ -222,7 +224,7 @@ contract Deploy is Script {
         console.log("  USDC:               ", usdcAddress);
         console.log("  IdentityRegistry (canonical, external):", identityRegistry);
         console.log("  AgentIndex:         ", address(agentIndexProxy));
-        console.log("  ValidationRegistry: ", address(validationRegistryProxy));
+        console.log("  DaskiValidationRegistry:", address(validationRegistryProxy));
         console.log("  ProviderRegistry:   ", address(providerRegistryProxy));
         console.log("  ServiceRegistry:    ", address(serviceRegistryProxy));
         console.log("  PaymentRouter:      ", address(routerProxy));
@@ -231,7 +233,7 @@ contract Deploy is Script {
         console.log("  PermitAdapter:      ", address(permitAdapterProxy));
         console.log("  ApprovalAdapter:    ", address(approvalAdapterProxy));
         _logImplementation("AgentIndex", address(agentIndexImpl));
-        _logImplementation("ValidationRegistry", address(validationRegistryImpl));
+        _logImplementation("DaskiValidationRegistry", address(validationRegistryImpl));
         _logImplementation("ProviderRegistry", address(providerRegistryImpl));
         _logImplementation("ServiceRegistry", address(serviceRegistryImpl));
         _logImplementation("PaymentRouter", address(routerImpl));

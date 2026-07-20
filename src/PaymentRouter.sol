@@ -12,6 +12,7 @@ import {IReputationSink} from "./interfaces/IReputationSink.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
 import {PaymentRouterAdmin} from "./payment/PaymentRouterAdmin.sol";
 import {PaymentRouterViews} from "./payment/PaymentRouterViews.sol";
+import {LibReputationEligibility} from "./payment/LibReputationEligibility.sol";
 
 /// @notice Payment-rail-agnostic settlement and provider refund entry point.
 ///         Adapters move funds into the router; this contract validates the
@@ -86,15 +87,15 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
             _paymentKey(request.buyerAgentId, request.providerAgentId, request.serviceId, request.serviceRef);
         require(!_usedPaymentKeys[paymentKey], "payment key used");
         require(request.buyerWallet != address(0), "zero buyer wallet");
-        require(
-            request.buyerWallet == identity.getAgentWallet(request.buyerAgentId)
-                || request.buyerWallet == identity.ownerOf(request.buyerAgentId),
-            "buyer wallet mismatch"
-        );
+        address buyerAgentWallet = identity.getAgentWallet(request.buyerAgentId);
+        address buyerOwner = identity.ownerOf(request.buyerAgentId);
+        require(request.buyerWallet == buyerAgentWallet || request.buyerWallet == buyerOwner, "buyer wallet mismatch");
 
         (address payee, address providerOwner, address providerWallet) = _providerContext(request);
         uint256 commission = (request.amount * commissionBps) / 10000;
-        bool reputationEligible = _isReputationEligible(request, commission, payee, providerOwner, providerWallet);
+        bool reputationEligible = _isReputationEligible(
+            request, commission, buyerOwner, buyerAgentWallet, payee, providerOwner, providerWallet
+        );
         // Adapters are trusted to have delivered `amount` to the router within
         // this transaction, and accepted tokens must not be fee-on-transfer:
         // the balance check proves the router is funded, not that THIS call
@@ -188,16 +189,21 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
     function _isReputationEligible(
         Settlement memory request,
         uint256 commission,
+        address buyerOwner,
+        address buyerAgentWallet,
         address payee,
         address providerOwner,
         address providerWallet
-    ) private pure returns (bool) {
-        if (request.amount < MINIMUM_REPUTATION_AMOUNT) return false;
+    ) private view returns (bool) {
+        TokenReputationConfig storage config = _tokenReputationConfigs[request.token];
+        if (!config.enabled || request.amount < config.minimumAmount) return false;
         if (commission == 0) return false;
         if (request.buyerAgentId == request.providerAgentId) return false;
-        return
-            request.buyerWallet != providerOwner && request.buyerWallet != providerWallet
-                && request.buyerWallet != payee;
+        address[3] memory buyerAddresses = [request.buyerWallet, buyerOwner, buyerAgentWallet];
+        address[3] memory providerAddresses = [providerOwner, providerWallet, payee];
+        return !LibReputationEligibility.hasProvableControlOverlap(
+            identity, request.providerAgentId, buyerAddresses, providerAddresses
+        );
     }
 
     function _attemptReputationSync(uint256 paymentId) private {

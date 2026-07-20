@@ -81,5 +81,9 @@ interface IPaymentRouter {
     function isAcceptedToken(address token) external view returns (bool);
     function getAcceptedTokenCount() external view returns (uint256);
     function getAcceptedTokenAt(uint256 index) external view returns (address);
+    function getTokenReputationConfig(address token)
+        external
+        view
+        returns (bool reputationEnabled, uint256 minimumReputationAmount);
     function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount);
 }

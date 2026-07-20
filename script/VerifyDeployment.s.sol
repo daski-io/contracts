@@ -16,6 +16,7 @@ contract VerifyDeployment is Script {
         address eas = vm.envAddress("EAS_ADDRESS");
         address schemaRegistry = vm.envAddress("EAS_SCHEMA_REGISTRY_ADDRESS");
         address finalAdmin = vm.envAddress("ADMIN_ADDRESS");
+        bool deploymentActive = vm.envBool("DEPLOYMENT_ACTIVE");
 
         DeploymentValidation.validateExternalDependencies(
             identity, usdc, eas, schemaRegistry, vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false)
@@ -24,9 +25,10 @@ contract VerifyDeployment is Script {
         DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
             identity: identity,
             usdc: usdc,
-            treasury: vm.envAddress("TREASURY_ADDRESS"),
+            providerTreasury: vm.envAddress("PROVIDER_TREASURY_ADDRESS"),
+            paymentTreasury: vm.envAddress("PAYMENT_TREASURY_ADDRESS"),
             agentIndex: vm.envAddress("AGENT_INDEX_ADDRESS"),
-            validationRegistry: vm.envAddress("VALIDATION_REGISTRY_ADDRESS"),
+            daskiValidationRegistry: vm.envAddress("DASKI_VALIDATION_REGISTRY_ADDRESS"),
             providerRegistry: vm.envAddress("PROVIDER_REGISTRY_ADDRESS"),
             serviceRegistry: vm.envAddress("SERVICE_REGISTRY_ADDRESS"),
             router: vm.envAddress("PAYMENT_ROUTER_ADDRESS"),
@@ -35,7 +37,8 @@ contract VerifyDeployment is Script {
             permitAdapter: vm.envAddress("PERMIT_ADAPTER_ADDRESS"),
             approvalAdapter: vm.envAddress("APPROVAL_ADAPTER_ADDRESS"),
             listingFee: vm.envOr("LISTING_FEE", uint256(1_000_000)),
-            commissionBps: vm.envOr("COMMISSION_BPS", uint256(500))
+            commissionBps: vm.envOr("COMMISSION_BPS", uint256(500)),
+            reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
         });
 
         DeploymentValidation.validateSchemas(
@@ -47,11 +50,16 @@ contract VerifyDeployment is Script {
             DeploymentValidation.outcomeSchema(),
             DeploymentValidation.confirmationSchema()
         );
-        DeploymentValidation.validateWiring(deployment);
+        DeploymentValidation.validateCoreWiring(deployment);
+        if (deploymentActive) {
+            DeploymentValidation.validateOperationalState(deployment);
+        } else {
+            DeploymentValidation.validateDarkState(deployment);
+        }
 
         DeploymentValidation.validateAcceptedAdmins(DeploymentValidation.adminContracts(deployment), finalAdmin);
         _validateImplementation(deployment.agentIndex, "AGENT_INDEX_IMPLEMENTATION_CODEHASH");
-        _validateImplementation(deployment.validationRegistry, "VALIDATION_REGISTRY_IMPLEMENTATION_CODEHASH");
+        _validateImplementation(deployment.daskiValidationRegistry, "DASKI_VALIDATION_REGISTRY_IMPLEMENTATION_CODEHASH");
         _validateImplementation(deployment.providerRegistry, "PROVIDER_REGISTRY_IMPLEMENTATION_CODEHASH");
         _validateImplementation(deployment.serviceRegistry, "SERVICE_REGISTRY_IMPLEMENTATION_CODEHASH");
         _validateImplementation(deployment.router, "PAYMENT_ROUTER_IMPLEMENTATION_CODEHASH");

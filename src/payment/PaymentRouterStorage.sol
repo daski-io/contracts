@@ -15,8 +15,10 @@ import {Admin2StepUpgradeable} from "../utils/Admin2StepUpgradeable.sol";
 abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard, IPaymentRouter {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    /// @notice Minimum six-decimal token amount that can create reputation.
-    uint256 public constant MINIMUM_REPUTATION_AMOUNT = 250_000;
+    struct TokenReputationConfig {
+        bool enabled;
+        uint256 minimumAmount;
+    }
 
     address public treasury;
     ICanonicalIdentity public identity;
@@ -34,6 +36,7 @@ abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard
 
     address public reputationStorage;
     IServiceRegistry public serviceRegistry;
+    mapping(address => TokenReputationConfig) internal _tokenReputationConfigs;
 
     event PaymentSettled(
         uint256 indexed paymentId,
@@ -49,6 +52,7 @@ abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard
     event Refunded(uint256 indexed paymentId, uint256 amountToBuyer, uint256 cumulativeRefunded);
     event AdapterSet(address indexed adapter, bool allowed);
     event AcceptedTokenSet(address indexed token, bool allowed);
+    event TokenReputationConfigured(address indexed token, bool enabled, uint256 minimumAmount);
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event ReputationStorageUpdated(address indexed oldStorage, address indexed newStorage);
@@ -74,5 +78,5 @@ abstract contract PaymentRouterStorage is Admin2StepUpgradeable, ReentrancyGuard
         require(IReputationSink(reputationStorage).isConfigured(), "reputation not configured");
     }
 
-    uint256[50] private _gap;
+    uint256[49] private _gap;
 }

@@ -61,4 +61,13 @@ abstract contract PaymentRouterViews is PaymentRouterStorage {
     function getAcceptedTokenAt(uint256 index) external view returns (address) {
         return _acceptedTokens.at(index);
     }
+
+    function getTokenReputationConfig(address token)
+        external
+        view
+        returns (bool reputationEnabled, uint256 minimumReputationAmount)
+    {
+        TokenReputationConfig storage config = _tokenReputationConfigs[token];
+        return (config.enabled, config.minimumAmount);
+    }
 }
