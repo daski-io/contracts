@@ -13,8 +13,10 @@ import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {
     Attestation,
     AttestationRequest,
@@ -35,6 +37,7 @@ contract ReputationStorageTest is Test {
     ReputationStorage reputation;
     MockUSDC usdc;
     MockEAS eas;
+    MockSanctionsList sanctions;
 
     bytes32 outcomeSchemaUid;
     bytes32 confirmationSchemaUid;
@@ -61,12 +64,16 @@ contract ReputationStorageTest is Test {
         buyer = vm.addr(BUYER_KEY);
         usdc = new MockUSDC();
         eas = new MockEAS();
+        sanctions = new MockSanctionsList();
 
         identity = new MockCanonicalIdentityRegistry();
         AgentIndex aiImpl = new AgentIndex();
         agentIndex = AgentIndex(
             address(
-                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+                new ERC1967Proxy(
+                    address(aiImpl),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), admin))
+                )
             )
         );
 
@@ -76,7 +83,8 @@ contract ReputationStorageTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -87,7 +95,9 @@ contract ReputationStorageTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -99,7 +109,15 @@ contract ReputationStorageTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(services), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(services),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -110,7 +128,9 @@ contract ReputationStorageTest is Test {
             address(
                 new ERC1967Proxy(
                     address(aImpl),
-                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
+                    abi.encodeCall(
+                        X402Adapter.initialize, (address(router), address(agentIndex), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -119,7 +139,8 @@ contract ReputationStorageTest is Test {
         reputation = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(repImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                    address(repImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
                 )
             )
         );
@@ -236,6 +257,30 @@ contract ReputationStorageTest is Test {
         assertEq(reputation.completedCount(providerAgentId), 1);
         assertEq(reputation.completedByService(serviceId), 1, "per-service counter incremented");
         assertEq(reputation.buyerTransactionCount(buyerAgentId), 1);
+    }
+
+    function test_recordOutcomeSanctionedAttesterReverts() public {
+        sanctions.setSanctioned(provider, true);
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        eas.attest(_outcomeReq(paymentId, ReputationStorageBase.TransactionOutcome.Completed));
+
+        assertFalse(reputation.getRecord(paymentId).outcomeRecorded);
+    }
+
+    function test_recordOutcomeSanctionedRecipientReverts() public {
+        address providerWallet = makeAddr("sanctionedReputationRecipient");
+        identity.forceSetAgentWallet(providerAgentId, providerWallet);
+        usdc.mint(buyer, 100e6);
+        uint256 secondPaymentId = _payAsBuyer(100e6, keccak256("sanctioned-recipient"), serviceId);
+        providerRecipients[secondPaymentId] = providerWallet;
+        sanctions.setSanctioned(providerWallet, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, providerWallet));
+        eas.attest(_outcomeReq(secondPaymentId, ReputationStorageBase.TransactionOutcome.Completed));
+
+        assertFalse(reputation.getRecord(secondPaymentId).outcomeRecorded);
     }
 
     function test_recordOutcomeUnauthorizedReverts() public {
@@ -647,7 +692,8 @@ contract ReputationStorageTest is Test {
         ReputationStorage fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                    address(freshImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
                 )
             )
         );
@@ -661,7 +707,8 @@ contract ReputationStorageTest is Test {
         ReputationStorage fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(freshImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                    address(freshImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
                 )
             )
         );
@@ -793,6 +840,27 @@ contract ReputationStorageTest is Test {
         assertEq(reputation.failedCount(providerAgentId), 1);
     }
 
+    function test_multiAttestSanctionedParticipantRevertsWholeBatch() public {
+        usdc.mint(buyer, 60e6);
+        uint256 paymentId2 = _payAsBuyer(60e6, keccak256("sanctioned-batch"), serviceId);
+        providerRecipients[paymentId2] = provider;
+
+        Attestation[] memory batch = new Attestation[](2);
+        batch[0] = _outcomeAttestation(paymentId, ReputationStorageBase.TransactionOutcome.Completed, keccak256("b1"));
+        batch[1] =
+            _outcomeAttestation(paymentId2, ReputationStorageBase.TransactionOutcome.Failed, keccak256("sanctioned"));
+        address sanctionedRecipient = makeAddr("sanctionedBatchRecipient");
+        batch[1].recipient = sanctionedRecipient;
+        sanctions.setSanctioned(sanctionedRecipient, true);
+
+        vm.prank(address(eas));
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, sanctionedRecipient));
+        reputation.multiAttest(batch, new uint256[](2));
+
+        assertFalse(reputation.getRecord(paymentId).outcomeRecorded);
+        assertFalse(reputation.getRecord(paymentId2).outcomeRecorded);
+    }
+
     function test_multiAttestOnlyEAS() public {
         vm.prank(unauthorized);
         vm.expectRevert("not EAS");
@@ -814,6 +882,23 @@ contract ReputationStorageTest is Test {
         assertEq(
             uint256(reputation.getRecord(paymentId).confirmation),
             uint256(ReputationStorageBase.BuyerConfirmation.Pending)
+        );
+    }
+
+    function test_revokeSanctionedAttesterRevertsWithoutChangingReputation() public {
+        vm.prank(buyer);
+        bytes32 uid = eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
+        sanctions.setSanctioned(buyer, true);
+
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        eas.revoke(
+            RevocationRequest({schema: confirmationSchemaUid, data: RevocationRequestData({uid: uid, value: 0})})
+        );
+
+        assertEq(
+            uint256(reputation.getRecord(paymentId).confirmation),
+            uint256(ReputationStorageBase.BuyerConfirmation.Confirmed)
         );
     }
 }

@@ -13,6 +13,8 @@ import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {IEAS, ISchemaRegistry, SchemaRecord} from "../src/interfaces/IEAS.sol";
 import {IAdapterBinding} from "../src/interfaces/IAdapterBinding.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
+import {ISanctionsList} from "../src/interfaces/ISanctionsList.sol";
 import {ReputationSchemas} from "../src/reputation/ReputationSchemas.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 
@@ -28,12 +30,14 @@ library DeploymentValidation {
     address internal constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
     address internal constant BASE_EAS = 0x4200000000000000000000000000000000000021;
     address internal constant BASE_SCHEMA_REGISTRY = 0x4200000000000000000000000000000000000020;
+    address internal constant BASE_MAINNET_SANCTIONS_ORACLE = 0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B;
 
     struct Stack {
         address identity;
         address usdc;
         address providerTreasury;
         address paymentTreasury;
+        address sanctionsOracle;
         address agentIndex;
         address daskiValidationRegistry;
         address providerRegistry;
@@ -79,23 +83,29 @@ library DeploymentValidation {
         address usdc,
         address eas,
         address schemaRegistry,
-        bool allowUnsupportedChain
+        address sanctionsOracle,
+        bool allowUnsupportedChain,
+        bool allowMockSanctionsOracle
     ) internal view {
         require(identity.code.length > 0, "identity has no code");
         require(usdc.code.length > 0, "USDC has no code");
         require(eas.code.length > 0, "EAS has no code");
         require(schemaRegistry.code.length > 0, "schema registry has no code");
+        _requireSanctionsOracle(sanctionsOracle);
 
         if (block.chainid == BASE_MAINNET) {
             require(identity == BASE_MAINNET_IDENTITY, "wrong Base identity");
             require(usdc == BASE_MAINNET_USDC, "wrong Base USDC");
             _requireBaseEas(eas, schemaRegistry);
+            require(sanctionsOracle == BASE_MAINNET_SANCTIONS_ORACLE, "wrong Base sanctions oracle");
         } else if (block.chainid == BASE_SEPOLIA) {
             require(identity == BASE_SEPOLIA_IDENTITY, "wrong Base Sepolia identity");
             require(usdc == BASE_SEPOLIA_USDC, "wrong Base Sepolia USDC");
             _requireBaseEas(eas, schemaRegistry);
+            require(allowMockSanctionsOracle, "mock sanctions oracle not allowed");
         } else {
             require(allowUnsupportedChain, "unsupported chain");
+            require(allowMockSanctionsOracle, "mock sanctions oracle not allowed");
         }
 
         require(IERC165(identity).supportsInterface(type(IERC165).interfaceId), "identity lacks ERC165");
@@ -194,6 +204,7 @@ library DeploymentValidation {
             "reputation router mismatch"
         );
         require(ReputationStorage(deployment.reputation).isConfigured(), "reputation not configured");
+        _validateSanctionsBindings(deployment);
         _validateAdapterBindings(deployment);
     }
 
@@ -254,6 +265,23 @@ library DeploymentValidation {
                 "adapter AgentIndex mismatch"
             );
         }
+    }
+
+    function _validateSanctionsBindings(Stack memory deployment) private view {
+        address[9] memory contracts_ = adminContracts(deployment);
+        for (uint256 i = 0; i < contracts_.length; i++) {
+            require(
+                address(ISanctionsGuard(contracts_[i]).sanctionsOracle()) == deployment.sanctionsOracle,
+                "sanctions oracle mismatch"
+            );
+        }
+    }
+
+    function _requireSanctionsOracle(address oracle) private view {
+        require(oracle.code.length > 0, "sanctions oracle has no code");
+        (bool success, bytes memory data) = oracle.staticcall(abi.encodeCall(ISanctionsList.isSanctioned, (address(0))));
+        require(success && data.length == 32, "invalid sanctions oracle");
+        require(abi.decode(data, (uint256)) <= 1, "invalid sanctions oracle");
     }
 
     function _requireBaseEas(address eas, address schemaRegistry) private pure {

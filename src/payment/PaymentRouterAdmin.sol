@@ -57,6 +57,7 @@ abstract contract PaymentRouterAdmin is PaymentRouterStorage {
 
     function setTreasury(address newTreasury) external onlyAdmin {
         require(newTreasury != address(0), "zero treasury");
+        _requireNotSanctioned(newTreasury);
         address oldTreasury = treasury;
         treasury = newTreasury;
         emit TreasuryUpdated(oldTreasury, newTreasury);
@@ -83,6 +84,7 @@ abstract contract PaymentRouterAdmin is PaymentRouterStorage {
     function rescueERC20(IERC20 token, address to, uint256 amount) external onlyAdmin {
         require(to != address(0), "zero to");
         require(!_acceptedTokens.contains(address(token)), "accepted token");
+        _requireNotSanctioned(to);
         token.safeTransfer(to, amount);
         emit ERC20Rescued(address(token), to, amount);
     }

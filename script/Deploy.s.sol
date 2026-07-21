@@ -53,13 +53,21 @@ contract Deploy is Script {
         );
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         require(usdcAddress != address(0), "USDC_ADDRESS is required");
+        address sanctionsOracleAddress = vm.envAddress("SANCTIONS_ORACLE_ADDRESS");
+        require(sanctionsOracleAddress != address(0), "SANCTIONS_ORACLE_ADDRESS is required");
         uint256 listingFee = vm.envOr("LISTING_FEE", uint256(1_000_000));
         uint256 commissionBps = vm.envOr("COMMISSION_BPS", uint256(500));
 
         address easAddress = vm.envOr("EAS_ADDRESS", DEFAULT_EAS);
         address schemaRegistryAddress = vm.envOr("EAS_SCHEMA_REGISTRY_ADDRESS", DEFAULT_SCHEMA_REGISTRY);
         DeploymentValidation.validateExternalDependencies(
-            identityRegistry, usdcAddress, easAddress, schemaRegistryAddress, vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false)
+            identityRegistry,
+            usdcAddress,
+            easAddress,
+            schemaRegistryAddress,
+            sanctionsOracleAddress,
+            vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false),
+            vm.envOr("ALLOW_MOCK_SANCTIONS_ORACLE", false)
         );
 
         address deployer = vm.addr(deployerKey);
@@ -76,7 +84,8 @@ contract Deploy is Script {
         // ── (b) AgentIndex (Daski companion to the canonical registry) ─
         AgentIndex agentIndexImpl = new AgentIndex();
         ERC1967Proxy agentIndexProxy = new ERC1967Proxy(
-            address(agentIndexImpl), abi.encodeCall(AgentIndex.initialize, (identityRegistry, deployer))
+            address(agentIndexImpl),
+            abi.encodeCall(AgentIndex.initialize, (identityRegistry, sanctionsOracleAddress, deployer))
         );
         console.log("AgentIndex proxy:", address(agentIndexProxy));
 
@@ -86,7 +95,7 @@ contract Deploy is Script {
         DaskiValidationRegistry validationRegistryImpl = new DaskiValidationRegistry();
         ERC1967Proxy validationRegistryProxy = new ERC1967Proxy(
             address(validationRegistryImpl),
-            abi.encodeCall(DaskiValidationRegistry.initialize, (identityRegistry, deployer))
+            abi.encodeCall(DaskiValidationRegistry.initialize, (identityRegistry, sanctionsOracleAddress, deployer))
         );
         console.log("DaskiValidationRegistry proxy:", address(validationRegistryProxy));
 
@@ -95,7 +104,8 @@ contract Deploy is Script {
         ERC1967Proxy providerRegistryProxy = new ERC1967Proxy(
             address(providerRegistryImpl),
             abi.encodeCall(
-                ProviderRegistry.initialize, (identityRegistry, usdcAddress, providerTreasury, listingFee, deployer)
+                ProviderRegistry.initialize,
+                (identityRegistry, usdcAddress, providerTreasury, listingFee, sanctionsOracleAddress, deployer)
             )
         );
         console.log("ProviderRegistry proxy:", address(providerRegistryProxy));
@@ -104,7 +114,10 @@ contract Deploy is Script {
         ServiceRegistry serviceRegistryImpl = new ServiceRegistry();
         ERC1967Proxy serviceRegistryProxy = new ERC1967Proxy(
             address(serviceRegistryImpl),
-            abi.encodeCall(ServiceRegistry.initialize, (identityRegistry, address(providerRegistryProxy), deployer))
+            abi.encodeCall(
+                ServiceRegistry.initialize,
+                (identityRegistry, address(providerRegistryProxy), sanctionsOracleAddress, deployer)
+            )
         );
         console.log("ServiceRegistry proxy:", address(serviceRegistryProxy));
 
@@ -120,6 +133,7 @@ contract Deploy is Script {
                     address(serviceRegistryProxy),
                     paymentTreasury,
                     commissionBps,
+                    sanctionsOracleAddress,
                     deployer
                 )
             )
@@ -130,7 +144,8 @@ contract Deploy is Script {
         // ── (g) ReputationStorage (EAS resolver + refund sink) ────────
         ReputationStorage reputationImpl = new ReputationStorage();
         ERC1967Proxy reputationProxy = new ERC1967Proxy(
-            address(reputationImpl), abi.encodeCall(ReputationStorage.initialize, (address(routerProxy), deployer))
+            address(reputationImpl),
+            abi.encodeCall(ReputationStorage.initialize, (address(routerProxy), sanctionsOracleAddress, deployer))
         );
         ReputationStorage reputation = ReputationStorage(address(reputationProxy));
         console.log("ReputationStorage proxy:", address(reputationProxy));
@@ -160,7 +175,10 @@ contract Deploy is Script {
         X402Adapter x402AdapterImpl = new X402Adapter();
         ERC1967Proxy x402AdapterProxy = new ERC1967Proxy(
             address(x402AdapterImpl),
-            abi.encodeCall(X402Adapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
+            abi.encodeCall(
+                X402Adapter.initialize,
+                (address(routerProxy), address(agentIndexProxy), sanctionsOracleAddress, deployer)
+            )
         );
         console.log("X402Adapter proxy:", address(x402AdapterProxy));
 
@@ -168,7 +186,10 @@ contract Deploy is Script {
         PermitAdapter permitAdapterImpl = new PermitAdapter();
         ERC1967Proxy permitAdapterProxy = new ERC1967Proxy(
             address(permitAdapterImpl),
-            abi.encodeCall(PermitAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
+            abi.encodeCall(
+                PermitAdapter.initialize,
+                (address(routerProxy), address(agentIndexProxy), sanctionsOracleAddress, deployer)
+            )
         );
         console.log("PermitAdapter proxy:", address(permitAdapterProxy));
 
@@ -176,7 +197,10 @@ contract Deploy is Script {
         ApprovalAdapter approvalAdapterImpl = new ApprovalAdapter();
         ERC1967Proxy approvalAdapterProxy = new ERC1967Proxy(
             address(approvalAdapterImpl),
-            abi.encodeCall(ApprovalAdapter.initialize, (address(routerProxy), address(agentIndexProxy), deployer))
+            abi.encodeCall(
+                ApprovalAdapter.initialize,
+                (address(routerProxy), address(agentIndexProxy), sanctionsOracleAddress, deployer)
+            )
         );
         console.log("ApprovalAdapter proxy:", address(approvalAdapterProxy));
 
@@ -188,6 +212,7 @@ contract Deploy is Script {
             usdc: usdcAddress,
             providerTreasury: providerTreasury,
             paymentTreasury: paymentTreasury,
+            sanctionsOracle: sanctionsOracleAddress,
             agentIndex: address(agentIndexProxy),
             daskiValidationRegistry: address(validationRegistryProxy),
             providerRegistry: address(providerRegistryProxy),
@@ -222,6 +247,7 @@ contract Deploy is Script {
         console.log("-------------------------------------------");
         console.log("Deployment broadcast complete; admin acceptance pending");
         console.log("  USDC:               ", usdcAddress);
+        console.log("  SanctionsOracle:    ", sanctionsOracleAddress);
         console.log("  IdentityRegistry (canonical, external):", identityRegistry);
         console.log("  AgentIndex:         ", address(agentIndexProxy));
         console.log("  DaskiValidationRegistry:", address(validationRegistryProxy));

@@ -16,8 +16,8 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         _disableInitializers();
     }
 
-    function initialize(address paymentRouter_, address admin_) external initializer {
-        _initializeReputation(paymentRouter_, admin_);
+    function initialize(address paymentRouter_, address sanctionsOracle_, address admin_) external initializer {
+        _initializeReputation(paymentRouter_, sanctionsOracle_, admin_);
     }
 
     function isPayable() external pure override returns (bool) {
@@ -66,6 +66,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _handleAttest(Attestation calldata a) internal {
+        _requireAttestationParticipantsAllowed(a);
         require(a.expirationTime == 0, "expiring attestations unsupported");
         require(a.revocationTime == 0, "attestation revoked");
         if (a.schema == outcomeSchema) {
@@ -78,6 +79,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _handleRevoke(Attestation calldata a) internal {
+        _requireAttestationParticipantsAllowed(a);
         if (a.schema == confirmationSchema) {
             _onConfirmationRevoke(a);
         } else if (a.schema == outcomeSchema) {
@@ -230,5 +232,10 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     function _providerRecipient(IPaymentRouter.PaymentRecord memory payment) private pure returns (address) {
         if (payment.cachedProviderWallet != address(0)) return payment.cachedProviderWallet;
         return payment.cachedProviderOwner;
+    }
+
+    function _requireAttestationParticipantsAllowed(Attestation calldata attestation) private view {
+        _requireNotSanctioned(attestation.attester);
+        _requireNotSanctioned(attestation.recipient);
     }
 }

@@ -8,7 +8,9 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -151,6 +153,7 @@ contract PaymentRouterTest is Test {
     ServiceRegistry serviceRegistry;
     PaymentRouter router;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
     PassThroughAdapter adapter;
 
     address admin = makeAddr("admin");
@@ -187,6 +190,7 @@ contract PaymentRouterTest is Test {
 
         // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -194,7 +198,8 @@ contract PaymentRouterTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -205,7 +210,9 @@ contract PaymentRouterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -217,7 +224,15 @@ contract PaymentRouterTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(serviceRegistry), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -276,6 +291,19 @@ contract PaymentRouterTest is Test {
         paymentId = adapter.settle(address(usdc), amount, ref, buyerAgentId, buyer, providerAgentId, svcId);
     }
 
+    function _expectSanctionedSettlement(address account, bytes32 ref) internal {
+        uint256 buyerBalance = usdc.balanceOf(buyer);
+        sanctions.setSanctioned(account, true);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, account));
+        adapter.settle(address(usdc), 100e6, ref, buyerAgentId, buyer, providerAgentId, serviceId);
+        assertEq(usdc.balanceOf(buyer), buyerBalance);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
     // ── Settle (happy path) ──────────────────────────────────────────
 
     function test_settleHappyPath() public {
@@ -304,6 +332,97 @@ contract PaymentRouterTest is Test {
         assertEq(router.nextPaymentId(), paymentId + 1);
         bytes32 paymentKey = router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, keccak256("ref-1"));
         assertTrue(router.paymentKeyUsed(paymentKey));
+    }
+
+    function test_settleSanctionedPayerRevertsAtomically() public {
+        _expectSanctionedSettlement(buyer, keccak256("sanctioned-payer"));
+    }
+
+    function test_settleSanctionedBuyerAgentWalletReverts() public {
+        address buyerAgentWallet = makeAddr("buyerAgentWallet");
+        identity.forceSetAgentWallet(buyerAgentId, buyerAgentWallet);
+        _expectSanctionedSettlement(buyerAgentWallet, keccak256("sanctioned-buyer-agent-wallet"));
+    }
+
+    function test_settleSanctionedBuyerOwnerRevertsForAgentWalletPayer() public {
+        address buyerAgentWallet = makeAddr("buyerAgentWalletPayer");
+        identity.forceSetAgentWallet(buyerAgentId, buyerAgentWallet);
+        usdc.mint(buyerAgentWallet, 100e6);
+        sanctions.setSanctioned(buyer, true);
+
+        vm.prank(buyerAgentWallet);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyerAgentWallet);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        adapter.settle(
+            address(usdc),
+            100e6,
+            keccak256("sanctioned-buyer-owner"),
+            buyerAgentId,
+            buyerAgentWallet,
+            providerAgentId,
+            serviceId
+        );
+
+        assertEq(usdc.balanceOf(buyerAgentWallet), 100e6);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
+    function test_settleSanctionedProviderOwnerReverts() public {
+        identity.forceSetAgentWallet(providerAgentId, makeAddr("cleanProviderWallet"));
+        _expectSanctionedSettlement(provider, keccak256("sanctioned-provider-owner"));
+    }
+
+    function test_settleSanctionedProviderWalletReverts() public {
+        address providerWallet = makeAddr("sanctionedProviderWallet");
+        identity.forceSetAgentWallet(providerAgentId, providerWallet);
+        _expectSanctionedSettlement(providerWallet, keccak256("sanctioned-provider-wallet"));
+    }
+
+    function test_settleSanctionedServicePayeeReverts() public {
+        address servicePayee = makeAddr("sanctionedServicePayee");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, servicePayee);
+        _expectSanctionedSettlement(servicePayee, keccak256("sanctioned-service-payee"));
+    }
+
+    function test_settleSanctionedContractWalletPayeeReverts() public {
+        address contractWallet = address(new ToggleReputationSink(address(router)));
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, contractWallet);
+        _expectSanctionedSettlement(contractWallet, keccak256("sanctioned-contract-wallet"));
+    }
+
+    function test_settleSanctionedTreasuryReverts() public {
+        _expectSanctionedSettlement(treasury, keccak256("sanctioned-treasury"));
+    }
+
+    function test_settleOracleFailureRevertsAtomically() public {
+        uint256 buyerBalance = usdc.balanceOf(buyer);
+        sanctions.setRevertChecks(true);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, address(sanctions)));
+        adapter.settle(
+            address(usdc), 100e6, keccak256("oracle-unavailable"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+        assertEq(usdc.balanceOf(buyer), buyerBalance);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
+    function test_oracleFailureLeavesGovernanceRemediationAndViewsAvailable() public {
+        sanctions.setRevertChecks(true);
+        assertEq(router.getAcceptedTokenCount(), 1);
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), false);
+        assertEq(router.getAcceptedTokenCount(), 0);
+
+        address nextAdmin = makeAddr("oracleIncidentAdmin");
+        vm.prank(admin);
+        router.transferAdmin(nextAdmin);
+        assertEq(router.pendingAdmin(), nextAdmin);
     }
 
     function test_settleEmitsEvent() public {
@@ -756,6 +875,32 @@ contract PaymentRouterTest is Test {
         assertEq(router.refundedAmount(paymentId), 95e6);
     }
 
+    function test_refundSanctionedSourceRevertsWithoutAccounting() public {
+        uint256 paymentId = _settle(100e6, keccak256("refund-sanctioned-source"));
+        sanctions.setSanctioned(provider, true);
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 0);
+    }
+
+    function test_refundSanctionedDestinationRevertsWithoutAccounting() public {
+        uint256 paymentId = _settle(100e6, keccak256("refund-sanctioned-destination"));
+        sanctions.setSanctioned(buyer, true);
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 0);
+    }
+
     function test_refundPartial() public {
         uint256 paymentId = _settle(100e6, keccak256("ref-part"));
         uint256 buyerBefore = usdc.balanceOf(buyer);
@@ -1057,7 +1202,15 @@ contract PaymentRouterTest is Test {
                     address(new PaymentRouter()),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(serviceRegistry), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -1160,7 +1313,15 @@ contract PaymentRouterTest is Test {
                     address(freshImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(serviceRegistry), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -1235,6 +1396,20 @@ contract PaymentRouterTest is Test {
         assertEq(stray.balanceOf(address(router)), 0);
     }
 
+    function test_rescueERC20SanctionedRecipientReverts() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 123e6);
+        address recipient = makeAddr("sanctionedRescueRecipient");
+        sanctions.setSanctioned(recipient, true);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, recipient));
+        router.rescueERC20(stray, recipient, 123e6);
+
+        assertEq(stray.balanceOf(address(router)), 123e6);
+        assertEq(stray.balanceOf(recipient), 0);
+    }
+
     function test_rescueERC20_acceptedTokenReverts() public {
         // Accepted token rescue is forbidden — admin must temporarily de-list
         // first. This is the explicit defense-in-depth mentioned in the
@@ -1280,6 +1455,15 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         router.setTreasury(newTreasury);
         assertEq(router.treasury(), newTreasury);
+    }
+
+    function test_setTreasurySanctionedRecipientReverts() public {
+        address newTreasury = makeAddr("sanctionedPaymentTreasury");
+        sanctions.setSanctioned(newTreasury, true);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, newTreasury));
+        router.setTreasury(newTreasury);
+        assertEq(router.treasury(), treasury);
     }
 
     function test_nonAdminCannotSetCommission() public {

@@ -64,9 +64,9 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
         _disableInitializers();
     }
 
-    function initialize(address _identity, address _admin) external initializer {
+    function initialize(address _identity, address _sanctionsOracle, address _admin) external initializer {
         require(_identity != address(0), "zero identity");
-        __Admin2Step_init(_admin);
+        __Admin2Step_init(_admin, _sanctionsOracle);
         __EIP712_init("Daski AgentIndex", "1");
         identity = ICanonicalIdentity(_identity);
     }
@@ -83,6 +83,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     {
         require(block.timestamp <= deadline, "signature expired");
         require(wallet != address(0), "zero wallet");
+        _requireNotSanctioned(wallet);
         // Live check, not a raw index read — a stale binding (agent moved or
         // rotated away) must not block the wallet from registering afresh.
         (, bool found) = _resolve(wallet);
@@ -122,6 +123,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     /// @inheritdoc IAgentIndex
     function claim(uint256 agentId) external nonReentrant {
         require(_controlsAgent(agentId, msg.sender), "not agent owner or wallet");
+        _requireAgentParticipantsAllowed(agentId, msg.sender);
         _agentIdOf[msg.sender] = agentId;
         _hasBinding[msg.sender] = true;
         emit AgentClaimed(agentId, msg.sender);
@@ -131,6 +133,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     function unbind() external nonReentrant {
         require(_hasBinding[msg.sender], "nothing bound");
         uint256 agentId = _agentIdOf[msg.sender];
+        _requireAgentParticipantsAllowed(agentId, msg.sender);
         delete _agentIdOf[msg.sender];
         delete _hasBinding[msg.sender];
         emit AgentUnbound(msg.sender, agentId);
@@ -189,6 +192,12 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
         } catch {
             return false;
         }
+    }
+
+    function _requireAgentParticipantsAllowed(uint256 agentId, address caller) private view {
+        _requireNotSanctioned(caller);
+        _requireNotSanctioned(identity.ownerOf(agentId));
+        _requireNotSanctioned(identity.getAgentWallet(agentId));
     }
 
     uint256[50] private __gap;

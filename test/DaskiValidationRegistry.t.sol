@@ -4,12 +4,15 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
 import {IDaskiValidationRegistry} from "../src/interfaces/IDaskiValidationRegistry.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 
 contract DaskiValidationRegistryTest is Test {
     MockCanonicalIdentityRegistry identity;
     DaskiValidationRegistry validation;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address agentOwner = makeAddr("agentOwner");
@@ -21,10 +24,12 @@ contract DaskiValidationRegistryTest is Test {
 
     function setUp() public {
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         DaskiValidationRegistry vImpl = new DaskiValidationRegistry();
         ERC1967Proxy vProxy = new ERC1967Proxy(
-            address(vImpl), abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), admin))
+            address(vImpl),
+            abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), address(sanctions), admin))
         );
         validation = DaskiValidationRegistry(address(vProxy));
 
@@ -43,6 +48,23 @@ contract DaskiValidationRegistryTest is Test {
         );
 
         vm.prank(agentOwner);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+    }
+
+    function test_validationRequestSanctionedValidatorReverts() public {
+        sanctions.setSanctioned(validator, true);
+        vm.prank(agentOwner);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, validator));
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+    }
+
+    function test_validationRequestOperatorCannotBypassSanctionedOwner() public {
+        vm.prank(agentOwner);
+        identity.setApprovalForAll(stranger, true);
+        sanctions.setSanctioned(agentOwner, true);
+
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, agentOwner));
         validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
     }
 
@@ -125,6 +147,18 @@ contract DaskiValidationRegistryTest is Test {
         assertEq(keccak256(bytes(tag)), keccak256(bytes("pass")));
         assertGt(lastUpdate, 0);
         assertTrue(validation.hasValidationResponse(_key(agentId, REQ_HASH)));
+    }
+
+    function test_validationResponseRechecksValidator() public {
+        vm.prank(agentOwner);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+        sanctions.setSanctioned(validator, true);
+
+        vm.prank(validator);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, validator));
+        validation.validationResponse(_key(agentId, REQ_HASH), 100, "ipfs://resp", keccak256("resp"), "pass");
+
+        assertFalse(validation.hasValidationResponse(_key(agentId, REQ_HASH)));
     }
 
     function test_zeroResponseIsDistinguishedFromPending() public {

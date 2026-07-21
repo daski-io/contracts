@@ -12,12 +12,12 @@ import {IReputationSink} from "./interfaces/IReputationSink.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
 import {PaymentRouterAdmin} from "./payment/PaymentRouterAdmin.sol";
 import {PaymentRouterViews} from "./payment/PaymentRouterViews.sol";
+import {PaymentRouterSanctions} from "./payment/PaymentRouterSanctions.sol";
 import {LibReputationEligibility} from "./payment/LibReputationEligibility.sol";
 
 /// @notice Payment-rail-agnostic settlement and provider refund entry point.
-///         Adapters move funds into the router; this contract validates the
-///         catalog route, splits funds, and stores immutable counterparties.
-contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
+///         Validates catalog routes, splits funds, and stores counterparties.
+contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterSanctions {
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
@@ -42,6 +42,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         address _serviceRegistry,
         address _treasury,
         uint256 _commissionBps,
+        address _sanctionsOracle,
         address _admin
     ) external initializer {
         require(_identity != address(0), "zero identity");
@@ -49,10 +50,11 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         require(_serviceRegistry != address(0), "zero service registry");
         require(_treasury != address(0), "zero treasury");
         require(_commissionBps <= 10000, "commission too high");
-        __Admin2Step_init(_admin);
+        __Admin2Step_init(_admin, _sanctionsOracle);
         identity = ICanonicalIdentity(_identity);
         registry = IProviderRegistry(_registry);
         serviceRegistry = IServiceRegistry(_serviceRegistry);
+        _requireNotSanctioned(_treasury);
         treasury = _treasury;
         commissionBps = _commissionBps;
         nextPaymentId = 1;
@@ -93,6 +95,9 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
 
         (address payee, address providerOwner, address providerWallet) = _providerContext(request);
         uint256 commission = (request.amount * commissionBps) / 10000;
+        _requireSettlementParticipantsAllowed(
+            request.buyerWallet, buyerOwner, buyerAgentWallet, providerOwner, providerWallet, payee, commission
+        );
         bool reputationEligible = _isReputationEligible(
             request, commission, buyerOwner, buyerAgentWallet, payee, providerOwner, providerWallet
         );
@@ -172,6 +177,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews {
         uint256 cumulative = _refundedAmount[paymentId] + amountToBuyer;
         require(cumulative <= record.amount, "exceeds refundable amount");
         require(record.cachedBuyerWallet != address(0), "no refund destination");
+        _requireRefundParticipantsAllowed(record.providerAgentId, msg.sender, record.cachedBuyerWallet);
         _refundedAmount[paymentId] = cumulative;
 
         IERC20(record.token).safeTransferFrom(msg.sender, record.cachedBuyerWallet, amountToBuyer);

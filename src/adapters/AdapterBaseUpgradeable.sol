@@ -11,10 +11,13 @@ abstract contract AdapterBaseUpgradeable is Admin2StepUpgradeable {
     IPaymentRouter public router;
     IAgentIndex public agentIndex;
 
-    function __AdapterBase_init(address router_, address agentIndex_, address admin_) internal onlyInitializing {
+    function __AdapterBase_init(address router_, address agentIndex_, address sanctionsOracle_, address admin_)
+        internal
+        onlyInitializing
+    {
         require(router_ != address(0), "zero router");
         require(agentIndex_ != address(0), "zero agent index");
-        __Admin2Step_init(admin_);
+        __Admin2Step_init(admin_, sanctionsOracle_);
         router = IPaymentRouter(router_);
         agentIndex = IAgentIndex(agentIndex_);
     }

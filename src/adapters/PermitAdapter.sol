@@ -22,8 +22,11 @@ contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
         _disableInitializers();
     }
 
-    function initialize(address _router, address _agentIndex, address _admin) external initializer {
-        __AdapterBase_init(_router, _agentIndex, _admin);
+    function initialize(address _router, address _agentIndex, address _sanctionsOracle, address _admin)
+        external
+        initializer
+    {
+        __AdapterBase_init(_router, _agentIndex, _sanctionsOracle, _admin);
     }
 
     /// @inheritdoc IPermitAdapter
@@ -36,6 +39,7 @@ contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
         PermitData calldata permit
     ) external returns (uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
+        _requireNotSanctioned(msg.sender);
 
         // AgentIndex re-verifies the binding against the canonical ERC-8004
         // registry, so a stale wallet returns found=false and reverts here.

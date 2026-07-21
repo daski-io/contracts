@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {SanctionsGuardUpgradeable} from "./SanctionsGuardUpgradeable.sol";
 
 /// @notice Shared 2-step admin transfer + UUPS upgrade gate for every Daski
 ///         contract. Each derived contract called `transferAdmin` /
@@ -11,12 +12,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 ///         of duplication and keeps the transfer semantics impossible to
 ///         diverge across the stack.
 ///
-/// Storage layout:
-///   slot 0  — admin
-///   slot 1  — pendingAdmin
-///   slots 2..49 — reserved __gap so a future field added to this base does
-///                 not collide with derived-contract storage.
-abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable {
+abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable, SanctionsGuardUpgradeable {
     address public admin;
     address public pendingAdmin;
 
@@ -30,8 +26,9 @@ abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable {
 
     /// @dev Initialize the admin field. Call once from the derived contract's
     ///      initializer. Reverts on zero address.
-    function __Admin2Step_init(address _admin) internal onlyInitializing {
+    function __Admin2Step_init(address _admin, address _sanctionsOracle) internal onlyInitializing {
         require(_admin != address(0), "zero admin");
+        __SanctionsGuard_init(_sanctionsOracle);
         admin = _admin;
     }
 

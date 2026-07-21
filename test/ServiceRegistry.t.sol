@@ -7,13 +7,16 @@ import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegist
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {IServiceRegistry} from "../src/interfaces/IServiceRegistry.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 
 contract ServiceRegistryTest is Test {
     MockCanonicalIdentityRegistry identity;
     ProviderRegistry providerRegistry;
     ServiceRegistry services;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -27,6 +30,7 @@ contract ServiceRegistryTest is Test {
         usdc = new MockUSDC();
 
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         ProviderRegistry pregImpl = new ProviderRegistry();
         providerRegistry = ProviderRegistry(
@@ -34,7 +38,8 @@ contract ServiceRegistryTest is Test {
                 new ERC1967Proxy(
                     address(pregImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -45,7 +50,10 @@ contract ServiceRegistryTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(providerRegistry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize,
+                        (address(identity), address(providerRegistry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -101,6 +109,25 @@ contract ServiceRegistryTest is Test {
         assertEq(svc.serviceWalletAgentWallet, address(0));
         assertTrue(svc.active);
         assertEq(svc.createdAt, uint64(block.timestamp));
+    }
+
+    function test_registerServiceSanctionedServiceWalletReverts() public {
+        address serviceWallet = makeAddr("sanctionedServiceWallet");
+        sanctions.setSanctioned(serviceWallet, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, serviceWallet));
+        services.registerService(providerAgentId, "screened-wallet", "1", "ipfs://meta", serviceWallet);
+    }
+
+    function test_registerServiceOperatorCannotBypassSanctionedOwner() public {
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+        sanctions.setSanctioned(provider, true);
+
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        services.registerService(providerAgentId, "screened-owner", "1", "ipfs://meta", address(0));
     }
 
     function test_registerService_computeServiceIdMatches() public view {

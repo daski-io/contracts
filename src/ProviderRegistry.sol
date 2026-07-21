@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
@@ -43,7 +43,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
 
     address public treasury;
     IERC20 public usdc;
-    IERC721 public identity;
+    ICanonicalIdentity public identity;
     uint256 public listingFee;
 
     event ProviderRegistered(uint256 indexed agentId, address indexed wallet);
@@ -56,16 +56,21 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         _disableInitializers();
     }
 
-    function initialize(address _identity, address _usdc, address _treasury, uint256 _listingFee, address _admin)
-        external
-        initializer
-    {
+    function initialize(
+        address _identity,
+        address _usdc,
+        address _treasury,
+        uint256 _listingFee,
+        address _sanctionsOracle,
+        address _admin
+    ) external initializer {
         require(_identity != address(0), "zero identity");
         require(_usdc != address(0), "zero usdc");
         require(_treasury != address(0), "zero treasury");
-        __Admin2Step_init(_admin);
-        identity = IERC721(_identity);
+        __Admin2Step_init(_admin, _sanctionsOracle);
+        identity = ICanonicalIdentity(_identity);
         usdc = IERC20(_usdc);
+        _requireNotSanctioned(_treasury);
         treasury = _treasury;
         listingFee = _listingFee;
     }
@@ -73,6 +78,8 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     function register(uint256 agentId) external nonReentrant {
         require(identity.ownerOf(agentId) == msg.sender, "not agent owner");
         require(!_isRegistered(agentId), "already registered");
+        _requireNotSanctioned(msg.sender);
+        _requireNotSanctioned(treasury);
 
         uint256 balanceBefore = usdc.balanceOf(treasury);
         usdc.safeTransferFrom(msg.sender, treasury, listingFee);
@@ -90,6 +97,9 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     function setActive(uint256 agentId, bool active) external {
         LibAgentAuth.requireAgentAuth(identity, agentId, msg.sender);
         require(_isRegistered(agentId), "not registered");
+        _requireNotSanctioned(msg.sender);
+        _requireNotSanctioned(identity.ownerOf(agentId));
+        _requireNotSanctioned(identity.getAgentWallet(agentId));
         _providers[agentId].isActive = active;
         emit ProviderActiveStatusChanged(agentId, active);
     }
@@ -125,6 +135,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
 
     function setTreasury(address newTreasury) external onlyAdmin {
         require(newTreasury != address(0), "zero treasury");
+        _requireNotSanctioned(newTreasury);
         address oldTreasury = treasury;
         treasury = newTreasury;
         emit TreasuryUpdated(oldTreasury, newTreasury);

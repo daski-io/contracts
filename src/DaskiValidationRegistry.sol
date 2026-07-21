@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IDaskiValidationRegistry} from "./interfaces/IDaskiValidationRegistry.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
@@ -23,7 +23,7 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         bool hasResponse;
     }
 
-    IERC721 public identityRegistry;
+    ICanonicalIdentity public identityRegistry;
 
     // validationKey = keccak256(agentId, requestHash).
     mapping(bytes32 => Validation) private _validations;
@@ -35,10 +35,10 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         _disableInitializers();
     }
 
-    function initialize(address identityRegistry_, address _admin) external initializer {
+    function initialize(address identityRegistry_, address sanctionsOracle_, address _admin) external initializer {
         require(identityRegistry_ != address(0), "zero identity");
-        __Admin2Step_init(_admin);
-        identityRegistry = IERC721(identityRegistry_);
+        __Admin2Step_init(_admin, sanctionsOracle_);
+        identityRegistry = ICanonicalIdentity(identityRegistry_);
     }
 
     function getIdentityRegistry() external view override returns (address) {
@@ -60,6 +60,8 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         require(validatorAddress != address(0), "zero validator");
         require(bytes(requestURI).length != 0, "empty request URI");
         require(requestHash != bytes32(0), "zero request hash");
+        _requireAgentParticipantsAllowed(agentId, msg.sender);
+        _requireNotSanctioned(validatorAddress);
 
         validationKey = _validationKey(agentId, requestHash);
         require(!_validations[validationKey].exists, "request exists");
@@ -93,6 +95,7 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         require(v.exists, "no such request");
         require(msg.sender == v.validatorAddress, "not validator");
         require(response <= 100, "response > 100");
+        _requireNotSanctioned(msg.sender);
 
         v.response = response;
         v.responseHash = responseHash;
@@ -204,6 +207,12 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {
         return keccak256(abi.encode(agentId, requestHash));
+    }
+
+    function _requireAgentParticipantsAllowed(uint256 agentId, address caller) private view {
+        _requireNotSanctioned(caller);
+        _requireNotSanctioned(identityRegistry.ownerOf(agentId));
+        _requireNotSanctioned(identityRegistry.getAgentWallet(agentId));
     }
 
     uint256[50] private __gap;

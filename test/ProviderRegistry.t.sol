@@ -7,12 +7,15 @@ import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegist
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {IProviderRegistry} from "../src/interfaces/IProviderRegistry.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 
 contract ProviderRegistryTest is Test {
     MockCanonicalIdentityRegistry identity;
     ProviderRegistry registry;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -28,6 +31,7 @@ contract ProviderRegistryTest is Test {
 
         // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -35,7 +39,8 @@ contract ProviderRegistryTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, LISTING_FEE, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, LISTING_FEE, address(sanctions), admin)
                     )
                 )
             )
@@ -72,6 +77,32 @@ contract ProviderRegistryTest is Test {
 
         assertEq(usdc.balanceOf(treasury) - treasuryBefore, LISTING_FEE);
         assertTrue(registry.isRegistered(agentId));
+    }
+
+    function test_registerSanctionedOwnerRevertsBeforeFeeTransfer() public {
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        sanctions.setSanctioned(provider, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        registry.register(agentId);
+
+        assertFalse(registry.isRegistered(agentId));
+        assertEq(usdc.balanceOf(treasury), 0);
+    }
+
+    function test_registerRechecksSanctionedTreasury() public {
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        sanctions.setSanctioned(treasury, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, treasury));
+        registry.register(agentId);
+
+        assertFalse(registry.isRegistered(agentId));
+        assertEq(usdc.balanceOf(treasury), 0);
     }
 
     function test_registerEmitsEvent() public {
@@ -151,7 +182,7 @@ contract ProviderRegistryTest is Test {
                     address(feeRegistryImpl),
                     abi.encodeCall(
                         ProviderRegistry.initialize,
-                        (address(identity), address(feeToken), treasury, LISTING_FEE, admin)
+                        (address(identity), address(feeToken), treasury, LISTING_FEE, address(sanctions), admin)
                     )
                 )
             )
@@ -174,6 +205,15 @@ contract ProviderRegistryTest is Test {
         vm.prank(admin);
         vm.expectRevert("zero treasury");
         registry.setTreasury(address(0));
+    }
+
+    function test_setTreasurySanctionedRecipientReverts() public {
+        address newTreasury = makeAddr("sanctionedTreasury");
+        sanctions.setSanctioned(newTreasury, true);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, newTreasury));
+        registry.setTreasury(newTreasury);
+        assertEq(registry.treasury(), treasury);
     }
 
     function test_setActive() public {
@@ -200,6 +240,19 @@ contract ProviderRegistryTest is Test {
         vm.prank(operator);
         registry.setActive(agentId, false);
         assertFalse(registry.getProvider(agentId).isActive);
+    }
+
+    function test_setActiveOperatorCannotBypassSanctionedOwner() public {
+        uint256 agentId = _registerAsProvider(provider);
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+        sanctions.setSanctioned(provider, true);
+
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        registry.setActive(agentId, false);
+
+        assertTrue(registry.getProvider(agentId).isActive);
     }
 
     function test_setActive_byPerTokenApprovedSpender() public {

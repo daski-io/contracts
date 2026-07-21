@@ -53,10 +53,13 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         _disableInitializers();
     }
 
-    function initialize(address _identity, address _providerRegistry, address _admin) external initializer {
+    function initialize(address _identity, address _providerRegistry, address _sanctionsOracle, address _admin)
+        external
+        initializer
+    {
         require(_identity != address(0), "zero identity");
         require(_providerRegistry != address(0), "zero provider registry");
-        __Admin2Step_init(_admin);
+        __Admin2Step_init(_admin, _sanctionsOracle);
         identity = ICanonicalIdentity(_identity);
         providerRegistry = IProviderRegistry(_providerRegistry);
     }
@@ -72,10 +75,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         address serviceWallet
     ) external returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(providerAgentId, msg.sender);
 
-        // Provider must be registered AND active. Inactive providers cannot
-        // add new services; existing services on an inactive provider remain
-        // queryable via getService for historical lookups.
+        // Inactive providers cannot add services; existing services remain queryable.
         require(providerRegistry.isRegistered(providerAgentId), "provider not registered");
         require(providerRegistry.getProvider(providerAgentId).isActive, "provider not active");
 
@@ -85,6 +87,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         require(versionBytes.length >= 1 && versionBytes.length <= 32, "bad version length");
 
         serviceId = _computeServiceId(providerAgentId, serviceSlug, version);
+        _requireNotSanctioned(serviceWallet);
         // Collision guard. If a service with the same (provider, slug,
         // version) already exists, registerService MUST revert — the same
         // (slug, version) pair represents the same product offering and
@@ -116,6 +119,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
     }
@@ -130,6 +134,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
         _setServiceWalletAuthorization(svc, newWallet);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
@@ -142,6 +147,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
     }
@@ -216,17 +222,28 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     }
 
     function _setServiceWalletAuthorization(Service storage svc, address newWallet) internal {
-        svc.serviceWallet = newWallet;
         if (newWallet == address(0)) {
+            svc.serviceWallet = address(0);
             svc.serviceWalletOwner = address(0);
             svc.serviceWalletAgentWallet = address(0);
             return;
         }
 
+        _requireNotSanctioned(newWallet);
         address agentWallet = identity.getAgentWallet(svc.providerAgentId);
         require(agentWallet != address(0), "no agent wallet");
-        svc.serviceWalletOwner = identity.ownerOf(svc.providerAgentId);
+        address owner = identity.ownerOf(svc.providerAgentId);
+        _requireNotSanctioned(owner);
+        _requireNotSanctioned(agentWallet);
+        svc.serviceWallet = newWallet;
+        svc.serviceWalletOwner = owner;
         svc.serviceWalletAgentWallet = agentWallet;
+    }
+
+    function _requireProviderParticipantsAllowed(uint256 providerAgentId, address caller) private view {
+        _requireNotSanctioned(caller);
+        _requireNotSanctioned(identity.ownerOf(providerAgentId));
+        _requireNotSanctioned(identity.getAgentWallet(providerAgentId));
     }
 
     uint256[50] private __gap;

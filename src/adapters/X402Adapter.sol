@@ -30,8 +30,11 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         _disableInitializers();
     }
 
-    function initialize(address _router, address _agentIndex, address _admin) external initializer {
-        __AdapterBase_init(_router, _agentIndex, _admin);
+    function initialize(address _router, address _agentIndex, address _sanctionsOracle, address _admin)
+        external
+        initializer
+    {
+        __AdapterBase_init(_router, _agentIndex, _sanctionsOracle, _admin);
     }
 
     /// @inheritdoc IX402Adapter
@@ -46,6 +49,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         // Pre-flight: reject unknown tokens before burning gas on the
         // EIP-3009 transfer. The router will also re-check at settle.
         require(router.isAcceptedToken(token), "token not accepted");
+        _requireNotSanctioned(auth.from);
 
         // Resolve the buyer's agentId from the signer. AgentIndex re-verifies
         // the binding against the canonical ERC-8004 registry — if the signer
@@ -79,6 +83,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         bytes calldata registrationSignature
     ) external returns (uint256 buyerAgentId, uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
+        _requireNotSanctioned(auth.from);
 
         bool found;
         (buyerAgentId, found) = _tryResolveBuyer(auth.from);

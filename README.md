@@ -74,6 +74,13 @@ and to deliver the exact settlement amount. Adapter enablement verifies the
 adapter's router binding on-chain; deployment verification additionally checks
 its exact AgentIndex binding.
 
+Every participant wallet is screened on-chain against the configured
+Chainalysis-compatible sanctions oracle. Adapters reject payers before token
+calls and the router independently rechecks live payer, controller, payee, and
+treasury addresses. Covered operations fail closed when screening is
+unavailable. Integrators should decode `SanctionedAddress(address)` and
+`SanctionsOracleUnavailable(address)` rather than matching revert text.
+
 ## Deployments
 
 ### Base Sepolia (chain id `84532`) — deployed 2026-07-12
@@ -195,6 +202,11 @@ export IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
 #   Base mainnet:          0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 export USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
 
+# REQUIRED: Chainalysis Sanctions Oracle.
+#   Base mainnet: 0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B
+#   Base Sepolia: no official deployment; use an explicitly marked mock only.
+export SANCTIONS_ORACLE_ADDRESS=<oracle-address>
+
 # Optional (defaults shown)
 export LISTING_FEE=1000000   # 1 USDC
 export COMMISSION_BPS=500    # 5%
@@ -204,10 +216,13 @@ forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
 On Base mainnet and Base Sepolia, deployment enforces the pinned canonical
-IdentityRegistry, Circle USDC, EAS, and SchemaRegistry addresses. It also
+IdentityRegistry, Circle USDC, EAS, and SchemaRegistry addresses. Base mainnet
+also pins the documented Chainalysis oracle. Base Sepolia and isolated chains
+require `ALLOW_MOCK_SANCTIONS_ORACLE=true` because Chainalysis does not publish
+an official Base Sepolia deployment. Deployment also
 checks ERC-165/ERC-721 support, six-decimal USDC semantics, the EAS
-SchemaRegistry binding, both registered schemas, and every cross-contract
-wiring relationship. Unsupported chains are rejected unless the operator
+SchemaRegistry binding, the oracle ABI, both registered schemas, and every
+cross-contract wiring relationship. Unsupported chains are rejected unless the operator
 explicitly sets `ALLOW_UNSUPPORTED_CHAIN=true`; semantic dependency checks
 still apply.
 
@@ -218,7 +233,10 @@ the production-shaped deployment:
 ```bash
 forge script script/DeployMockUSDC.s.sol --rpc-url <RPC_URL> --broadcast
 export USDC_ADDRESS=<logged MockUSDC address>
+forge script script/DeployMockSanctionsList.s.sol --rpc-url <RPC_URL> --broadcast
+export SANCTIONS_ORACLE_ADDRESS=<logged MockSanctionsList address>
 export ALLOW_UNSUPPORTED_CHAIN=true
+export ALLOW_MOCK_SANCTIONS_ORACLE=true
 forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
@@ -227,8 +245,8 @@ missing production dependency.
 
 `Deploy.s.sol` creates a dark deployment: ReputationStorage is configured, but
 no token or adapter is enabled. Contract addresses, EAS schema UIDs, and
-resolver wiring are logged at the end. Follow [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md)
-to execute the two Safe batches and both verification phases.
+resolver wiring are logged at the end. Accept all nine pending admin roles from
+the configured governance contract before activating the token and adapters.
 
 After exporting the logged component addresses and schema UIDs, run the
 read-only verifier first with `DEPLOYMENT_ACTIVE=false` after all admin roles
@@ -238,6 +256,7 @@ batch:
 ```bash
 export IDENTITY_REGISTRY_ADDRESS=<canonical-address>
 export USDC_ADDRESS=<circle-usdc-address>
+export SANCTIONS_ORACLE_ADDRESS=<configured-oracle-address>
 export EAS_ADDRESS=0x4200000000000000000000000000000000000021
 export EAS_SCHEMA_REGISTRY_ADDRESS=0x4200000000000000000000000000000000000020
 export PROVIDER_TREASURY_ADDRESS=<address>
@@ -284,6 +303,12 @@ record whether equality or divergence is intended.
 EIP-3009 payments use `X402Adapter`, which executes the token authorization
 and router settlement atomically. The authorization nonce commits to
 `(serviceRef, providerAgentId, serviceId)` so a relayer cannot redirect it.
+
+Provider-facing services should map `SanctionedAddress(account)` to the stable
+code `SANCTIONS_ADDRESS_REJECTED` (not retryable) and
+`SanctionsOracleUnavailable(oracle)` to `SANCTIONS_SCREENING_UNAVAILABLE`
+(retryable with a bounded policy). The contracts enforce the restriction even
+when the gateway is bypassed.
 
 Release coordination — develop→main merges, semver tags, the cross-repo
 address cascade (gateway/provider env, test-suite config, website `llms.txt`),

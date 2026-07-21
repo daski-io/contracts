@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {DeploymentValidationHarness} from "./helpers/DeploymentValidationHarness.sol";
 import {AgentIndex} from "../src/AgentIndex.sol";
 import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
@@ -32,6 +33,7 @@ contract DeploymentValidationTest is Test {
     MockCanonicalIdentityRegistry identity;
     MockUSDC usdc;
     MockEAS eas;
+    MockSanctionsList sanctions;
     AgentIndex agentIndex;
     DaskiValidationRegistry validation;
     ProviderRegistry providers;
@@ -51,12 +53,14 @@ contract DeploymentValidationTest is Test {
         identity = new MockCanonicalIdentityRegistry();
         usdc = new MockUSDC();
         eas = new MockEAS();
+        sanctions = new MockSanctionsList();
         validationHarness = new DeploymentValidationHarness();
 
         agentIndex = AgentIndex(
             address(
                 new ERC1967Proxy(
-                    address(new AgentIndex()), abi.encodeCall(AgentIndex.initialize, (address(identity), address(this)))
+                    address(new AgentIndex()),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), address(this)))
                 )
             )
         );
@@ -64,7 +68,9 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new DaskiValidationRegistry()),
-                    abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), address(this)))
+                    abi.encodeCall(
+                        DaskiValidationRegistry.initialize, (address(identity), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -74,7 +80,14 @@ contract DeploymentValidationTest is Test {
                     address(new ProviderRegistry()),
                     abi.encodeCall(
                         ProviderRegistry.initialize,
-                        (address(identity), address(usdc), providerTreasury, 1_000_000, address(this))
+                        (
+                            address(identity),
+                            address(usdc),
+                            providerTreasury,
+                            1_000_000,
+                            address(sanctions),
+                            address(this)
+                        )
                     )
                 )
             )
@@ -83,7 +96,10 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new ServiceRegistry()),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(providers), address(this)))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize,
+                        (address(identity), address(providers), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -93,7 +109,15 @@ contract DeploymentValidationTest is Test {
                     address(new PaymentRouter()),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(providers), address(services), paymentTreasury, 500, address(this))
+                        (
+                            address(identity),
+                            address(providers),
+                            address(services),
+                            paymentTreasury,
+                            500,
+                            address(sanctions),
+                            address(this)
+                        )
                     )
                 )
             )
@@ -102,7 +126,7 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new ReputationStorage()),
-                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(this)))
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), address(this)))
                 )
             )
         );
@@ -110,7 +134,10 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new X402Adapter()),
-                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), address(this)))
+                    abi.encodeCall(
+                        X402Adapter.initialize,
+                        (address(router), address(agentIndex), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -118,7 +145,10 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new PermitAdapter()),
-                    abi.encodeCall(PermitAdapter.initialize, (address(router), address(agentIndex), address(this)))
+                    abi.encodeCall(
+                        PermitAdapter.initialize,
+                        (address(router), address(agentIndex), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -126,7 +156,10 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new ApprovalAdapter()),
-                    abi.encodeCall(ApprovalAdapter.initialize, (address(router), address(agentIndex), address(this)))
+                    abi.encodeCall(
+                        ApprovalAdapter.initialize,
+                        (address(router), address(agentIndex), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -144,6 +177,7 @@ contract DeploymentValidationTest is Test {
             usdc: address(usdc),
             providerTreasury: providerTreasury,
             paymentTreasury: paymentTreasury,
+            sanctionsOracle: address(sanctions),
             agentIndex: address(agentIndex),
             daskiValidationRegistry: address(validation),
             providerRegistry: address(providers),
@@ -183,7 +217,8 @@ contract DeploymentValidationTest is Test {
         AgentIndex otherIndex = AgentIndex(
             address(
                 new ERC1967Proxy(
-                    address(new AgentIndex()), abi.encodeCall(AgentIndex.initialize, (address(identity), address(this)))
+                    address(new AgentIndex()),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), address(this)))
                 )
             )
         );
@@ -191,7 +226,10 @@ contract DeploymentValidationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(new X402Adapter()),
-                    abi.encodeCall(X402Adapter.initialize, (address(router), address(otherIndex), address(this)))
+                    abi.encodeCall(
+                        X402Adapter.initialize,
+                        (address(router), address(otherIndex), address(sanctions), address(this))
+                    )
                 )
             )
         );
@@ -199,6 +237,12 @@ contract DeploymentValidationTest is Test {
 
         vm.expectRevert("adapter AgentIndex mismatch");
         validationHarness.validateDarkState(stack);
+    }
+
+    function test_coreWiringRejectsSanctionsOracleMismatch() public {
+        stack.sanctionsOracle = address(new MockSanctionsList());
+        vm.expectRevert("sanctions oracle mismatch");
+        validationHarness.validateCoreWiring(stack);
     }
 
     function test_incompleteAdminHandoffReverts() public {

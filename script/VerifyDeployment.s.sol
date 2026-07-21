@@ -15,11 +15,18 @@ contract VerifyDeployment is Script {
         address usdc = vm.envAddress("USDC_ADDRESS");
         address eas = vm.envAddress("EAS_ADDRESS");
         address schemaRegistry = vm.envAddress("EAS_SCHEMA_REGISTRY_ADDRESS");
+        address sanctionsOracle = vm.envAddress("SANCTIONS_ORACLE_ADDRESS");
         address finalAdmin = vm.envAddress("ADMIN_ADDRESS");
         bool deploymentActive = vm.envBool("DEPLOYMENT_ACTIVE");
 
         DeploymentValidation.validateExternalDependencies(
-            identity, usdc, eas, schemaRegistry, vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false)
+            identity,
+            usdc,
+            eas,
+            schemaRegistry,
+            sanctionsOracle,
+            vm.envOr("ALLOW_UNSUPPORTED_CHAIN", false),
+            vm.envOr("ALLOW_MOCK_SANCTIONS_ORACLE", false)
         );
 
         DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
@@ -27,6 +34,7 @@ contract VerifyDeployment is Script {
             usdc: usdc,
             providerTreasury: vm.envAddress("PROVIDER_TREASURY_ADDRESS"),
             paymentTreasury: vm.envAddress("PAYMENT_TREASURY_ADDRESS"),
+            sanctionsOracle: sanctionsOracle,
             agentIndex: vm.envAddress("AGENT_INDEX_ADDRESS"),
             daskiValidationRegistry: vm.envAddress("DASKI_VALIDATION_REGISTRY_ADDRESS"),
             providerRegistry: vm.envAddress("PROVIDER_REGISTRY_ADDRESS"),

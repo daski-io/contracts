@@ -111,9 +111,12 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable {
         _;
     }
 
-    function _initializeReputation(address paymentRouter_, address admin_) internal onlyInitializing {
+    function _initializeReputation(address paymentRouter_, address sanctionsOracle_, address admin_)
+        internal
+        onlyInitializing
+    {
         require(paymentRouter_ != address(0), "zero router");
-        __Admin2Step_init(admin_);
+        __Admin2Step_init(admin_, sanctionsOracle_);
         paymentRouter = IPaymentRouter(paymentRouter_);
     }
 

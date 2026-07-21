@@ -9,9 +9,13 @@ contract DeploymentValidationHarness {
         address usdc,
         address eas,
         address schemaRegistry,
-        bool allowUnsupportedChain
+        address sanctionsOracle,
+        bool allowUnsupportedChain,
+        bool allowMockSanctionsOracle
     ) external view {
-        DeploymentValidation.validateExternalDependencies(identity, usdc, eas, schemaRegistry, allowUnsupportedChain);
+        DeploymentValidation.validateExternalDependencies(
+            identity, usdc, eas, schemaRegistry, sanctionsOracle, allowUnsupportedChain, allowMockSanctionsOracle
+        );
     }
 
     function validateFinalAdmin(address finalAdmin, address deployer) external view {

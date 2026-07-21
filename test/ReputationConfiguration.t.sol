@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 
 contract PaymentRouterCodeStub {}
 
@@ -24,9 +25,11 @@ contract InvalidSchemaRegistryEAS {
 contract ReputationConfigurationTest is Test {
     address admin = makeAddr("admin");
     PaymentRouterCodeStub router;
+    MockSanctionsList sanctions;
 
     function setUp() public {
         router = new PaymentRouterCodeStub();
+        sanctions = new MockSanctionsList();
     }
 
     function _fresh() internal returns (ReputationStorage reputation) {
@@ -34,7 +37,8 @@ contract ReputationConfigurationTest is Test {
         reputation = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(implementation), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                    address(implementation),
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
                 )
             )
         );

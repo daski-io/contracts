@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {AgentIndex} from "../src/AgentIndex.sol";
 import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
@@ -40,6 +41,7 @@ contract IntegrationTest is Test {
     PaymentRouter router;
     X402Adapter adapter;
     ReputationStorage reputation;
+    MockSanctionsList sanctions;
 
     bytes32 outcomeSchemaUid;
     bytes32 confirmationSchemaUid;
@@ -56,12 +58,16 @@ contract IntegrationTest is Test {
         buyer = vm.addr(BUYER_KEY);
         usdc = new MockUSDC();
         eas = new MockEAS();
+        sanctions = new MockSanctionsList();
 
         identity = new MockCanonicalIdentityRegistry();
         AgentIndex aiImpl = new AgentIndex();
         agentIndex = AgentIndex(
             address(
-                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+                new ERC1967Proxy(
+                    address(aiImpl),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), admin))
+                )
             )
         );
 
@@ -69,7 +75,8 @@ contract IntegrationTest is Test {
         validationRegistry = DaskiValidationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(valRegImpl), abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), admin))
+                    address(valRegImpl),
+                    abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), address(sanctions), admin))
                 )
             )
         );
@@ -80,7 +87,8 @@ contract IntegrationTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -91,7 +99,9 @@ contract IntegrationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -103,7 +113,15 @@ contract IntegrationTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(services), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(services),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -114,7 +132,9 @@ contract IntegrationTest is Test {
             address(
                 new ERC1967Proxy(
                     address(aImpl),
-                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
+                    abi.encodeCall(
+                        X402Adapter.initialize, (address(router), address(agentIndex), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -123,7 +143,8 @@ contract IntegrationTest is Test {
         reputation = ReputationStorage(
             address(
                 new ERC1967Proxy(
-                    address(repStoreImpl), abi.encodeCall(ReputationStorage.initialize, (address(router), admin))
+                    address(repStoreImpl),
+                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
                 )
             )
         );
