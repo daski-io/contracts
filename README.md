@@ -191,6 +191,7 @@ agentWallet, IDs beginning at 0, registration-time wallet initialization, and
 export DEPLOYER_PRIVATE_KEY=<key>
 export PROVIDER_TREASURY_ADDRESS=<listing-fee treasury>
 export PAYMENT_TREASURY_ADDRESS=<payment-commission treasury>
+# Deployed governance contract (never an EOA) — see "Governance Safe" below.
 export ADMIN_ADDRESS=<deployed multisig or timelock>
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
 #   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
@@ -243,10 +244,51 @@ forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 `Deploy.s.sol` never creates a mock token or silently substitutes one for a
 missing production dependency.
 
+### Governance Safe (`ADMIN_ADDRESS`)
+
+`ADMIN_ADDRESS` must be an already-deployed governance contract — an EOA is
+rejected. The supported governance contract is a Safe created through the
+canonical Safe v1.4.1 deployment (`script/SafeDeployment.sol` pins the
+SafeProxyFactory, SafeL2 singleton, CompatibilityFallbackHandler, and
+MultiSendCallOnly addresses by codehash; verified identical on Base mainnet
+and Base Sepolia).
+
+On testnet the Safe is auto-deployed — no prior setup, defaults to a 1-of-1
+Safe owned by the deployer:
+
+```bash
+forge script script/DeploySafe.s.sol --rpc-url <RPC_URL> --broadcast
+export ADMIN_ADDRESS=<logged Safe address>
+```
+
+`SAFE_OWNERS` (comma-separated), `SAFE_THRESHOLD`, and `SAFE_SALT_NONCE`
+override the defaults; the same owners+threshold+salt always yields the same
+create2 address, so a fresh Safe needs a new salt. On Base mainnet the script
+refuses anything weaker than 2 owners with threshold 2 — create the real
+multisig there (with this script or the Safe app) before deploying.
+
+### Staged deployment and governance batches
+
 `Deploy.s.sol` creates a dark deployment: ReputationStorage is configured, but
 no token or adapter is enabled. Contract addresses, EAS schema UIDs, and
 resolver wiring are logged at the end. Accept all nine pending admin roles from
 the configured governance contract before activating the token and adapters.
+
+Both governance batches (`script/GovernanceBatches.sol`) are driven through
+the Safe by `script/ExecuteGovernanceBatches.s.sol`, which validates the
+expected pre-state, executes the batch as a single MultiSendCallOnly
+transaction, and re-validates afterwards:
+
+```bash
+# after Deploy.s.sol, with the stack env exported (same names as the verifier):
+GOVERNANCE_BATCH=accept   forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+GOVERNANCE_BATCH=activate forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+Scripted execution requires the broadcasting EOA to be an owner of a 1-of-1
+Safe (the testnet shape). With a higher threshold the script prints every call
+plus the packed MultiSend payload and stops — execute those from the Safe app
+instead.
 
 After exporting the logged component addresses and schema UIDs, run the
 read-only verifier first with `DEPLOYMENT_ACTIVE=false` after all admin roles
