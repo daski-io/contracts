@@ -9,9 +9,9 @@ backed by EAS attestations — built on top of the **canonical ERC-8004
 registries**. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** v1 deployed on Base Sepolia (pre-canonical-migration — next
-redeploy switches identity to the canonical registry). 188 unit + integration
-tests passing. Audit pending.
+**Status:** the Base Sepolia addresses below run the previous pre-production
+revision. The current revision requires a fresh deployment; an external audit
+is still pending.
 
 ## Canonical ERC-8004 registries
 
@@ -28,10 +28,16 @@ ecosystem (8004scan, indexers, other marketplaces) reads:
 Public ERC-8004 feedback is written to the canonical ReputationRegistry by
 the gateway (off-chain, per confirmed delivery, with the EAS attestation as
 evidence); no contract in this repo touches it. The ERC-8004
-ValidationRegistry remains Daski-hosted because that section of the spec is
+validation registry remains Daski-hosted because that section of the spec is
 still in flux and has no canonical deployment yet. Daski's EAS layer
 (`ReputationStorage`) is the payment-verified internal ledger that drives
 ranking — it is Daski-native, not ERC-8004 reputation.
+
+Provider approval, marketplace listing visibility, and the reputation shown
+in discovery are gateway trust boundaries for the MVP. The contracts require
+an active Daski provider and service before settlement, but their raw public
+transaction counters are not a permissionless Sybil-resistance mechanism and
+must not be treated as marketplace eligibility or ranking on their own.
 
 ## Three-layer identity model
 
@@ -47,23 +53,41 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 
 | Contract            | Purpose |
 |---------------------|---------|
-| **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. Bindings are re-verified against the canonical registry on every read; stale ones resolve to zero. |
+| **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. `resolve` returns an explicit found flag because agent ID 0 is valid. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
-| **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. The `serviceSlug` is a human-readable product identifier (`"domain-registration"`); skills are declared off-chain. |
-| **PaymentRouter**      | Rail-agnostic settlement that splits USDC between provider/service wallet and DAO treasury. Pluggable adapters per rail. Validates (provider, service) on every settle. |
+| **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. Optional service payee overrides are bound to both the authorizing NFT owner and the live canonical `agentWallet`; skills are declared off-chain. |
+| **PaymentRouter**      | Rail-agnostic settlement that splits accepted tokens between provider/service wallet and the payment treasury. Per-token policy independently controls payment acceptance and reputation eligibility/minimums. It validates (provider, service) on every settlement, namespaces replay protection, and excludes relationships provable from on-chain identity state at settlement time from reputation. |
 | **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
-| **DirectTransferAdapter** | External-facilitator rail (x402 Bazaar): attributes payments that a third-party facilitator (Coinbase CDP) settled as bare EIP-3009 transfers into the router, running the split + payment record as a follow-up tx. Attributor-gated (the Daski gateway). |
-| **ValidationRegistry** | ERC-8004 request/response attestations (Daski-hosted until a canonical validation registry exists). |
-| **ReputationStorage**  | Bilateral reputation resolver: provider records outcome, buyer confirms. EAS-backed; counters split per-provider AND per-service. |
+| **DaskiValidationRegistry** | Daski-specific, ERC-8004-inspired validation requests with namespaced keys and paginated reads. `validationRequest` returns `computeValidationKey(agentId, requestHash)`; calls and paginated lists use that key, while events carry both it and the raw payload hash. This intentionally avoids the draft registry's global request-hash squatting and unbounded getter behavior rather than claiming drop-in compatibility. |
+| **ReputationStorage**  | Bilateral reputation resolver: qualified payments contribute to counters, providers record outcomes, and buyers confirm. Payment/refund mirroring is retryable so a resolver outage cannot block settlement. EAS-backed; counters split per-provider AND per-service. Resolver addresses and schema UIDs are permanently locked by one-time configuration finalization before payment rails can be enabled. |
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
+Fresh deployments require one deployed governance contract (multisig or
+timelock) as the pending admin of every proxy. Payment rails remain disabled
+until that governance contract accepts every admin role.
+
+Allowlisted adapters are trusted to authenticate or establish buyer consent
+and to deliver the exact settlement amount. Adapter enablement verifies the
+adapter's router binding on-chain; deployment verification additionally checks
+its exact AgentIndex binding.
+
+Every participant wallet is screened on-chain against the configured
+Chainalysis-compatible sanctions oracle. Adapters reject payers before token
+calls and the router independently rechecks live payer, controller, payee, and
+treasury addresses. Covered operations fail closed when screening is
+unavailable. Integrators should decode `SanctionedAddress(address)` and
+`SanctionsOracleUnavailable(address)` rather than matching revert text.
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`) — deployed 2026-07-12
+### Base Sepolia (chain id `84532`) — deployed 2026-07-22
+
+Staged deployment: every proxy is admined by the governance Safe below; the
+sanctions oracle is the explicitly marked test mock (Chainalysis publishes no
+Base Sepolia deployment).
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
@@ -71,30 +95,63 @@ ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 
 | Contract              | Address                                      |
 |-----------------------|----------------------------------------------|
+| Governance Safe (admin, 1-of-1 testnet) | `0xe6724f9317E872a0a7fa59B93614cc73C7529DDc` |
 | USDC (Circle)         | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| AgentIndex            | `0xf1Aa86a69aBA5750B15FAba3026B8e5CBe7Db519` |
-| ValidationRegistry    | `0x7b4F7eab04D6459D15caC6D26685b49C25613591` |
-| ProviderRegistry      | `0x9Ae6337534B2e16e93862D4CC8AD76B1778758e4` |
-| ServiceRegistry       | `0x0dA4E956f5b0C504d0c57FD43E7BBF69bA9b0E00` |
-| PaymentRouter         | `0x358A5fd242938BAD8b162551ACAC987953c93DC3` |
-| ReputationStorage     | `0xDc26A0c4Ec361F61D3dE56f729F8d6a6DBFCA75E` |
-| X402Adapter           | `0xab6E1a96D0262F484EEdAf3AEEd81f6c41758BD2` |
-| PermitAdapter         | `0x486B72084399716F0C058F5238F6e7f0B0D58038` |
-| ApprovalAdapter       | `0x71783d4FdEC13569DA6311F1941F3c4E0b0B89F7` |
-| DirectTransferAdapter | `0x41147a69e01d658c0290B0e30D7BFEBFC9c481A6` |
+| SanctionsOracle (MockSanctionsList) | `0xa94d2168820f349aafBa585c12E69aA387dCB815` |
+| AgentIndex            | `0x3C0F12ce13DF39C82bb6A4861BE5D77BD28A695e` |
+| DaskiValidationRegistry | `0x7B00F8AB014d6D7289DE743240131C4349232a5E` |
+| ProviderRegistry      | `0x1B17fB18968F099e2878194c8699c64e14F22080` |
+| ServiceRegistry       | `0x9EFcAB44a33bBD1bBe8DEf481f896cD287b904a0` |
+| PaymentRouter         | `0x50046ce6DcC49C900917B796eF53d435c57a7B6c` |
+| ReputationStorage     | `0xE024C8CB72Ddb08C6602e94c5585cD1DBE74DF6d` |
+| X402Adapter           | `0x6F77a5feFFDC16d8CE743897936DF825011E7878` |
+| PermitAdapter         | `0x90765d099D853D029Eb7d56b023Af10FEC21Da10` |
+| ApprovalAdapter       | `0xB3A23C4C21D6A02B141e1d829fc1A411A3fF198c` |
 | EAS                   | `0x4200000000000000000000000000000000000021` |
 | Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x463fb742a0d186de10c8060e6ab6dbf9a6970e6913439f8ffe826b4bc6f56801`
-- Confirmation: `0xbdf480e91d9566952262fa3bf185872119b37f6c743be6df86603e6cf0717ed5`
+- Outcome: `0x6b7be197d0d05238289a44c7a54f3cd6ef18770f56a3287e174f757421333360`
+- Confirmation: `0x0d90927c3531d12664d8aebf8b40964123cfba655a5d02be2c3b0459b8b11142`
+
+The prior stack (deployed 2026-07-12, EOA-admined, incl. the
+DirectTransferAdapter) is retired by this deployment — full address set under
+`retired` in the machine-readable file; quiescing per the procedure below.
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
+Retiring this legacy stack is an operator action, not a proxy upgrade. At the
+retirement block, re-check that the router holds no USDC, call
+`setAcceptedToken(USDC, false)`, disable DirectTransfer/X402/Permit/Approval,
+and scan all historical `AdapterSet` and `AcceptedTokenSet` events for any
+other enabled entries. Then replace the old router address in every dependent
+service. Bare token transfers can arrive at any time, so repeat the balance
+check immediately before and after quiescing the router.
+
+`script/RetireStack.s.sol` performs the disable pass (idempotent; refuses a
+router with a residual token balance unless overridden) for EOA-admined
+legacy routers:
+
+```bash
+export RETIRE_PAYMENT_ROUTER_ADDRESS=<old router>
+export RETIRE_TOKENS=<comma-separated tokens ever accepted>
+export RETIRE_ADAPTERS=<comma-separated adapters ever enabled>
+forge script script/RetireStack.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+The event-history scan before and after is still mandatory — mappings are
+not enumerable, so the env lists must be proven exhaustive against the
+router's full `AcceptedTokenSet`/`AdapterSet` log history. A Safe-admined
+router (v0.6.0+) is retired through a governance batch instead.
+
 The previous (pre-canonical-migration) stack at PaymentRouter
-`0x78f9b15F…459d8f` is orphaned, along with Daski's legacy
-Identity/Reputation registries — historical record in the deploy-testnet
-repo's deployment records.
+`0x78f9b15F…459d8f` is orphaned and **quiesced (2026-07-22)**: USDC
+disabled, all three adapters disabled, zero balance, event history scanned
+exhaustive. The seven earlier May-2026 iteration stacks (routers recorded in
+this repo's `deployments/base-sepolia.json` history, all of which accepted
+real Circle USDC) were swept and quiesced the same day, the same way. Legacy
+Identity/Reputation registries remain orphaned — historical record in the
+deploy-testnet repo's deployment records.
 
 ### Base mainnet
 Not yet deployed. Pending audit.
@@ -107,12 +164,12 @@ deployed by Daski):
 
 ```
 1. AgentIndex              (canonical IdentityRegistry)
-2. ValidationRegistry      (canonical IdentityRegistry)
+2. DaskiValidationRegistry (canonical IdentityRegistry)
 3. ProviderRegistry        (canonical IdentityRegistry, USDC, treasury)
 4. ServiceRegistry         (canonical IdentityRegistry, ProviderRegistry)
 5. PaymentRouter           (canonical IdentityRegistry, ProviderRegistry, ServiceRegistry, USDC, treasury)
 6. ReputationStorage       (canonical IdentityRegistry, PaymentRouter, EAS, schema UIDs)
-7. Adapters (X402/Permit/Approval/DirectTransfer) — initialized with AgentIndex, registered with PaymentRouter
+7. Adapters (X402/Permit/Approval) — initialized with AgentIndex, registered with PaymentRouter
 ```
 
 ## Development
@@ -121,90 +178,205 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 188 tests across 11 suites
+forge test       # 244 tests across 15 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 52 |
-| ReputationStorage     | 27 |
-| ServiceRegistry       | 24 |
-| AgentIndex            | 18 |
-| ProviderRegistry      | 18 |
-| X402Adapter           | 14 |
-| ValidationRegistry    | 13 |
-| DirectTransferAdapter | 10 |
-| PermitAdapter         | 5  |
-| ApprovalAdapter       | 4  |
+| PaymentRouter         | 78 |
+| ReputationStorage     | 35 |
+| ReputationConfiguration | 10 |
+| ServiceRegistry       | 26 |
+| AgentIndex            | 19 |
+| ProviderRegistry      | 19 |
+| X402Adapter           | 15 |
+| DaskiValidationRegistry | 16 |
+| PermitAdapter         | 6  |
+| ApprovalAdapter       | 5  |
+| DeploymentValidation  | 4  |
+| DeploymentGuards      | 5  |
 | Integration           | 3  |
+| Canonical identity mock | 2 |
+| EAS mock              | 1 |
 
 Tests run against `test/mocks/MockCanonicalIdentityRegistry.sol`, a faithful
 double of the canonical registry surface (ERC-721 + registration +
-agentWallet, **no** auto-set wallet, **no** reverse index).
+agentWallet, IDs beginning at 0, registration-time wallet initialization, and
+**no** reverse index).
 
 ## Deploy
 
 ```bash
 export DEPLOYER_PRIVATE_KEY=<key>
-export TREASURY_ADDRESS=<address>
-
+export PROVIDER_TREASURY_ADDRESS=<listing-fee treasury>
+export PAYMENT_TREASURY_ADDRESS=<payment-commission treasury>
+# Deployed governance contract (never an EOA) — see "Governance Safe" below.
+export ADMIN_ADDRESS=<deployed multisig or timelock>
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
 #   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
 #   Base mainnet: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
 export IDENTITY_REGISTRY_ADDRESS=0x8004A818BFB912233c491871b3d84c89A494BD9e
 
-# USDC token. Defaults shown:
+# REQUIRED: deployed USDC-compatible token for the target chain.
 #   Base Sepolia (Circle): 0x036CbD53842c5426634e7929541eC2318f3dCF7e
 #   Base mainnet:          0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-# Omit to deploy MockUSDC instead (test deploys only).
 export USDC_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
+
+# REQUIRED: Chainalysis Sanctions Oracle.
+#   Base mainnet: 0x3A91A31cB3dC49b4db9Ce721F50a9D076c8D739B
+#   Base Sepolia: no official deployment; use an explicitly marked mock only.
+export SANCTIONS_ORACLE_ADDRESS=<oracle-address>
 
 # Optional (defaults shown)
 export LISTING_FEE=1000000   # 1 USDC
 export COMMISSION_BPS=500    # 5%
+export USDC_REPUTATION_MINIMUM=250000 # $0.25 in Circle USDC units
 
 forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
 ```
 
-Contract addresses, EAS schema UIDs, and resolver wiring are logged at the end
-of `forge script` output for easy copy-paste into client configs.
+On Base mainnet and Base Sepolia, deployment enforces the pinned canonical
+IdentityRegistry, Circle USDC, EAS, and SchemaRegistry addresses. Base mainnet
+also pins the documented Chainalysis oracle. Base Sepolia and isolated chains
+require `ALLOW_MOCK_SANCTIONS_ORACLE=true` because Chainalysis does not publish
+an official Base Sepolia deployment. Deployment also
+checks ERC-165/ERC-721 support, six-decimal USDC semantics, the EAS
+SchemaRegistry binding, the oracle ABI, both registered schemas, and every
+cross-contract wiring relationship. Unsupported chains are rejected unless the operator
+explicitly sets `ALLOW_UNSUPPORTED_CHAIN=true`; semantic dependency checks
+still apply.
+
+For an isolated non-mainnet environment without a token, deploy the
+unrestricted-mint test double separately, then supply its logged address to
+the production-shaped deployment:
+
+```bash
+forge script script/DeployMockUSDC.s.sol --rpc-url <RPC_URL> --broadcast
+export USDC_ADDRESS=<logged MockUSDC address>
+forge script script/DeployMockSanctionsList.s.sol --rpc-url <RPC_URL> --broadcast
+export SANCTIONS_ORACLE_ADDRESS=<logged MockSanctionsList address>
+export ALLOW_UNSUPPORTED_CHAIN=true
+export ALLOW_MOCK_SANCTIONS_ORACLE=true
+forge script script/Deploy.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+`Deploy.s.sol` never creates a mock token or silently substitutes one for a
+missing production dependency.
+
+### Governance Safe (`ADMIN_ADDRESS`)
+
+`ADMIN_ADDRESS` must be an already-deployed governance contract — an EOA is
+rejected. The supported governance contract is a Safe created through the
+canonical Safe v1.4.1 deployment (`script/SafeDeployment.sol` pins the
+SafeProxyFactory, SafeL2 singleton, CompatibilityFallbackHandler, and
+MultiSendCallOnly addresses by codehash; verified identical on Base mainnet
+and Base Sepolia).
+
+On testnet the Safe is auto-deployed — no prior setup, defaults to a 1-of-1
+Safe owned by the deployer:
+
+```bash
+forge script script/DeploySafe.s.sol --rpc-url <RPC_URL> --broadcast
+export ADMIN_ADDRESS=<logged Safe address>
+```
+
+`SAFE_OWNERS` (comma-separated), `SAFE_THRESHOLD`, and `SAFE_SALT_NONCE`
+override the defaults; the same owners+threshold+salt always yields the same
+create2 address, so a fresh Safe needs a new salt. On Base mainnet the script
+refuses anything weaker than 2 owners with threshold 2 — create the real
+multisig there (with this script or the Safe app) before deploying.
+
+### Staged deployment and governance batches
+
+`Deploy.s.sol` creates a dark deployment: ReputationStorage is configured, but
+no token or adapter is enabled. Contract addresses, EAS schema UIDs, and
+resolver wiring are logged at the end. Accept all nine pending admin roles from
+the configured governance contract before activating the token and adapters.
+
+Both governance batches (`script/GovernanceBatches.sol`) are driven through
+the Safe by `script/ExecuteGovernanceBatches.s.sol`, which validates the
+expected pre-state, executes the batch as a single MultiSendCallOnly
+transaction, and re-validates afterwards:
+
+```bash
+# after Deploy.s.sol, with the stack env exported (same names as the verifier):
+GOVERNANCE_BATCH=accept   forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+GOVERNANCE_BATCH=activate forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+Scripted execution requires the broadcasting EOA to be an owner of a 1-of-1
+Safe (the testnet shape). With a higher threshold the script prints every call
+plus the packed MultiSend payload and stops — execute those from the Safe app
+instead.
+
+After exporting the logged component addresses and schema UIDs, run the
+read-only verifier first with `DEPLOYMENT_ACTIVE=false` after all admin roles
+have been accepted, then with `DEPLOYMENT_ACTIVE=true` after the activation
+batch:
+
+```bash
+export IDENTITY_REGISTRY_ADDRESS=<canonical-address>
+export USDC_ADDRESS=<circle-usdc-address>
+export SANCTIONS_ORACLE_ADDRESS=<configured-oracle-address>
+export EAS_ADDRESS=0x4200000000000000000000000000000000000021
+export EAS_SCHEMA_REGISTRY_ADDRESS=0x4200000000000000000000000000000000000020
+export PROVIDER_TREASURY_ADDRESS=<address>
+export PAYMENT_TREASURY_ADDRESS=<address>
+export ADMIN_ADDRESS=<governance-contract-address>
+export AGENT_INDEX_ADDRESS=<address>
+export DASKI_VALIDATION_REGISTRY_ADDRESS=<address>
+export PROVIDER_REGISTRY_ADDRESS=<address>
+export SERVICE_REGISTRY_ADDRESS=<address>
+export PAYMENT_ROUTER_ADDRESS=<address>
+export REPUTATION_STORAGE_ADDRESS=<address>
+export X402_ADAPTER_ADDRESS=<address>
+export PERMIT_ADAPTER_ADDRESS=<address>
+export APPROVAL_ADAPTER_ADDRESS=<address>
+export OUTCOME_SCHEMA_UID=<bytes32>
+export CONFIRMATION_SCHEMA_UID=<bytes32>
+export LISTING_FEE=1000000
+export COMMISSION_BPS=500
+export USDC_REPUTATION_MINIMUM=250000
+
+# Copy the nine implementation code hashes logged by Deploy.s.sol.
+export AGENT_INDEX_IMPLEMENTATION_CODEHASH=<bytes32>
+export DASKI_VALIDATION_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export PROVIDER_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export SERVICE_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
+export PAYMENT_ROUTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export REPUTATION_STORAGE_IMPLEMENTATION_CODEHASH=<bytes32>
+export X402_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export PERMIT_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+export APPROVAL_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
+
+export DEPLOYMENT_ACTIVE=false
+forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
+
+# After the Safe activation batch:
+export DEPLOYMENT_ACTIVE=true
+forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
+```
+
+ProviderRegistry and PaymentRouter treasury controls are intentionally
+independent. A governance treasury change must review both destinations and
+record whether equality or divergence is intended.
+
+EIP-3009 payments use `X402Adapter`, which executes the token authorization
+and router settlement atomically. The authorization nonce commits to
+`(serviceRef, providerAgentId, serviceId)` so a relayer cannot redirect it.
+
+Provider-facing services should map `SanctionedAddress(account)` to the stable
+code `SANCTIONS_ADDRESS_REJECTED` (not retryable) and
+`SanctionsOracleUnavailable(oracle)` to `SANCTIONS_SCREENING_UNAVAILABLE`
+(retryable with a bounded policy). The contracts enforce the restriction even
+when the gateway is bypassed.
 
 Release coordination — develop→main merges, semver tags, the cross-repo
 address cascade (gateway/provider env, test-suite config, website `llms.txt`),
 DB resets, and post-deploy verification — lives in
 [daski-io/deploy-testnet](https://github.com/daski-io/deploy-testnet).
-
-### Add DirectTransferAdapter to an existing deployment (x402 Bazaar rail)
-
-`Deploy.s.sol` includes the adapter for **fresh** stacks. To add the rail to
-an already-running deployment (e.g. the current Base Sepolia sandbox) use the
-targeted script — it deploys only the adapter and wires it to the existing
-router, without touching anything else:
-
-```bash
-export DEPLOYER_PRIVATE_KEY=<key>                # pays gas; becomes adapter admin
-export PAYMENT_ROUTER_ADDRESS=<existing router proxy>
-export AGENT_INDEX_ADDRESS=<existing AgentIndex proxy>
-# Gateway facilitator wallet — allowed to call attribute(). Strongly
-# recommended to set here; the rail cannot settle without an attributor.
-export ATTRIBUTOR_ADDRESS=<gateway facilitator wallet>
-# Optional: hand adapter admin to a multisig (2-step; new admin must acceptAdmin())
-# export ADMIN_ADDRESS=<multisig>
-
-forge script script/AddDirectAdapter.s.sol --rpc-url <RPC_URL> --broadcast
-```
-
-The script registers the adapter with the router automatically when the
-deployer is the router admin (testnet convention); otherwise it prints the
-exact `PaymentRouter.setAdapter(<proxy>, true)` call for the real admin.
-
-After the deploy: record the **proxy** address in the Deployments table above
-and in `deployments/<network>.json`, then run the downstream cascade (gateway
-`DIRECT_ADAPTER_ADDRESS`, verification, Bazaar 402 sanity check) from the
-[deploy-testnet](https://github.com/daski-io/deploy-testnet) runbook
-(`docs/contract-addresses.md`).
 
 ## Security
 

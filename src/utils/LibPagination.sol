@@ -18,10 +18,9 @@ library LibPagination {
         if (offset >= length) {
             return new bytes32[](0);
         }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
+        // Cap at length without computing offset+limit, which can overflow
+        // for sentinel-style limits like type(uint256).max.
+        uint256 end = length - offset > limit ? offset + limit : length;
         page = new bytes32[](end - offset);
         for (uint256 i = 0; i < page.length; i++) {
             page[i] = all[offset + i];
@@ -37,30 +36,10 @@ library LibPagination {
         if (offset >= length) {
             return new uint256[](0);
         }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
+        // Cap at length without computing offset+limit, which can overflow
+        // for sentinel-style limits like type(uint256).max.
+        uint256 end = length - offset > limit ? offset + limit : length;
         page = new uint256[](end - offset);
-        for (uint256 i = 0; i < page.length; i++) {
-            page[i] = all[offset + i];
-        }
-    }
-
-    function paginate(address[] storage all, uint256 offset, uint256 limit)
-        internal
-        view
-        returns (address[] memory page)
-    {
-        uint256 length = all.length;
-        if (offset >= length) {
-            return new address[](0);
-        }
-        uint256 end = offset + limit;
-        if (end > length) {
-            end = length;
-        }
-        page = new address[](end - offset);
         for (uint256 i = 0; i < page.length; i++) {
             page[i] = all[offset + i];
         }

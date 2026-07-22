@@ -7,14 +7,19 @@ import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegist
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @notice Minimal pass-through adapter used ONLY by the router unit tests so
 /// we can exercise `settle` in isolation from any specific payment rail.
 /// Funds are transferred via plain `transferFrom` before calling settle.
 contract PassThroughAdapter {
+    using SafeERC20 for IERC20;
+
     PaymentRouter public immutable router;
 
     constructor(PaymentRouter _router) {
@@ -30,17 +35,125 @@ contract PassThroughAdapter {
         uint256 providerAgentId,
         bytes32 serviceId
     ) external returns (uint256 paymentId) {
-        IERC20(token).transferFrom(msg.sender, address(router), amount);
+        IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
         return router.settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
     }
 }
 
+contract PaymentRouterHandler {
+    MockUSDC private immutable TOKEN;
+    PassThroughAdapter private immutable ADAPTER;
+    uint256 private immutable BUYER_AGENT_ID;
+    uint256 private immutable PROVIDER_AGENT_ID;
+    bytes32 private immutable SERVICE_ID;
+
+    uint256 public totalSettled;
+    uint256 private settlementNonce;
+
+    constructor(
+        MockUSDC token,
+        PassThroughAdapter paymentAdapter,
+        MockCanonicalIdentityRegistry identity,
+        uint256 providerAgentId,
+        bytes32 serviceId
+    ) {
+        TOKEN = token;
+        ADAPTER = paymentAdapter;
+        PROVIDER_AGENT_ID = providerAgentId;
+        SERVICE_ID = serviceId;
+        BUYER_AGENT_ID = identity.register();
+        token.approve(address(paymentAdapter), type(uint256).max);
+    }
+
+    function settle(uint96 rawAmount) external {
+        uint256 amount = (uint256(rawAmount) % 1e6) + 1;
+        bytes32 serviceRef = keccak256(abi.encode(settlementNonce++));
+        ADAPTER.settle(address(TOKEN), amount, serviceRef, BUYER_AGENT_ID, address(this), PROVIDER_AGENT_ID, SERVICE_ID);
+        totalSettled += amount;
+    }
+}
+
+contract ToggleReputationSink {
+    address private immutable PAYMENT_ROUTER;
+    bool public failPayment;
+    bool public failRefund;
+
+    constructor(address paymentRouter_) {
+        PAYMENT_ROUTER = paymentRouter_;
+    }
+
+    function paymentRouter() external view returns (address) {
+        return PAYMENT_ROUTER;
+    }
+
+    function isConfigured() external pure returns (bool) {
+        return true;
+    }
+
+    function setFailRefund(bool fail) external {
+        failRefund = fail;
+    }
+
+    function setFailPayment(bool fail) external {
+        failPayment = fail;
+    }
+
+    function recordPayment(uint256) external view {
+        require(!failPayment, "payment mirror failed");
+    }
+
+    function recordRefund(uint256, uint256) external view {
+        require(!failRefund, "refund mirror failed");
+    }
+}
+
+contract UnconfiguredReputationSink {
+    address private immutable PAYMENT_ROUTER;
+
+    constructor(address paymentRouter_) {
+        PAYMENT_ROUTER = paymentRouter_;
+    }
+
+    function paymentRouter() external view returns (address) {
+        return PAYMENT_ROUTER;
+    }
+
+    function isConfigured() external pure returns (bool) {
+        return false;
+    }
+
+    function recordPayment(uint256) external {}
+
+    function recordRefund(uint256, uint256) external {}
+}
+
+contract RevertingBindingAdapter {
+    address private immutable BOUND_ROUTER;
+    bool private _revertBinding;
+
+    constructor(address router_) {
+        BOUND_ROUTER = router_;
+    }
+
+    function setRevertBinding(bool value) external {
+        _revertBinding = value;
+    }
+
+    function router() external view returns (address) {
+        require(!_revertBinding, "binding unavailable");
+        return BOUND_ROUTER;
+    }
+}
+
 contract PaymentRouterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     ProviderRegistry registry;
     ServiceRegistry serviceRegistry;
     PaymentRouter router;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
     PassThroughAdapter adapter;
 
     address admin = makeAddr("admin");
@@ -51,6 +164,8 @@ contract PaymentRouterTest is Test {
     uint256 providerAgentId;
     uint256 buyerAgentId;
     bytes32 serviceId;
+    PaymentRouterHandler handler;
+    uint256 invariantRecipientBalanceBefore;
 
     event PaymentSettled(
         uint256 indexed paymentId,
@@ -66,14 +181,16 @@ contract PaymentRouterTest is Test {
     event Refunded(uint256 indexed paymentId, uint256 amountToBuyer, uint256 cumulativeRefunded);
     event AdapterSet(address indexed adapter, bool allowed);
     event AcceptedTokenSet(address indexed token, bool allowed);
+    event TokenReputationConfigured(address indexed token, bool enabled, uint256 minimumAmount);
     event CommissionUpdated(uint256 oldBps, uint256 newBps);
-    event TreasuryUpdated(address oldTreasury, address newTreasury);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     function setUp() public {
         usdc = new MockUSDC();
 
         // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -81,7 +198,8 @@ contract PaymentRouterTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -92,7 +210,9 @@ contract PaymentRouterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -104,23 +224,35 @@ contract PaymentRouterTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(serviceRegistry), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
         );
 
         adapter = new PassThroughAdapter(router);
+        ToggleReputationSink sink = new ToggleReputationSink(address(router));
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         // Provider registers as ERC-8004 agent and lists with Daski.
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; payee resolution
-        // needs one (or a serviceWallet).
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
 
         usdc.mint(provider, 1_000_000);
@@ -136,6 +268,14 @@ contract PaymentRouterTest is Test {
         vm.prank(buyer);
         buyerAgentId = identity.register();
         usdc.mint(buyer, 1000e6);
+
+        handler = new PaymentRouterHandler(usdc, adapter, identity, providerAgentId, serviceId);
+        usdc.mint(address(handler), 1e18);
+        invariantRecipientBalanceBefore = usdc.balanceOf(provider) + usdc.balanceOf(treasury);
+        bytes4[] memory selectors = new bytes4[](1);
+        selectors[0] = handler.settle.selector;
+        targetContract(address(handler));
+        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -149,6 +289,19 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), amount);
         vm.prank(buyer);
         paymentId = adapter.settle(address(usdc), amount, ref, buyerAgentId, buyer, providerAgentId, svcId);
+    }
+
+    function _expectSanctionedSettlement(address account, bytes32 ref) internal {
+        uint256 buyerBalance = usdc.balanceOf(buyer);
+        sanctions.setSanctioned(account, true);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, account));
+        adapter.settle(address(usdc), 100e6, ref, buyerAgentId, buyer, providerAgentId, serviceId);
+        assertEq(usdc.balanceOf(buyer), buyerBalance);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
     }
 
     // ── Settle (happy path) ──────────────────────────────────────────
@@ -170,11 +323,106 @@ contract PaymentRouterTest is Test {
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
         assertEq(rec.cachedBuyerWallet, buyer);
+        assertEq(rec.cachedProviderOwner, provider);
+        assertEq(rec.cachedProviderWallet, provider);
         assertEq(rec.serviceRef, keccak256("ref-1"));
         assertEq(rec.paidAt, block.timestamp, "paidAt captures settlement timestamp");
+        assertTrue(rec.reputationEligible);
 
         assertEq(router.nextPaymentId(), paymentId + 1);
-        assertTrue(router.serviceRefUsed(keccak256("ref-1")));
+        bytes32 paymentKey = router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, keccak256("ref-1"));
+        assertTrue(router.paymentKeyUsed(paymentKey));
+    }
+
+    function test_settleSanctionedPayerRevertsAtomically() public {
+        _expectSanctionedSettlement(buyer, keccak256("sanctioned-payer"));
+    }
+
+    function test_settleSanctionedBuyerAgentWalletReverts() public {
+        address buyerAgentWallet = makeAddr("buyerAgentWallet");
+        identity.forceSetAgentWallet(buyerAgentId, buyerAgentWallet);
+        _expectSanctionedSettlement(buyerAgentWallet, keccak256("sanctioned-buyer-agent-wallet"));
+    }
+
+    function test_settleSanctionedBuyerOwnerRevertsForAgentWalletPayer() public {
+        address buyerAgentWallet = makeAddr("buyerAgentWalletPayer");
+        identity.forceSetAgentWallet(buyerAgentId, buyerAgentWallet);
+        usdc.mint(buyerAgentWallet, 100e6);
+        sanctions.setSanctioned(buyer, true);
+
+        vm.prank(buyerAgentWallet);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyerAgentWallet);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        adapter.settle(
+            address(usdc),
+            100e6,
+            keccak256("sanctioned-buyer-owner"),
+            buyerAgentId,
+            buyerAgentWallet,
+            providerAgentId,
+            serviceId
+        );
+
+        assertEq(usdc.balanceOf(buyerAgentWallet), 100e6);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
+    function test_settleSanctionedProviderOwnerReverts() public {
+        identity.forceSetAgentWallet(providerAgentId, makeAddr("cleanProviderWallet"));
+        _expectSanctionedSettlement(provider, keccak256("sanctioned-provider-owner"));
+    }
+
+    function test_settleSanctionedProviderWalletReverts() public {
+        address providerWallet = makeAddr("sanctionedProviderWallet");
+        identity.forceSetAgentWallet(providerAgentId, providerWallet);
+        _expectSanctionedSettlement(providerWallet, keccak256("sanctioned-provider-wallet"));
+    }
+
+    function test_settleSanctionedServicePayeeReverts() public {
+        address servicePayee = makeAddr("sanctionedServicePayee");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, servicePayee);
+        _expectSanctionedSettlement(servicePayee, keccak256("sanctioned-service-payee"));
+    }
+
+    function test_settleSanctionedContractWalletPayeeReverts() public {
+        address contractWallet = address(new ToggleReputationSink(address(router)));
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, contractWallet);
+        _expectSanctionedSettlement(contractWallet, keccak256("sanctioned-contract-wallet"));
+    }
+
+    function test_settleSanctionedTreasuryReverts() public {
+        _expectSanctionedSettlement(treasury, keccak256("sanctioned-treasury"));
+    }
+
+    function test_settleOracleFailureRevertsAtomically() public {
+        uint256 buyerBalance = usdc.balanceOf(buyer);
+        sanctions.setRevertChecks(true);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, address(sanctions)));
+        adapter.settle(
+            address(usdc), 100e6, keccak256("oracle-unavailable"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+        assertEq(usdc.balanceOf(buyer), buyerBalance);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
+    function test_oracleFailureLeavesGovernanceRemediationAndViewsAvailable() public {
+        sanctions.setRevertChecks(true);
+        assertEq(router.getAcceptedTokenCount(), 1);
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), false);
+        assertEq(router.getAcceptedTokenCount(), 0);
+
+        address nextAdmin = makeAddr("oracleIncidentAdmin");
+        vm.prank(admin);
+        router.transferAdmin(nextAdmin);
+        assertEq(router.pendingAdmin(), nextAdmin);
     }
 
     function test_settleEmitsEvent() public {
@@ -196,7 +444,7 @@ contract PaymentRouterTest is Test {
         // Provider rotates agentWallet via setAgentWallet to a fresh wallet.
         uint256 newKey = 0xFEED;
         address newWallet = vm.addr(newKey);
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 5 minutes;
         bytes memory sig = _signSetAgentWallet(newKey, providerAgentId, newWallet, deadline);
 
         vm.prank(provider);
@@ -252,18 +500,70 @@ contract PaymentRouterTest is Test {
         adapter.settle(address(usdc), 100e6, keccak256("ref-h1"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
+    function test_settleIgnoresServiceWalletAuthorizedByFormerOwner() public {
+        address oldOverride = makeAddr("oldOverride");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, oldOverride);
+
+        address newOwner = makeAddr("newProviderOwner");
+        vm.prank(provider);
+        identity.transferFrom(provider, newOwner, providerAgentId);
+
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("no payee wallet");
+        adapter.settle(
+            address(usdc), 100e6, keccak256("stale-service-wallet"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+        assertEq(usdc.balanceOf(oldOverride), 0);
+
+        vm.prank(newOwner);
+        identity.forceSetAgentWallet(providerAgentId, newOwner);
+        _settle(100e6, keccak256("new-owner-wallet"));
+        assertEq(usdc.balanceOf(newOwner), 95e6);
+        assertEq(usdc.balanceOf(oldOverride), 0);
+    }
+
+    function test_settleDoesNotReactivateServiceWalletAfterOwnershipRoundTrip() public {
+        address oldOverride = makeAddr("oldOverride");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, oldOverride);
+
+        address interimOwner = makeAddr("interimOwner");
+        vm.prank(provider);
+        identity.transferFrom(provider, interimOwner, providerAgentId);
+        vm.prank(interimOwner);
+        identity.transferFrom(interimOwner, provider, providerAgentId);
+
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("no payee wallet");
+        adapter.settle(
+            address(usdc), 100e6, keccak256("ownership-round-trip"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+        assertEq(usdc.balanceOf(oldOverride), 0);
+
+        address freshWallet = makeAddr("freshProviderWallet");
+        identity.forceSetAgentWallet(providerAgentId, freshWallet);
+        _settle(100e6, keccak256("fresh-wallet-after-round-trip"));
+        assertEq(usdc.balanceOf(freshWallet), 95e6);
+        assertEq(usdc.balanceOf(oldOverride), 0);
+    }
+
     function _signSetAgentWallet(uint256 key, uint256 agentId, address newWallet, uint256 deadline)
         internal
         view
         returns (bytes memory sig)
     {
-        uint256 nonce = identity.walletRotationNonce(newWallet);
+        address owner = identity.ownerOf(agentId);
         bytes32 structHash =
-            keccak256(abi.encode(identity.SET_AGENT_WALLET_TYPEHASH(), agentId, newWallet, nonce, deadline));
+            keccak256(abi.encode(identity.SET_AGENT_WALLET_TYPEHASH(), agentId, newWallet, owner, deadline));
         bytes32 domainSep = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("MockCanonicalIdentityRegistry")),
+                keccak256(bytes("ERC8004IdentityRegistry")),
                 keccak256(bytes("1")),
                 block.chainid,
                 address(identity)
@@ -366,12 +666,132 @@ contract PaymentRouterTest is Test {
         adapter.settle(address(usdc), 0, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
     }
 
-    function test_settleZeroBuyerAgentReverts() public {
-        vm.prank(buyer);
+    function test_settleSupportsAgentIdZero() public {
+        assertEq(providerAgentId, 0, "canonical IDs start at zero");
+        usdc.mint(provider, 100e6);
+        vm.prank(provider);
         usdc.approve(address(adapter), 100e6);
+        vm.prank(provider);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, keccak256("ref-zero"), 0, provider, providerAgentId, serviceId);
+        assertEq(router.getPayment(paymentId).buyerAgentId, 0);
+        assertFalse(router.getPayment(paymentId).reputationEligible, "self-payment is not reputation");
+    }
+
+    function test_settleTinyPaymentDoesNotCreateReputation() public {
+        uint256 paymentId = _settle(REPUTATION_MINIMUM - 1, keccak256("tiny"));
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleAtReputationFloorIsEligible() public {
+        uint256 paymentId = _settle(REPUTATION_MINIMUM, keccak256("floor"));
+        assertTrue(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleSharedControllerDoesNotCreateReputation() public {
+        vm.prank(provider);
+        uint256 controlledBuyerAgentId = identity.register("controlled-buyer");
+        usdc.mint(provider, 1e6);
+        vm.prank(provider);
+        usdc.approve(address(adapter), 1e6);
+        vm.prank(provider);
+        uint256 paymentId = adapter.settle(
+            address(usdc),
+            1e6,
+            keccak256("shared-controller"),
+            controlledBuyerAgentId,
+            provider,
+            providerAgentId,
+            serviceId
+        );
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleSameOwnerDistinctBuyerWalletDoesNotCreateReputation() public {
+        address controlledWallet = makeAddr("controlledWallet");
+        vm.prank(provider);
+        uint256 controlledBuyerAgentId = identity.register("controlled-buyer");
+        identity.forceSetAgentWallet(controlledBuyerAgentId, controlledWallet);
+        usdc.mint(controlledWallet, 1e6);
+
+        vm.prank(controlledWallet);
+        usdc.approve(address(adapter), 1e6);
+        vm.prank(controlledWallet);
+        uint256 paymentId = adapter.settle(
+            address(usdc),
+            1e6,
+            keccak256("same-owner-distinct-wallet"),
+            controlledBuyerAgentId,
+            controlledWallet,
+            providerAgentId,
+            serviceId
+        );
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleBuyerOwnerMatchingPayeeDoesNotCreateReputation() public {
+        vm.prank(provider);
+        bytes32 buyerPayeeService =
+            serviceRegistry.registerService(providerAgentId, "skill", "buyer-payee", "ipfs://meta", buyer);
+
+        uint256 paymentId = _settleWithService(1e6, keccak256("buyer-is-payee"), buyerPayeeService);
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleBuyerControllerApprovedForProviderDoesNotCreateReputation() public {
+        address controlledWallet = makeAddr("approved-owner-wallet");
+        address controlledOwner = makeAddr("approved-buyer-owner");
+        vm.prank(controlledOwner);
+        uint256 controlledBuyerAgentId = identity.register("approved-buyer");
+        identity.forceSetAgentWallet(controlledBuyerAgentId, controlledWallet);
+        vm.prank(provider);
+        identity.setApprovalForAll(controlledOwner, true);
+        usdc.mint(controlledWallet, 1e6);
+
+        vm.prank(controlledWallet);
+        usdc.approve(address(adapter), 1e6);
+        vm.prank(controlledWallet);
+        uint256 paymentId = adapter.settle(
+            address(usdc),
+            1e6,
+            keccak256("buyer-owner-is-operator"),
+            controlledBuyerAgentId,
+            controlledWallet,
+            providerAgentId,
+            serviceId
+        );
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleBuyerApprovedForProviderTokenDoesNotCreateReputation() public {
+        vm.prank(provider);
+        identity.approve(buyer, providerAgentId);
+
+        uint256 paymentId = _settle(1e6, keccak256("buyer-token-approved"));
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleUnsetBuyerWalletDoesNotMatchMissingApproval() public {
         vm.prank(buyer);
-        vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("ref"), 0, buyer, providerAgentId, serviceId);
+        identity.unsetAgentWallet(buyerAgentId);
+        assertEq(identity.getAgentWallet(buyerAgentId), address(0));
+        assertEq(identity.getApproved(providerAgentId), address(0));
+
+        uint256 paymentId = _settle(1e6, keccak256("zero-addresses-ignored"));
+        assertTrue(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function testFuzz_settleConservesFundsAndClassifiesReputation(uint256 rawAmount) public {
+        uint256 amount = bound(rawAmount, 1, 100e6);
+        uint256 providerBefore = usdc.balanceOf(provider);
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+        uint256 paymentId = _settle(amount, keccak256(abi.encode(rawAmount)));
+
+        assertEq(usdc.balanceOf(provider) - providerBefore + usdc.balanceOf(treasury) - treasuryBefore, amount);
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(router.getPayment(paymentId).reputationEligible, amount >= REPUTATION_MINIMUM);
     }
 
     function test_settleZeroBuyerWalletReverts() public {
@@ -399,8 +819,30 @@ contract PaymentRouterTest is Test {
         vm.prank(buyer);
         usdc.approve(address(adapter), 50e6);
         vm.prank(buyer);
-        vm.expectRevert("serviceRef used");
+        vm.expectRevert("payment key used");
         adapter.settle(address(usdc), 50e6, keccak256("dup"), buyerAgentId, buyer, providerAgentId, serviceId);
+    }
+
+    function test_settleSameServiceRefFromDifferentBuyerSucceeds() public {
+        bytes32 sharedRef = keccak256("shared-reference");
+        _settle(50e6, sharedRef);
+
+        address secondBuyer = makeAddr("secondBuyer");
+        vm.prank(secondBuyer);
+        uint256 secondBuyerAgentId = identity.register();
+        usdc.mint(secondBuyer, 50e6);
+
+        vm.prank(secondBuyer);
+        usdc.approve(address(adapter), 50e6);
+        vm.prank(secondBuyer);
+        uint256 secondPaymentId =
+            adapter.settle(address(usdc), 50e6, sharedRef, secondBuyerAgentId, secondBuyer, providerAgentId, serviceId);
+
+        assertEq(secondPaymentId, 2);
+        assertTrue(router.paymentKeyUsed(router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, sharedRef)));
+        assertTrue(
+            router.paymentKeyUsed(router.computePaymentKey(secondBuyerAgentId, providerAgentId, serviceId, sharedRef))
+        );
     }
 
     function test_settleInactiveProviderReverts() public {
@@ -431,6 +873,32 @@ contract PaymentRouterTest is Test {
 
         assertEq(usdc.balanceOf(buyer) - buyerBefore, 95e6);
         assertEq(router.refundedAmount(paymentId), 95e6);
+    }
+
+    function test_refundSanctionedSourceRevertsWithoutAccounting() public {
+        uint256 paymentId = _settle(100e6, keccak256("refund-sanctioned-source"));
+        sanctions.setSanctioned(provider, true);
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 0);
+    }
+
+    function test_refundSanctionedDestinationRevertsWithoutAccounting() public {
+        uint256 paymentId = _settle(100e6, keccak256("refund-sanctioned-destination"));
+        sanctions.setSanctioned(buyer, true);
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 0);
     }
 
     function test_refundPartial() public {
@@ -509,7 +977,7 @@ contract PaymentRouterTest is Test {
         // then refund as the owner — must succeed via the owner branch.
         uint256 newKey = 0x1111;
         address newWallet = vm.addr(newKey);
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 5 minutes;
         bytes memory sig = _signSetAgentWallet(newKey, providerAgentId, newWallet, deadline);
         vm.prank(provider);
         identity.setAgentWallet(providerAgentId, newWallet, deadline, sig);
@@ -582,7 +1050,7 @@ contract PaymentRouterTest is Test {
 
         uint256 newKey = 0x2222;
         address newWallet = vm.addr(newKey);
-        uint256 deadline = block.timestamp + 1 hours;
+        uint256 deadline = block.timestamp + 5 minutes;
         bytes memory sig = _signSetAgentWallet(newKey, providerAgentId, newWallet, deadline);
         vm.prank(provider);
         identity.setAgentWallet(providerAgentId, newWallet, deadline, sig);
@@ -619,27 +1087,87 @@ contract PaymentRouterTest is Test {
         router.refund(999, 1);
     }
 
-    function test_refundNoDestinationReverts() public {
-        // The buyer agent has no live agentWallet on the canonical registry
-        // (never verified one — the common case for AgentIndex-minted
-        // agents), so the refund falls back to the cached payer wallet.
+    function test_refundReturnsToOriginalPayerAfterAgentTransfer() public {
         uint256 paymentId = _settle(100e6, keccak256("ref-unset"));
 
-        assertEq(identity.getAgentWallet(buyerAgentId), address(0), "buyer never verified an agentWallet");
+        address newOwner = makeAddr("newBuyerOwner");
+        vm.prank(buyer);
+        identity.transferFrom(buyer, newOwner, buyerAgentId);
+        vm.prank(newOwner);
+        identity.forceSetAgentWallet(buyerAgentId, newOwner);
 
         vm.prank(provider);
         usdc.approve(address(router), 50e6);
 
         uint256 buyerBefore = usdc.balanceOf(buyer);
+        uint256 newOwnerBefore = usdc.balanceOf(newOwner);
         vm.prank(provider);
         router.refund(paymentId, 50e6);
-        assertEq(usdc.balanceOf(buyer) - buyerBefore, 50e6, "falls back to cached wallet");
+        assertEq(usdc.balanceOf(buyer) - buyerBefore, 50e6, "original payer receives refund");
+        assertEq(usdc.balanceOf(newOwner), newOwnerBefore, "new agent owner cannot redirect old refund");
+    }
+
+    function test_refundSucceedsWhenReputationSinkFailsAndCanRetry() public {
+        ToggleReputationSink sink = new ToggleReputationSink(address(router));
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
+
+        uint256 paymentId = _settle(100e6, keccak256("atomic-refund"));
+        sink.setFailRefund(true);
+
+        vm.prank(provider);
+        usdc.approve(address(router), 50e6);
+        uint256 buyerBefore = usdc.balanceOf(buyer);
+        uint256 providerBefore = usdc.balanceOf(provider);
+
+        vm.prank(provider);
+        router.refund(paymentId, 50e6);
+
+        assertEq(router.refundedAmount(paymentId), 50e6);
+        assertEq(usdc.balanceOf(buyer) - buyerBefore, 50e6);
+        assertEq(providerBefore - usdc.balanceOf(provider), 50e6);
+        (bool paymentSynced, uint256 refundSynced) = router.reputationSyncState(paymentId);
+        assertTrue(paymentSynced);
+        assertEq(refundSynced, 0);
+
+        vm.expectRevert("refund mirror failed");
+        router.syncReputation(paymentId);
+        sink.setFailRefund(false);
+        router.syncReputation(paymentId);
+        (paymentSynced, refundSynced) = router.reputationSyncState(paymentId);
+        assertTrue(paymentSynced);
+        assertEq(refundSynced, 50e6);
+    }
+
+    function test_settleSucceedsWhenReputationSinkFailsAndCanRetry() public {
+        ToggleReputationSink sink = new ToggleReputationSink(address(router));
+        sink.setFailPayment(true);
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
+
+        uint256 paymentId = _settle(100e6, keccak256("retry-payment"));
+        (bool paymentSynced,) = router.reputationSyncState(paymentId);
+        assertFalse(paymentSynced);
+
+        vm.expectRevert("payment mirror failed");
+        router.syncReputation(paymentId);
+        sink.setFailPayment(false);
+        router.syncReputation(paymentId);
+        (paymentSynced,) = router.reputationSyncState(paymentId);
+        assertTrue(paymentSynced);
+    }
+
+    function test_reputationStorageCannotChangeAfterPayment() public {
+        _settle(1e6, keccak256("lock-reputation"));
+        vm.prank(admin);
+        vm.expectRevert("payments already exist");
+        router.setReputationStorage(makeAddr("replacement"));
     }
 
     // ── Admin ────────────────────────────────────────────────────────
 
     function test_setAdapter() public {
-        address someAdapter = makeAddr("someAdapter");
+        address someAdapter = address(new PassThroughAdapter(router));
         assertFalse(router.isAdapter(someAdapter));
 
         vm.expectEmit(true, true, true, true, address(router));
@@ -647,10 +1175,12 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         router.setAdapter(someAdapter, true);
         assertTrue(router.isAdapter(someAdapter));
+        assertEq(router.getAdapterCount(), 2);
 
         vm.prank(admin);
         router.setAdapter(someAdapter, false);
         assertFalse(router.isAdapter(someAdapter));
+        assertEq(router.getAdapterCount(), 1);
     }
 
     function test_setAdapterZeroReverts() public {
@@ -659,13 +1189,108 @@ contract PaymentRouterTest is Test {
         router.setAdapter(address(0), true);
     }
 
+    function test_setAdapterWithoutCodeReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("adapter has no code");
+        router.setAdapter(makeAddr("eoaAdapter"), true);
+    }
+
+    function test_setAdapterWrongRouterReverts() public {
+        PaymentRouter otherRouter = PaymentRouter(
+            address(
+                new ERC1967Proxy(
+                    address(new PaymentRouter()),
+                    abi.encodeCall(
+                        PaymentRouter.initialize,
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
+                    )
+                )
+            )
+        );
+        PassThroughAdapter wrongAdapter = new PassThroughAdapter(otherRouter);
+
+        vm.prank(admin);
+        vm.expectRevert("wrong adapter router");
+        router.setAdapter(address(wrongAdapter), true);
+    }
+
+    function test_setAdapterDisableDoesNotReadBinding() public {
+        RevertingBindingAdapter removable = new RevertingBindingAdapter(address(router));
+        vm.prank(admin);
+        router.setAdapter(address(removable), true);
+        removable.setRevertBinding(true);
+
+        vm.prank(admin);
+        router.setAdapter(address(removable), false);
+        assertFalse(router.isAdapter(address(removable)));
+    }
+
     function test_setAcceptedToken() public {
-        address someToken = makeAddr("someToken");
+        address someToken = address(new MockUSDC());
         vm.expectEmit(true, true, true, true, address(router));
         emit AcceptedTokenSet(someToken, true);
         vm.prank(admin);
         router.setAcceptedToken(someToken, true);
         assertTrue(router.isAcceptedToken(someToken));
+        (bool enabled, uint256 minimum) = router.getTokenReputationConfig(someToken);
+        assertFalse(enabled);
+        assertEq(minimum, 0);
+    }
+
+    function test_setTokenReputationConfig() public {
+        MockUSDC token = new MockUSDC();
+        vm.prank(admin);
+        router.setAcceptedToken(address(token), true);
+
+        vm.expectEmit(true, true, true, true, address(router));
+        emit TokenReputationConfigured(address(token), true, 2e6);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(token), true, 2e6);
+
+        (bool enabled, uint256 minimum) = router.getTokenReputationConfig(address(token));
+        assertTrue(enabled);
+        assertEq(minimum, 2e6);
+    }
+
+    function test_setTokenReputationConfigRequiresAcceptedToken() public {
+        MockUSDC token = new MockUSDC();
+        vm.prank(admin);
+        vm.expectRevert("token not accepted");
+        router.setTokenReputationConfig(address(token), true, 1);
+    }
+
+    function test_setTokenReputationConfigRejectsZeroMinimumWhenEnabled() public {
+        vm.prank(admin);
+        vm.expectRevert("zero reputation minimum");
+        router.setTokenReputationConfig(address(usdc), true, 0);
+    }
+
+    function test_setTokenReputationConfigOnlyAdmin() public {
+        vm.prank(buyer);
+        vm.expectRevert("not admin");
+        router.setTokenReputationConfig(address(usdc), true, 1);
+    }
+
+    function test_disablingAcceptedTokenClearsReputationConfig() public {
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), false);
+        (bool enabled, uint256 minimum) = router.getTokenReputationConfig(address(usdc));
+        assertFalse(enabled);
+        assertEq(minimum, 0);
+
+        vm.prank(admin);
+        router.setAcceptedToken(address(usdc), true);
+        (enabled, minimum) = router.getTokenReputationConfig(address(usdc));
+        assertFalse(enabled);
+        assertEq(minimum, 0);
     }
 
     function test_setAcceptedTokenZeroReverts() public {
@@ -674,31 +1299,70 @@ contract PaymentRouterTest is Test {
         router.setAcceptedToken(address(0), true);
     }
 
-    function test_setServiceRegistry() public {
-        address newReg = makeAddr("newReg");
+    function test_setAcceptedTokenWithoutCodeReverts() public {
         vm.prank(admin);
-        router.setServiceRegistry(newReg);
-        assertEq(address(router.serviceRegistry()), newReg);
+        vm.expectRevert("token has no code");
+        router.setAcceptedToken(makeAddr("eoaToken"), true);
     }
 
-    function test_setServiceRegistry_zeroReverts() public {
+    function test_paymentEntryPointsRequireReputationConfiguration() public {
+        PaymentRouter freshImpl = new PaymentRouter();
+        PaymentRouter fresh = PaymentRouter(
+            address(
+                new ERC1967Proxy(
+                    address(freshImpl),
+                    abi.encodeCall(
+                        PaymentRouter.initialize,
+                        (
+                            address(identity),
+                            address(registry),
+                            address(serviceRegistry),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
+                    )
+                )
+            )
+        );
+
         vm.prank(admin);
-        vm.expectRevert("zero service registry");
-        router.setServiceRegistry(address(0));
+        vm.expectRevert("reputation not configured");
+        fresh.setAdapter(address(adapter), true);
+
+        vm.prank(admin);
+        vm.expectRevert("reputation not configured");
+        fresh.setAcceptedToken(address(usdc), true);
     }
 
-    function test_setServiceRegistry_onlyAdmin() public {
-        vm.prank(buyer);
-        vm.expectRevert("not admin");
-        router.setServiceRegistry(makeAddr("any"));
+    function test_setReputationStorageRejectsInvalidAddress() public {
+        vm.prank(admin);
+        vm.expectRevert("zero reputation storage");
+        router.setReputationStorage(address(0));
+
+        vm.prank(admin);
+        vm.expectRevert("reputation storage has no code");
+        router.setReputationStorage(makeAddr("eoaSink"));
+
+        UnconfiguredReputationSink unconfigured = new UnconfiguredReputationSink(address(router));
+        vm.prank(admin);
+        vm.expectRevert("reputation not configured");
+        router.setReputationStorage(address(unconfigured));
+
+        ToggleReputationSink wrongRouter = new ToggleReputationSink(makeAddr("otherRouter"));
+        vm.prank(admin);
+        vm.expectRevert("wrong payment router");
+        router.setReputationStorage(address(wrongRouter));
     }
 
     function test_commissionZeroBps() public {
         vm.prank(admin);
         router.setCommissionBps(0);
 
-        _settle(100e6, keccak256("ref-c0"));
+        uint256 paymentId = _settle(100e6, keccak256("ref-c0"));
         assertEq(usdc.balanceOf(provider), 100e6);
+        assertFalse(router.getPayment(paymentId).reputationEligible, "zero-fee payments are not reputation");
     }
 
     function test_setCommissionBps() public {
@@ -732,6 +1396,20 @@ contract PaymentRouterTest is Test {
         assertEq(stray.balanceOf(address(router)), 0);
     }
 
+    function test_rescueERC20SanctionedRecipientReverts() public {
+        MockUSDC stray = new MockUSDC();
+        stray.mint(address(router), 123e6);
+        address recipient = makeAddr("sanctionedRescueRecipient");
+        sanctions.setSanctioned(recipient, true);
+
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, recipient));
+        router.rescueERC20(stray, recipient, 123e6);
+
+        assertEq(stray.balanceOf(address(router)), 123e6);
+        assertEq(stray.balanceOf(recipient), 0);
+    }
+
     function test_rescueERC20_acceptedTokenReverts() public {
         // Accepted token rescue is forbidden — admin must temporarily de-list
         // first. This is the explicit defense-in-depth mentioned in the
@@ -750,6 +1428,8 @@ contract PaymentRouterTest is Test {
         assertEq(usdc.balanceOf(recipient), 50e6);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
     }
 
     function test_rescueERC20_zeroToReverts() public {
@@ -775,6 +1455,15 @@ contract PaymentRouterTest is Test {
         vm.prank(admin);
         router.setTreasury(newTreasury);
         assertEq(router.treasury(), newTreasury);
+    }
+
+    function test_setTreasurySanctionedRecipientReverts() public {
+        address newTreasury = makeAddr("sanctionedPaymentTreasury");
+        sanctions.setSanctioned(newTreasury, true);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, newTreasury));
+        router.setTreasury(newTreasury);
+        assertEq(router.treasury(), treasury);
     }
 
     function test_nonAdminCannotSetCommission() public {
@@ -817,6 +1506,12 @@ contract PaymentRouterTest is Test {
         assertEq(router.commissionBps(), 100);
     }
 
+    function test_transferAdminZeroReverts() public {
+        vm.prank(admin);
+        vm.expectRevert("zero admin");
+        router.transferAdmin(address(0));
+    }
+
     // ── Views ────────────────────────────────────────────────────────
 
     function test_quoteCommission() public view {
@@ -836,6 +1531,8 @@ contract PaymentRouterTest is Test {
         MockUSDC token2 = new MockUSDC();
         vm.prank(admin);
         router.setAcceptedToken(address(token2), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(token2), true, 75e6);
 
         token2.mint(buyer, 200e6);
 
@@ -850,6 +1547,32 @@ contract PaymentRouterTest is Test {
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId2);
         assertEq(rec.token, address(token2));
         assertEq(rec.amount, 80e6);
+        assertTrue(rec.reputationEligible);
         assertEq(token2.balanceOf(provider), 76e6);
+    }
+
+    function test_acceptedTokenCanSettleWithReputationDisabled() public {
+        MockUSDC token2 = new MockUSDC();
+        vm.prank(admin);
+        router.setAcceptedToken(address(token2), true);
+        token2.mint(buyer, 100e6);
+
+        vm.prank(buyer);
+        token2.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        uint256 paymentId = adapter.settle(
+            address(token2), 100e6, keccak256("rep-disabled"), buyerAgentId, buyer, providerAgentId, serviceId
+        );
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function invariant_settlementConservesFundsAndLeavesNoCustody() public view {
+        assertEq(usdc.balanceOf(address(router)), 0);
+        assertEq(usdc.balanceOf(address(adapter)), 0);
+        assertEq(
+            usdc.balanceOf(provider) + usdc.balanceOf(treasury),
+            invariantRecipientBalanceBefore + handler.totalSettled()
+        );
     }
 }

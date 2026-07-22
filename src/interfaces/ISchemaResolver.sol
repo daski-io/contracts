@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Attestation} from "./IEAS.sol";
+import {ISemver} from "./ISemver.sol";
 
 /// @notice EAS schema resolver interface. A resolver is a contract bound to
 ///         a schema at registration time; EAS calls `attest`/`revoke` on the
@@ -9,8 +10,10 @@ import {Attestation} from "./IEAS.sol";
 ///         and reverts the whole operation if the resolver returns false
 ///         (or itself reverts).
 ///
-/// Mirrors the canonical EAS ISchemaResolver (eas-contracts/contracts/resolver/ISchemaResolver.sol).
-interface ISchemaResolver {
+/// Mirrors the canonical EAS ISchemaResolver
+/// (eas-contracts/contracts/resolver/ISchemaResolver.sol), including its
+/// ISemver inheritance — `version()` is part of the resolver surface.
+interface ISchemaResolver is ISemver {
     /// @notice Whether the resolver accepts arbitrary ETH forwarded by the
     ///         attester. Daski's resolver does not — return false.
     function isPayable() external view returns (bool);
@@ -22,7 +25,7 @@ interface ISchemaResolver {
     function attest(Attestation calldata attestation) external payable returns (bool);
 
     /// @notice Multi-attest variant. Daski's resolver processes each entry
-    ///         via `onAttest` one-by-one; implementation just iterates.
+    ///         one-by-one; implementation just iterates.
     function multiAttest(Attestation[] calldata attestations, uint256[] calldata values) external payable returns (bool);
 
     /// @notice Called by EAS during a `revoke`.

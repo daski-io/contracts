@@ -9,10 +9,16 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
+import {MockReputationSink} from "./helpers/MockReputationSink.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 
 contract ApprovalAdapterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -20,6 +26,7 @@ contract ApprovalAdapterTest is Test {
     PaymentRouter router;
     ApprovalAdapter adapter;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -34,10 +41,14 @@ contract ApprovalAdapterTest is Test {
         usdc = new MockUSDC();
 
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
         AgentIndex aiImpl = new AgentIndex();
         agentIndex = AgentIndex(
             address(
-                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+                new ERC1967Proxy(
+                    address(aiImpl),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), admin))
+                )
             )
         );
 
@@ -47,7 +58,8 @@ contract ApprovalAdapterTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -58,7 +70,9 @@ contract ApprovalAdapterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -70,7 +84,15 @@ contract ApprovalAdapterTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(services), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(services),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -81,20 +103,26 @@ contract ApprovalAdapterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(aImpl),
-                    abi.encodeCall(ApprovalAdapter.initialize, (address(router), address(agentIndex), admin))
+                    abi.encodeCall(
+                        ApprovalAdapter.initialize, (address(router), address(agentIndex), address(sanctions), admin)
+                    )
                 )
             )
         );
 
+        MockReputationSink sink = new MockReputationSink(address(router));
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; payee resolution
-        // needs one (or a serviceWallet).
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -126,6 +154,30 @@ contract ApprovalAdapterTest is Test {
         assertEq(rec.serviceId, serviceId);
     }
 
+    function test_settleSanctionedPayerRevertsBeforeTransfer() public {
+        sanctions.setSanctioned(buyer, true);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        adapter.settle(address(usdc), 100e6, keccak256("sanctioned-approval"), providerAgentId, serviceId);
+
+        assertEq(usdc.balanceOf(buyer), 1000e6);
+        assertEq(router.nextPaymentId(), 1);
+    }
+
+    function test_settlePreviouslySanctionedPayerSucceedsAfterRemoval() public {
+        sanctions.setSanctioned(buyer, true);
+        sanctions.setSanctioned(buyer, false);
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, keccak256("removed-sanction"), providerAgentId, serviceId);
+        assertEq(paymentId, 1);
+    }
+
     function test_settleInsufficientAllowanceReverts() public {
         vm.prank(buyer);
         usdc.approve(address(adapter), 50e6);
@@ -155,5 +207,22 @@ contract ApprovalAdapterTest is Test {
         vm.prank(buyer);
         vm.expectRevert("buyer has no agent");
         adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId, serviceId);
+    }
+
+    function test_settleFeeOnTransferTokenRevertsAtomically() public {
+        FeeOnTransferToken feeToken = new FeeOnTransferToken();
+        feeToken.mint(buyer, 100e6);
+        vm.prank(admin);
+        router.setAcceptedToken(address(feeToken), true);
+
+        vm.prank(buyer);
+        feeToken.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("unexpected token amount");
+        adapter.settle(address(feeToken), 100e6, keccak256("a-fee"), providerAgentId, serviceId);
+
+        assertEq(feeToken.balanceOf(buyer), 100e6);
+        assertEq(feeToken.balanceOf(address(router)), 0);
+        assertEq(router.nextPaymentId(), 1);
     }
 }

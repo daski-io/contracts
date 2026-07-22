@@ -4,8 +4,10 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
+import {MockSanctionsList, EmptySanctionsList, MalformedSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {AgentIndex} from "../src/AgentIndex.sol";
 import {IAgentIndex} from "../src/interfaces/IAgentIndex.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
 
 /// @dev Ports the retired IdentityRegistry.registerBySig coverage onto
@@ -14,6 +16,7 @@ import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
 contract AgentIndexTest is Test {
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address relayer = makeAddr("relayer");
@@ -26,14 +29,30 @@ contract AgentIndexTest is Test {
     function setUp() public {
         wallet = vm.addr(WALLET_KEY);
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
         AgentIndex impl = new AgentIndex();
         agentIndex = AgentIndex(
-            address(new ERC1967Proxy(address(impl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin))))
+            address(
+                new ERC1967Proxy(
+                    address(impl), abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), admin))
+                )
+            )
         );
     }
 
     function _sig(uint256 deadline) internal view returns (bytes memory) {
         return AgentIndexSigner.signRegister(vm, WALLET_KEY, agentIndex, URI, deadline);
+    }
+
+    function _assertResolved(address who, uint256 expected) internal view {
+        (uint256 agentId, bool found) = agentIndex.resolve(who);
+        assertTrue(found);
+        assertEq(agentId, expected);
+    }
+
+    function _assertNotResolved(address who) internal view {
+        (, bool found) = agentIndex.resolve(who);
+        assertFalse(found);
     }
 
     // ── registerWithSig ──────────────────────────────────────────────
@@ -49,11 +68,33 @@ contract AgentIndexTest is Test {
         // registration file set; binding resolves live.
         assertEq(identity.ownerOf(agentId), wallet, "NFT lands on the wallet, not the relayer");
         assertEq(identity.tokenURI(agentId), URI);
-        assertEq(agentIndex.resolve(wallet), agentId);
+        _assertResolved(wallet, agentId);
         assertEq(agentIndex.registrationNonce(wallet), 1, "nonce bumped");
-        // Canonical semantics: no agentWallet auto-set — ownership is the
-        // control proof.
+        // The canonical wallet is cleared when AgentIndex transfers the NFT.
         assertEq(identity.getAgentWallet(agentId), address(0));
+    }
+
+    function test_registerWithSigSanctionedSignerReverts() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sig(deadline);
+        sanctions.setSanctioned(wallet, true);
+
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, wallet));
+        agentIndex.registerWithSig(URI, wallet, deadline, sig);
+
+        assertEq(agentIndex.registrationNonce(wallet), 0);
+        _assertNotResolved(wallet);
+    }
+
+    function test_registerWithSigOracleFailureRevertsClosed() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sig(deadline);
+        sanctions.setRevertChecks(true);
+
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, address(sanctions)));
+        agentIndex.registerWithSig(URI, wallet, deadline, sig);
     }
 
     function test_registerWithSig_expiredDeadlineReverts() public {
@@ -88,8 +129,8 @@ contract AgentIndexTest is Test {
         // Even after the wallet transfers the agent away (binding stale),
         // the consumed consent cannot be replayed — the nonce moved on.
         vm.prank(wallet);
-        identity.transferFrom(wallet, makeAddr("elsewhere"), 1);
-        assertEq(agentIndex.resolve(wallet), 0, "binding stale");
+        identity.transferFrom(wallet, makeAddr("elsewhere"), 0);
+        _assertNotResolved(wallet);
 
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
@@ -122,7 +163,7 @@ contract AgentIndexTest is Test {
         vm.prank(relayer);
         uint256 second = agentIndex.registerWithSig(URI, wallet, deadline, sig2);
         assertGt(second, first);
-        assertEq(agentIndex.resolve(wallet), second);
+        _assertResolved(wallet, second);
     }
 
     // ── claim / unbind / resolve ─────────────────────────────────────
@@ -131,11 +172,11 @@ contract AgentIndexTest is Test {
         // Bring-your-own canonical agent: registered directly, then claimed.
         vm.prank(wallet);
         uint256 agentId = identity.register(URI);
-        assertEq(agentIndex.resolve(wallet), 0, "not bound until claimed");
+        _assertNotResolved(wallet);
 
         vm.prank(wallet);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(wallet), agentId);
+        _assertResolved(wallet, agentId);
     }
 
     function test_claim_byVerifiedAgentWallet() public {
@@ -148,7 +189,20 @@ contract AgentIndexTest is Test {
 
         vm.prank(payWallet);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(payWallet), agentId);
+        _assertResolved(payWallet, agentId);
+    }
+
+    function test_claimSanctionedAgentWalletReverts() public {
+        address owner = makeAddr("sanctionsOwner");
+        address payWallet = makeAddr("sanctionsPayWallet");
+        vm.prank(owner);
+        uint256 agentId = identity.register(URI);
+        identity.forceSetAgentWallet(agentId, payWallet);
+        sanctions.setSanctioned(payWallet, true);
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, payWallet));
+        agentIndex.claim(agentId);
     }
 
     function test_claim_unauthorizedReverts() public {
@@ -174,7 +228,7 @@ contract AgentIndexTest is Test {
 
         vm.prank(wallet);
         agentIndex.unbind();
-        assertEq(agentIndex.resolve(wallet), 0);
+        _assertNotResolved(wallet);
 
         vm.prank(wallet);
         vm.expectRevert("nothing bound");
@@ -192,10 +246,10 @@ contract AgentIndexTest is Test {
         identity.transferFrom(wallet, newOwner, agentId);
 
         // Old wallet no longer resolves; new owner claims and does.
-        assertEq(agentIndex.resolve(wallet), 0, "stale binding self-heals to zero");
+        _assertNotResolved(wallet);
         vm.prank(newOwner);
         agentIndex.claim(agentId);
-        assertEq(agentIndex.resolve(newOwner), agentId);
+        _assertResolved(newOwner, agentId);
     }
 
     function test_resolve_viaAgentWalletBranch() public {
@@ -213,7 +267,7 @@ contract AgentIndexTest is Test {
         identity.transferFrom(wallet, newOwner, agentId);
         identity.forceSetAgentWallet(agentId, wallet);
 
-        assertEq(agentIndex.resolve(wallet), agentId, "agentWallet branch keeps the binding live");
+        _assertResolved(wallet, agentId);
     }
 
     // ── misc ─────────────────────────────────────────────────────────
@@ -228,6 +282,15 @@ contract AgentIndexTest is Test {
         other.safeTransferFrom(wallet, address(agentIndex), strayId);
     }
 
+    function test_onERC721Received_rejectsStrayCanonicalToken() public {
+        vm.prank(wallet);
+        uint256 strayId = identity.register("stray");
+
+        vm.prank(wallet);
+        vm.expectRevert("unexpected transfer");
+        identity.safeTransferFrom(wallet, address(agentIndex), strayId);
+    }
+
     function test_getIdentityRegistry() public view {
         assertEq(agentIndex.getIdentityRegistry(), address(identity));
     }
@@ -235,14 +298,41 @@ contract AgentIndexTest is Test {
     function test_initialize_zeroIdentityReverts() public {
         AgentIndex impl = new AgentIndex();
         vm.expectRevert("zero identity");
-        new ERC1967Proxy(address(impl), abi.encodeCall(AgentIndex.initialize, (address(0), admin)));
+        new ERC1967Proxy(address(impl), abi.encodeCall(AgentIndex.initialize, (address(0), address(sanctions), admin)));
+    }
+
+    function test_initializeRejectsOracleWithoutCode() public {
+        address missingOracle = makeAddr("missingOracle");
+        AgentIndex impl = new AgentIndex();
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, missingOracle));
+        new ERC1967Proxy(
+            address(impl), abi.encodeCall(AgentIndex.initialize, (address(identity), missingOracle, admin))
+        );
+    }
+
+    function test_initializeRejectsEmptyOracleResponse() public {
+        EmptySanctionsList empty = new EmptySanctionsList();
+        AgentIndex impl = new AgentIndex();
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, address(empty)));
+        new ERC1967Proxy(
+            address(impl), abi.encodeCall(AgentIndex.initialize, (address(identity), address(empty), admin))
+        );
+    }
+
+    function test_initializeRejectsMalformedOracleResponse() public {
+        MalformedSanctionsList malformed = new MalformedSanctionsList();
+        AgentIndex impl = new AgentIndex();
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionsOracleUnavailable.selector, address(malformed)));
+        new ERC1967Proxy(
+            address(impl), abi.encodeCall(AgentIndex.initialize, (address(identity), address(malformed), admin))
+        );
     }
 
     function test_registeredEventEmitted() public {
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory sig = _sig(deadline);
         vm.expectEmit(true, true, false, true, address(agentIndex));
-        emit IAgentIndex.AgentRegistered(1, wallet, URI);
+        emit IAgentIndex.AgentRegistered(0, wallet, URI);
         vm.prank(relayer);
         agentIndex.registerWithSig(URI, wallet, deadline, sig);
     }

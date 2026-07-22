@@ -33,3 +33,24 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      - name: Run Forge coverage
+        run: forge coverage --ir-minimum --exclude-tests --no-match-coverage 'script/' --report summary
+
+  security:
+    name: Slither analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.2
+        with:
+          fail-on: high
+          slither-version: 0.11.5
+          slither-args: --filter-paths "lib/|test/|script/"

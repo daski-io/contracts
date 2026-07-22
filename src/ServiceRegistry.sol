@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
@@ -34,17 +34,18 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///
 /// Auth model — every mutating call on an existing service requires the
 /// caller to be authorized over the provider's ERC-8004 NFT, matching the
-/// surface used by IdentityRegistry / ReputationRegistry / ValidationRegistry:
+/// surface used by IdentityRegistry / ReputationRegistry / DaskiValidationRegistry:
 ///   1. NFT owner (ownerOf), OR
 ///   2. operator approved via setApprovalForAll, OR
 ///   3. per-token approved spender (getApproved).
 contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     // ── Storage ──────────────────────────────────────────────────────
 
-    IERC721 public identity;
+    ICanonicalIdentity public identity;
     IProviderRegistry public providerRegistry;
 
     mapping(bytes32 => Service) private _services;
+    mapping(bytes32 => bool) private _serviceExists;
     mapping(uint256 => bytes32[]) private _servicesByProvider;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -52,11 +53,14 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         _disableInitializers();
     }
 
-    function initialize(address _identity, address _providerRegistry, address _admin) external initializer {
+    function initialize(address _identity, address _providerRegistry, address _sanctionsOracle, address _admin)
+        external
+        initializer
+    {
         require(_identity != address(0), "zero identity");
         require(_providerRegistry != address(0), "zero provider registry");
-        __Admin2Step_init(_admin);
-        identity = IERC721(_identity);
+        __Admin2Step_init(_admin, _sanctionsOracle);
+        identity = ICanonicalIdentity(_identity);
         providerRegistry = IProviderRegistry(_providerRegistry);
     }
 
@@ -71,10 +75,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         address serviceWallet
     ) external returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(providerAgentId, msg.sender);
 
-        // Provider must be registered AND active. Inactive providers cannot
-        // add new services; existing services on an inactive provider remain
-        // queryable via getService for historical lookups.
+        // Inactive providers cannot add services; existing services remain queryable.
         require(providerRegistry.isRegistered(providerAgentId), "provider not registered");
         require(providerRegistry.getProvider(providerAgentId).isActive, "provider not active");
 
@@ -84,11 +87,12 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         require(versionBytes.length >= 1 && versionBytes.length <= 32, "bad version length");
 
         serviceId = _computeServiceId(providerAgentId, serviceSlug, version);
+        _requireNotSanctioned(serviceWallet);
         // Collision guard. If a service with the same (provider, slug,
         // version) already exists, registerService MUST revert — the same
         // (slug, version) pair represents the same product offering and
         // duplicating it would create ambiguity in payment routing.
-        require(_services[serviceId].providerAgentId == 0, "service already registered");
+        require(!_serviceExists[serviceId], "service already registered");
 
         _services[serviceId] = Service({
             providerAgentId: providerAgentId,
@@ -96,10 +100,14 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
             serviceSlug: serviceSlug,
             version: version,
             serviceURI: serviceURI,
-            serviceWallet: serviceWallet,
+            serviceWallet: address(0),
+            serviceWalletOwner: address(0),
+            serviceWalletAgentWallet: address(0),
             createdAt: uint64(block.timestamp),
             active: true
         });
+        _setServiceWalletAuthorization(_services[serviceId], serviceWallet);
+        _serviceExists[serviceId] = true;
 
         _servicesByProvider[providerAgentId].push(serviceId);
 
@@ -109,8 +117,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function updateServiceURI(bytes32 serviceId, string calldata newURI) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
     }
@@ -119,11 +128,14 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @dev Passing `address(0)` is an explicit "clear and inherit from the
     ///      provider's ERC-8004 agentWallet at settle". Most providers will
     ///      register with serviceWallet = address(0) and never call this.
+    ///      Non-zero overrides are valid only while the authorizing owner and
+    ///      agentWallet both remain current.
     function setServiceWallet(bytes32 serviceId, address newWallet) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        svc.serviceWallet = newWallet;
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _setServiceWalletAuthorization(svc, newWallet);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
 
@@ -133,8 +145,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     ///      _servicesByProvider is append-only; deactivate does not remove.
     function setActive(bytes32 serviceId, bool active) external {
         Service storage svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
+        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
     }
@@ -144,24 +157,37 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function getService(bytes32 serviceId) external view returns (Service memory) {
         Service memory svc = _services[serviceId];
-        require(svc.providerAgentId != 0, "service not found");
+        require(_serviceExists[serviceId], "service not found");
         return svc;
+    }
+
+    /// @inheritdoc IServiceRegistry
+    function resolveSettlement(bytes32 serviceId)
+        external
+        view
+        returns (uint256 providerAgentId, bool active, address providerOwner, address providerWallet, address payee)
+    {
+        Service storage svc = _services[serviceId];
+        require(_serviceExists[serviceId], "service not found");
+
+        providerAgentId = svc.providerAgentId;
+        active = svc.active;
+        providerOwner = identity.ownerOf(providerAgentId);
+        providerWallet = identity.getAgentWallet(providerAgentId);
+        bool overrideCurrent = svc.serviceWallet != address(0) && svc.serviceWalletOwner == providerOwner
+            && svc.serviceWalletAgentWallet != address(0) && svc.serviceWalletAgentWallet == providerWallet;
+        payee = overrideCurrent ? svc.serviceWallet : providerWallet;
     }
 
     /// @inheritdoc IServiceRegistry
     function isActive(bytes32 serviceId) external view returns (bool) {
         Service storage svc = _services[serviceId];
-        return svc.providerAgentId != 0 && svc.active;
+        return _serviceExists[serviceId] && svc.active;
     }
 
     /// @inheritdoc IServiceRegistry
     function exists(bytes32 serviceId) external view returns (bool) {
-        return _services[serviceId].providerAgentId != 0;
-    }
-
-    /// @inheritdoc IServiceRegistry
-    function getServicesByProvider(uint256 providerAgentId) external view returns (bytes32[] memory) {
-        return _servicesByProvider[providerAgentId];
+        return _serviceExists[serviceId];
     }
 
     /// @inheritdoc IServiceRegistry
@@ -193,6 +219,31 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         returns (bytes32)
     {
         return keccak256(abi.encode(providerAgentId, serviceSlug, version));
+    }
+
+    function _setServiceWalletAuthorization(Service storage svc, address newWallet) internal {
+        if (newWallet == address(0)) {
+            svc.serviceWallet = address(0);
+            svc.serviceWalletOwner = address(0);
+            svc.serviceWalletAgentWallet = address(0);
+            return;
+        }
+
+        _requireNotSanctioned(newWallet);
+        address agentWallet = identity.getAgentWallet(svc.providerAgentId);
+        require(agentWallet != address(0), "no agent wallet");
+        address owner = identity.ownerOf(svc.providerAgentId);
+        _requireNotSanctioned(owner);
+        _requireNotSanctioned(agentWallet);
+        svc.serviceWallet = newWallet;
+        svc.serviceWalletOwner = owner;
+        svc.serviceWalletAgentWallet = agentWallet;
+    }
+
+    function _requireProviderParticipantsAllowed(uint256 providerAgentId, address caller) private view {
+        _requireNotSanctioned(caller);
+        _requireNotSanctioned(identity.ownerOf(providerAgentId));
+        _requireNotSanctioned(identity.getAgentWallet(providerAgentId));
     }
 
     uint256[50] private __gap;

@@ -5,13 +5,17 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 import {IProviderRegistry} from "../src/interfaces/IProviderRegistry.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 
 contract ProviderRegistryTest is Test {
     MockCanonicalIdentityRegistry identity;
     ProviderRegistry registry;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -27,6 +31,7 @@ contract ProviderRegistryTest is Test {
 
         // Stand-in for the canonical ERC-8004 IdentityRegistry singleton.
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
 
         ProviderRegistry regImpl = new ProviderRegistry();
         registry = ProviderRegistry(
@@ -34,7 +39,8 @@ contract ProviderRegistryTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, LISTING_FEE, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, LISTING_FEE, address(sanctions), admin)
                     )
                 )
             )
@@ -71,6 +77,32 @@ contract ProviderRegistryTest is Test {
 
         assertEq(usdc.balanceOf(treasury) - treasuryBefore, LISTING_FEE);
         assertTrue(registry.isRegistered(agentId));
+    }
+
+    function test_registerSanctionedOwnerRevertsBeforeFeeTransfer() public {
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        sanctions.setSanctioned(provider, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        registry.register(agentId);
+
+        assertFalse(registry.isRegistered(agentId));
+        assertEq(usdc.balanceOf(treasury), 0);
+    }
+
+    function test_registerRechecksSanctionedTreasury() public {
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        sanctions.setSanctioned(treasury, true);
+
+        vm.prank(provider);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, treasury));
+        registry.register(agentId);
+
+        assertFalse(registry.isRegistered(agentId));
+        assertEq(usdc.balanceOf(treasury), 0);
     }
 
     function test_registerEmitsEvent() public {
@@ -141,10 +173,47 @@ contract ProviderRegistryTest is Test {
         registry.register(agentId);
     }
 
+    function test_registerRejectsFeeOnTransferListingToken() public {
+        FeeOnTransferToken feeToken = new FeeOnTransferToken();
+        ProviderRegistry feeRegistryImpl = new ProviderRegistry();
+        ProviderRegistry feeRegistry = ProviderRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(feeRegistryImpl),
+                    abi.encodeCall(
+                        ProviderRegistry.initialize,
+                        (address(identity), address(feeToken), treasury, LISTING_FEE, address(sanctions), admin)
+                    )
+                )
+            )
+        );
+
+        vm.prank(provider);
+        uint256 agentId = identity.register(AGENT_URI);
+        feeToken.mint(provider, LISTING_FEE);
+        vm.prank(provider);
+        feeToken.approve(address(feeRegistry), LISTING_FEE);
+
+        vm.prank(provider);
+        vm.expectRevert("unexpected listing fee");
+        feeRegistry.register(agentId);
+        assertFalse(feeRegistry.isRegistered(agentId));
+        assertEq(feeToken.balanceOf(treasury), 0);
+    }
+
     function test_setTreasuryZeroReverts() public {
         vm.prank(admin);
         vm.expectRevert("zero treasury");
         registry.setTreasury(address(0));
+    }
+
+    function test_setTreasurySanctionedRecipientReverts() public {
+        address newTreasury = makeAddr("sanctionedTreasury");
+        sanctions.setSanctioned(newTreasury, true);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, newTreasury));
+        registry.setTreasury(newTreasury);
+        assertEq(registry.treasury(), treasury);
     }
 
     function test_setActive() public {
@@ -171,6 +240,19 @@ contract ProviderRegistryTest is Test {
         vm.prank(operator);
         registry.setActive(agentId, false);
         assertFalse(registry.getProvider(agentId).isActive);
+    }
+
+    function test_setActiveOperatorCannotBypassSanctionedOwner() public {
+        uint256 agentId = _registerAsProvider(provider);
+        vm.prank(provider);
+        identity.setApprovalForAll(operator, true);
+        sanctions.setSanctioned(provider, true);
+
+        vm.prank(operator);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, provider));
+        registry.setActive(agentId, false);
+
+        assertTrue(registry.getProvider(agentId).isActive);
     }
 
     function test_setActive_byPerTokenApprovedSpender() public {
@@ -273,5 +355,11 @@ contract ProviderRegistryTest is Test {
         // Offset past end → empty.
         uint256[] memory past = registry.getProviderIdsPaginated(5, 1);
         assertEq(past.length, 0);
+
+        // Sentinel-size limit with a nonzero offset clamps to the tail
+        // instead of overflowing offset+limit.
+        uint256[] memory sentinel = registry.getProviderIdsPaginated(1, type(uint256).max);
+        assertEq(sentinel.length, 4);
+        assertEq(sentinel[0], ids[1]);
     }
 }

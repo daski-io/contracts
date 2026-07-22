@@ -40,14 +40,6 @@ struct AttestationRequest {
     AttestationRequestData data;
 }
 
-struct DelegatedAttestationRequest {
-    bytes32 schema;
-    AttestationRequestData data;
-    Signature signature;
-    address attester;
-    uint64 deadline;
-}
-
 struct RevocationRequestData {
     bytes32 uid;
     uint256 value;
@@ -58,28 +50,12 @@ struct RevocationRequest {
     RevocationRequestData data;
 }
 
-struct DelegatedRevocationRequest {
-    bytes32 schema;
-    RevocationRequestData data;
-    Signature signature;
-    address revoker;
-    uint64 deadline;
-}
-
-struct Signature {
-    uint8 v;
-    bytes32 r;
-    bytes32 s;
-}
-
 interface IEAS {
+    function getSchemaRegistry() external view returns (ISchemaRegistry);
+
     function attest(AttestationRequest calldata request) external payable returns (bytes32);
 
-    function attestByDelegation(DelegatedAttestationRequest calldata request) external payable returns (bytes32);
-
     function revoke(RevocationRequest calldata request) external payable;
-
-    function revokeByDelegation(DelegatedRevocationRequest calldata request) external payable;
 
     function getAttestation(bytes32 uid) external view returns (Attestation memory);
 

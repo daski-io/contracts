@@ -26,11 +26,10 @@ interface IAgentIndex {
     function unbind() external;
 
     /// @notice Resolve a wallet to its bound agentId, re-verified against the
-    ///         canonical registry: returns 0 unless `wallet` is currently the
-    ///         agent's ERC-721 owner or its verified agentWallet. A stale
-    ///         binding (agent transferred away / wallet rotated out) resolves
-    ///         to 0 instead of misattributing.
-    function resolve(address wallet) external view returns (uint256 agentId);
+    ///         canonical registry. `found` is false when no live binding
+    ///         exists. The explicit flag is required because agentId 0 is a
+    ///         valid canonical ERC-8004 identifier.
+    function resolve(address wallet) external view returns (uint256 agentId, bool found);
 
     /// @notice Next registerWithSig nonce for `wallet`; signers must embed it
     ///         in the EIP-712 message.

@@ -4,8 +4,9 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC3009} from "../../src/interfaces/IERC3009.sol";
 
-/// @notice Test USDC with both EIP-3009 (`transferWithAuthorization`) and
+/// @notice Test-only USDC with both EIP-3009 (`transferWithAuthorization`) and
 /// EIP-2612 (`permit`) so adapters can exercise the full production signing
 /// paths. Domain is name="USDC" version="2" — signers must use the same
 /// values when building the typed-data hash.
@@ -17,7 +18,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 /// constructor (`_TRANSFER_DOMAIN_SEPARATOR`). The two authorization types use
 /// independent type hashes and each carries its own full domain separator, so
 /// they co-exist safely as two separate typed-data namespaces.
-contract MockUSDC is ERC20, ERC20Permit {
+contract MockUSDC is ERC20, ERC20Permit, IERC3009 {
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
@@ -76,7 +77,7 @@ contract MockUSDC is ERC20, ERC20Permit {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
+    ) external override {
         require(block.timestamp > validAfter, "auth not yet valid");
         require(block.timestamp < validBefore, "auth expired");
         require(!_authorizationStates[from][nonce], "auth already used");

@@ -9,13 +9,19 @@ import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
 import {PaymentRouter} from "../src/PaymentRouter.sol";
 import {X402Adapter} from "../src/adapters/X402Adapter.sol";
-import {MockUSDC} from "../src/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {FeeOnTransferUSDC} from "./mocks/FeeOnTransferUSDC.sol";
 import {IPaymentRouter} from "../src/interfaces/IPaymentRouter.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
+import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {EIP3009Signer} from "./helpers/EIP3009Signer.sol";
 import {AgentIndexSigner} from "./helpers/AgentIndexSigner.sol";
+import {MockReputationSink} from "./helpers/MockReputationSink.sol";
+import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
 
 contract X402AdapterTest is Test {
+    uint256 constant REPUTATION_MINIMUM = 250_000;
+
     MockCanonicalIdentityRegistry identity;
     AgentIndex agentIndex;
     ProviderRegistry registry;
@@ -23,6 +29,7 @@ contract X402AdapterTest is Test {
     PaymentRouter router;
     X402Adapter adapter;
     MockUSDC usdc;
+    MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -42,10 +49,14 @@ contract X402AdapterTest is Test {
         // Stand-in for the canonical ERC-8004 IdentityRegistry singleton,
         // plus the Daski AgentIndex the adapters resolve buyers through.
         identity = new MockCanonicalIdentityRegistry();
+        sanctions = new MockSanctionsList();
         AgentIndex aiImpl = new AgentIndex();
         agentIndex = AgentIndex(
             address(
-                new ERC1967Proxy(address(aiImpl), abi.encodeCall(AgentIndex.initialize, (address(identity), admin)))
+                new ERC1967Proxy(
+                    address(aiImpl),
+                    abi.encodeCall(AgentIndex.initialize, (address(identity), address(sanctions), admin))
+                )
             )
         );
 
@@ -55,7 +66,8 @@ contract X402AdapterTest is Test {
                 new ERC1967Proxy(
                     address(regImpl),
                     abi.encodeCall(
-                        ProviderRegistry.initialize, (address(identity), address(usdc), treasury, 1_000_000, admin)
+                        ProviderRegistry.initialize,
+                        (address(identity), address(usdc), treasury, 1_000_000, address(sanctions), admin)
                     )
                 )
             )
@@ -66,7 +78,9 @@ contract X402AdapterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(sregImpl),
-                    abi.encodeCall(ServiceRegistry.initialize, (address(identity), address(registry), admin))
+                    abi.encodeCall(
+                        ServiceRegistry.initialize, (address(identity), address(registry), address(sanctions), admin)
+                    )
                 )
             )
         );
@@ -78,7 +92,15 @@ contract X402AdapterTest is Test {
                     address(routerImpl),
                     abi.encodeCall(
                         PaymentRouter.initialize,
-                        (address(identity), address(registry), address(services), treasury, 500, admin)
+                        (
+                            address(identity),
+                            address(registry),
+                            address(services),
+                            treasury,
+                            500,
+                            address(sanctions),
+                            admin
+                        )
                     )
                 )
             )
@@ -89,20 +111,26 @@ contract X402AdapterTest is Test {
             address(
                 new ERC1967Proxy(
                     address(aImpl),
-                    abi.encodeCall(X402Adapter.initialize, (address(router), address(agentIndex), admin))
+                    abi.encodeCall(
+                        X402Adapter.initialize, (address(router), address(agentIndex), address(sanctions), admin)
+                    )
                 )
             )
         );
 
+        MockReputationSink sink = new MockReputationSink(address(router));
+        vm.prank(admin);
+        router.setReputationStorage(address(sink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
+        vm.prank(admin);
+        router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
 
         vm.prank(provider);
         providerAgentId = identity.register("https://provider.example.com/agent.json");
-        // Canonical registries never auto-set agentWallet; without one (or a
-        // serviceWallet) payee resolution rejects at settle.
+        // Keep the provider wallet explicit in this fixture.
         identity.forceSetAgentWallet(providerAgentId, provider);
         usdc.mint(provider, 1_000_000);
         vm.startPrank(provider);
@@ -142,6 +170,17 @@ contract X402AdapterTest is Test {
         );
     }
 
+    function _assertResolved(address who, uint256 expected) internal view {
+        (uint256 agentId, bool found) = agentIndex.resolve(who);
+        assertTrue(found);
+        assertEq(agentId, expected);
+    }
+
+    function _assertNotResolved(address who) internal view {
+        (, bool found) = agentIndex.resolve(who);
+        assertFalse(found);
+    }
+
     function test_settleHappyPath() public {
         bytes32 ref = keccak256("ref-1");
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
@@ -159,6 +198,20 @@ contract X402AdapterTest is Test {
         assertEq(rec.serviceId, serviceId);
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
+    }
+
+    function test_settleSanctionedSignerRevertsBeforeAuthorization() public {
+        bytes32 ref = keccak256("sanctioned-x402");
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
+        sanctions.setSanctioned(buyer, true);
+
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
+
+        assertFalse(usdc.authorizationState(buyer, auth.nonce));
+        assertEq(usdc.balanceOf(buyer), 1000e6);
+        assertEq(router.nextPaymentId(), 1);
     }
 
     function test_settleBadSignatureReverts() public {
@@ -205,11 +258,11 @@ contract X402AdapterTest is Test {
 
     function test_settleBuyerNoAgentReverts() public {
         // Buyer moves the agent NFT away — the AgentIndex binding goes stale
-        // and resolve() returns 0, so settlement rejects rather than
+        // and resolve() returns found=false, so settlement rejects rather than
         // attributing the payment to an agent the wallet no longer controls.
         vm.prank(buyer);
         identity.transferFrom(buyer, makeAddr("elsewhere"), buyerAgentId);
-        assertEq(agentIndex.resolve(buyer), 0, "binding stale after transfer");
+        _assertNotResolved(buyer);
 
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId, serviceId);
         vm.prank(relayer);
@@ -235,6 +288,29 @@ contract X402AdapterTest is Test {
         vm.prank(relayer);
         vm.expectRevert("token not accepted");
         adapter.settle(address(other), 100e6, ref, providerAgentId, serviceId, auth);
+    }
+
+    function test_settleFeeOnTransferTokenRevertsAtomically() public {
+        FeeOnTransferUSDC feeToken = new FeeOnTransferUSDC();
+        feeToken.mint(buyer, 100e6);
+        vm.prank(admin);
+        router.setAcceptedToken(address(feeToken), true);
+
+        bytes32 ref = keccak256("ref-fee");
+        bytes32 nonce = keccak256(abi.encode(ref, providerAgentId, serviceId));
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
+            vm, BUYER_KEY, address(feeToken), buyer, address(router), 100e6, 0, block.timestamp + 1 hours, nonce
+        );
+
+        vm.prank(relayer);
+        vm.expectRevert("unexpected token amount");
+        adapter.settle(address(feeToken), 100e6, ref, providerAgentId, serviceId, auth);
+
+        assertEq(feeToken.balanceOf(buyer), 100e6);
+        assertEq(feeToken.balanceOf(address(router)), 0);
+        assertFalse(feeToken.authorizationState(buyer, nonce));
+        assertFalse(router.paymentKeyUsed(router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, ref)));
+        assertEq(router.nextPaymentId(), 1);
     }
 
     // ── Auth binding to (serviceRef, providerAgentId, serviceId) ─────────
@@ -317,7 +393,7 @@ contract X402AdapterTest is Test {
         usdc.mint(freshBuyer, 100e6);
 
         // No agent yet for freshBuyer.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "precondition: not registered");
+        _assertNotResolved(freshBuyer);
 
         uint256 deadline = block.timestamp + 1 hours;
         bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://fresh", 0, deadline);
@@ -335,7 +411,7 @@ contract X402AdapterTest is Test {
         // the index binding resolves live.
         assertGt(newBuyerAgentId, 0, "buyer registered");
         assertEq(identity.ownerOf(newBuyerAgentId), freshBuyer);
-        assertEq(agentIndex.resolve(freshBuyer), newBuyerAgentId);
+        _assertResolved(freshBuyer, newBuyerAgentId);
 
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, newBuyerAgentId);
@@ -343,8 +419,30 @@ contract X402AdapterTest is Test {
         assertEq(rec.serviceId, serviceId);
     }
 
+    function test_settleWithRegistrationSanctionedSignerDoesNotRegisterOrTransfer() public {
+        address freshBuyer = vm.addr(FRESH_BUYER_KEY);
+        usdc.mint(freshBuyer, 100e6);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://blocked", 0, deadline);
+        bytes32 ref = keccak256("sanctioned-registration");
+        IX402Adapter.EIP3009Auth memory auth =
+            _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId, serviceId);
+        sanctions.setSanctioned(freshBuyer, true);
+
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, freshBuyer));
+        adapter.settleWithRegistration(
+            address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://blocked", deadline, regSig
+        );
+
+        _assertNotResolved(freshBuyer);
+        assertEq(agentIndex.registrationNonce(freshBuyer), 0);
+        assertFalse(usdc.authorizationState(freshBuyer, auth.nonce));
+        assertEq(usdc.balanceOf(freshBuyer), 100e6);
+    }
+
     function test_settleWithRegistration_alreadyRegisteredSkipsRegistration() public {
-        // Existing buyer (from setUp) is already registered with agentId=2.
+        // Existing buyer (from setUp) is already registered.
         // The registration sig + agentURI args should be ignored and the
         // original agentId reused.
         uint256 deadline = block.timestamp + 1 hours;
@@ -381,7 +479,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: nothing moved.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "no agent minted");
+        _assertNotResolved(freshBuyer);
         assertEq(usdc.balanceOf(freshBuyer), freshBuyerUsdcBefore, "no USDC moved");
     }
 
@@ -405,7 +503,7 @@ contract X402AdapterTest is Test {
         );
 
         // Atomicity: registration is rolled back along with the failed transfer.
-        assertEq(agentIndex.resolve(freshBuyer), 0, "registration rolled back");
+        _assertNotResolved(freshBuyer);
         assertEq(agentIndex.registrationNonce(freshBuyer), 0, "nonce rolled back");
     }
 }
