@@ -146,8 +146,11 @@ router (v0.6.0+) is retired through a governance batch instead.
 The previous (pre-canonical-migration) stack at PaymentRouter
 `0x78f9b15F…459d8f` is orphaned and **quiesced (2026-07-22)**: USDC
 disabled, all three adapters disabled, zero balance, event history scanned
-exhaustive. Its legacy Identity/Reputation registries remain orphaned —
-historical record in the deploy-testnet repo's deployment records.
+exhaustive. The seven earlier May-2026 iteration stacks (routers recorded in
+this repo's `deployments/base-sepolia.json` history, all of which accepted
+real Circle USDC) were swept and quiesced the same day, the same way. Legacy
+Identity/Reputation registries remain orphaned — historical record in the
+deploy-testnet repo's deployment records.
 
 ### Base mainnet
 Not yet deployed. Pending audit.
