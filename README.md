@@ -83,15 +83,11 @@ unavailable. Integrators should decode `SanctionedAddress(address)` and
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`) — deployed 2026-07-12
+### Base Sepolia (chain id `84532`) — deployed 2026-07-22
 
-> The addresses below run the previous storage/API revision. This
-> pre-production change intentionally does not include upgrade compatibility;
-> deploy a fresh stack before relying on the current payment and reputation
-> APIs. The retired DirectTransferAdapter is still enabled as an adapter on
-> this deployed router — the gateway's external-facilitator (x402 Bazaar)
-> rail still settles through it — and is dropped at the next fresh
-> deployment.
+Staged deployment: every proxy is admined by the governance Safe below; the
+sanctions oracle is the explicitly marked test mock (Chainalysis publishes no
+Base Sepolia deployment).
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
@@ -99,23 +95,28 @@ ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 
 | Contract              | Address                                      |
 |-----------------------|----------------------------------------------|
+| Governance Safe (admin, 1-of-1 testnet) | `0xe6724f9317E872a0a7fa59B93614cc73C7529DDc` |
 | USDC (Circle)         | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| AgentIndex            | `0xf1Aa86a69aBA5750B15FAba3026B8e5CBe7Db519` |
-| ValidationRegistry (legacy API) | `0x7b4F7eab04D6459D15caC6D26685b49C25613591` |
-| ProviderRegistry      | `0x9Ae6337534B2e16e93862D4CC8AD76B1778758e4` |
-| ServiceRegistry       | `0x0dA4E956f5b0C504d0c57FD43E7BBF69bA9b0E00` |
-| PaymentRouter         | `0x358A5fd242938BAD8b162551ACAC987953c93DC3` |
-| ReputationStorage     | `0xDc26A0c4Ec361F61D3dE56f729F8d6a6DBFCA75E` |
-| X402Adapter           | `0xab6E1a96D0262F484EEdAf3AEEd81f6c41758BD2` |
-| PermitAdapter         | `0x486B72084399716F0C058F5238F6e7f0B0D58038` |
-| ApprovalAdapter       | `0x71783d4FdEC13569DA6311F1941F3c4E0b0B89F7` |
-| DirectTransferAdapter (retired) | `0x41147a69e01d658c0290B0e30D7BFEBFC9c481A6` |
+| SanctionsOracle (MockSanctionsList) | `0xa94d2168820f349aafBa585c12E69aA387dCB815` |
+| AgentIndex            | `0x3C0F12ce13DF39C82bb6A4861BE5D77BD28A695e` |
+| DaskiValidationRegistry | `0x7B00F8AB014d6D7289DE743240131C4349232a5E` |
+| ProviderRegistry      | `0x1B17fB18968F099e2878194c8699c64e14F22080` |
+| ServiceRegistry       | `0x9EFcAB44a33bBD1bBe8DEf481f896cD287b904a0` |
+| PaymentRouter         | `0x50046ce6DcC49C900917B796eF53d435c57a7B6c` |
+| ReputationStorage     | `0xE024C8CB72Ddb08C6602e94c5585cD1DBE74DF6d` |
+| X402Adapter           | `0x6F77a5feFFDC16d8CE743897936DF825011E7878` |
+| PermitAdapter         | `0x90765d099D853D029Eb7d56b023Af10FEC21Da10` |
+| ApprovalAdapter       | `0xB3A23C4C21D6A02B141e1d829fc1A411A3fF198c` |
 | EAS                   | `0x4200000000000000000000000000000000000021` |
 | Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x463fb742a0d186de10c8060e6ab6dbf9a6970e6913439f8ffe826b4bc6f56801`
-- Confirmation: `0xbdf480e91d9566952262fa3bf185872119b37f6c743be6df86603e6cf0717ed5`
+- Outcome: `0x6b7be197d0d05238289a44c7a54f3cd6ef18770f56a3287e174f757421333360`
+- Confirmation: `0x0d90927c3531d12664d8aebf8b40964123cfba655a5d02be2c3b0459b8b11142`
+
+The prior stack (deployed 2026-07-12, EOA-admined, incl. the
+DirectTransferAdapter) is retired by this deployment — full address set under
+`retired` in the machine-readable file; quiescing per the procedure below.
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
