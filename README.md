@@ -127,10 +127,27 @@ other enabled entries. Then replace the old router address in every dependent
 service. Bare token transfers can arrive at any time, so repeat the balance
 check immediately before and after quiescing the router.
 
+`script/RetireStack.s.sol` performs the disable pass (idempotent; refuses a
+router with a residual token balance unless overridden) for EOA-admined
+legacy routers:
+
+```bash
+export RETIRE_PAYMENT_ROUTER_ADDRESS=<old router>
+export RETIRE_TOKENS=<comma-separated tokens ever accepted>
+export RETIRE_ADAPTERS=<comma-separated adapters ever enabled>
+forge script script/RetireStack.s.sol --rpc-url <RPC_URL> --broadcast
+```
+
+The event-history scan before and after is still mandatory — mappings are
+not enumerable, so the env lists must be proven exhaustive against the
+router's full `AcceptedTokenSet`/`AdapterSet` log history. A Safe-admined
+router (v0.6.0+) is retired through a governance batch instead.
+
 The previous (pre-canonical-migration) stack at PaymentRouter
-`0x78f9b15F…459d8f` is orphaned, along with Daski's legacy
-Identity/Reputation registries — historical record in the deploy-testnet
-repo's deployment records.
+`0x78f9b15F…459d8f` is orphaned and **quiesced (2026-07-22)**: USDC
+disabled, all three adapters disabled, zero balance, event history scanned
+exhaustive. Its legacy Identity/Reputation registries remain orphaned —
+historical record in the deploy-testnet repo's deployment records.
 
 ### Base mainnet
 Not yet deployed. Pending audit.
