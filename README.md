@@ -57,7 +57,7 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. Optional service payee overrides are bound to both the authorizing NFT owner and the live canonical `agentWallet`; skills are declared off-chain. |
 | **PaymentRouter**      | Rail-agnostic settlement that splits accepted tokens between provider/service wallet and the payment treasury. Per-token policy independently controls payment acceptance and reputation eligibility/minimums. It validates (provider, service) on every settlement, namespaces replay protection, and excludes relationships provable from on-chain identity state at settlement time from reputation. |
-| **X402Adapter**        | EIP-3009 `transferWithAuthorization` rail (Circle USDC). |
+| **X402Adapter**        | x402 V2 Exact-EVM rail using EIP-3009 `transferWithAuthorization` (Circle USDC). Random client nonces are accepted only through an admin-allowlisted facilitator. |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
 | **DaskiValidationRegistry** | Daski-specific, ERC-8004-inspired validation requests with namespaced keys and paginated reads. `validationRequest` returns `computeValidationKey(agentId, requestHash)`; calls and paginated lists use that key, while events carry both it and the raw payload hash. This intentionally avoids the draft registry's global request-hash squatting and unbounded getter behavior rather than claiming drop-in compatibility. |
@@ -212,6 +212,8 @@ agentWallet, IDs beginning at 0, registration-time wallet initialization, and
 export DEPLOYER_PRIVATE_KEY=<key>
 export PROVIDER_TREASURY_ADDRESS=<listing-fee treasury>
 export PAYMENT_TREASURY_ADDRESS=<payment-commission treasury>
+# REQUIRED: public address derived from the gateway FACILITATOR_PRIVATE_KEY.
+export FACILITATOR_ADDRESS=<gateway-facilitator-address>
 # Deployed governance contract (never an EOA) — see "Governance Safe" below.
 export ADMIN_ADDRESS=<deployed multisig or timelock>
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
@@ -324,6 +326,7 @@ export EAS_ADDRESS=0x4200000000000000000000000000000000000021
 export EAS_SCHEMA_REGISTRY_ADDRESS=0x4200000000000000000000000000000000000020
 export PROVIDER_TREASURY_ADDRESS=<address>
 export PAYMENT_TREASURY_ADDRESS=<address>
+export FACILITATOR_ADDRESS=<gateway-facilitator-address>
 export ADMIN_ADDRESS=<governance-contract-address>
 export AGENT_INDEX_ADDRESS=<address>
 export DASKI_VALIDATION_REGISTRY_ADDRESS=<address>
@@ -363,9 +366,11 @@ ProviderRegistry and PaymentRouter treasury controls are intentionally
 independent. A governance treasury change must review both destinations and
 record whether equality or divergence is intended.
 
-EIP-3009 payments use `X402Adapter`, which executes the token authorization
-and router settlement atomically. The authorization nonce commits to
-`(serviceRef, providerAgentId, serviceId)` so a relayer cannot redirect it.
+x402 V2 EIP-3009 payments use `X402Adapter`, which executes the token
+authorization and router settlement atomically. Standard clients choose a
+random 32-byte nonce. Redirect protection comes from the signed EIP-3009
+recipient and amount plus the adapter's facilitator allowlist and the
+facilitator's verified Daski challenge binding.
 
 Provider-facing services should map `SanctionedAddress(account)` to the stable
 code `SANCTIONS_ADDRESS_REJECTED` (not retryable) and

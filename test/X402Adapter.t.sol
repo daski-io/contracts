@@ -124,6 +124,8 @@ contract X402AdapterTest is Test {
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
+        adapter.setFacilitatorAuthorization(relayer, true);
+        vm.prank(admin);
         router.setAcceptedToken(address(usdc), true);
         vm.prank(admin);
         router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
@@ -149,10 +151,8 @@ contract X402AdapterTest is Test {
         usdc.mint(buyer, 1000e6);
     }
 
-    /// @dev Sign an EIP-3009 auth with the nonce bound to (serviceRef,
-    ///      providerAgentId, serviceId) per X402Adapter's auth-binding
-    ///      requirement.
-    function _authFor(uint256 value, bytes32 serviceRef, uint256 providerId, bytes32 svcId)
+    /// @dev Sign with an arbitrary nonce, matching standard x402 V2 clients.
+    function _authFor(uint256 value, bytes32 serviceRef, uint256, bytes32)
         internal
         view
         returns (IX402Adapter.EIP3009Auth memory)
@@ -166,7 +166,7 @@ contract X402AdapterTest is Test {
             value,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(serviceRef, providerId, svcId))
+            keccak256(abi.encode("x402-v2-random-nonce", serviceRef))
         );
     }
 
@@ -198,6 +198,76 @@ contract X402AdapterTest is Test {
         assertEq(rec.serviceId, serviceId);
         assertEq(rec.amount, 100e6);
         assertEq(rec.token, address(usdc));
+    }
+
+    function test_settleAcceptsNonceUnrelatedToDaskiRouting() public {
+        bytes32 ref = keccak256("random-nonce-ref");
+        bytes32 nonce = keccak256("official-client-random-nonce");
+        assertNotEq(nonce, keccak256(abi.encode(ref, providerAgentId, serviceId)));
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
+            vm, BUYER_KEY, address(usdc), buyer, address(router), 100e6, 0, block.timestamp + 1 hours, nonce
+        );
+
+        vm.prank(relayer);
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
+
+        assertTrue(usdc.authorizationState(buyer, nonce));
+    }
+
+    function test_settleUnauthorizedCallerReverts() public {
+        bytes32 ref = keccak256("unauthorized");
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
+
+        vm.prank(makeAddr("unauthorized"));
+        vm.expectRevert("facilitator not authorized");
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
+    }
+
+    function test_settleWithRegistrationUnauthorizedCallerReverts() public {
+        address freshBuyer = vm.addr(FRESH_BUYER_KEY);
+        usdc.mint(freshBuyer, 100e6);
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory regSig = _signRegisterAgent(FRESH_BUYER_KEY, freshBuyer, "ipfs://fresh", 0, deadline);
+        bytes32 ref = keccak256("unauthorized-registration");
+        IX402Adapter.EIP3009Auth memory auth =
+            _eip3009For(FRESH_BUYER_KEY, freshBuyer, 80e6, ref, providerAgentId, serviceId);
+
+        vm.prank(makeAddr("unauthorized"));
+        vm.expectRevert("facilitator not authorized");
+        adapter.settleWithRegistration(
+            address(usdc), 80e6, ref, providerAgentId, serviceId, auth, "ipfs://fresh", deadline, regSig
+        );
+    }
+
+    function test_setFacilitatorAuthorizationAdminOnlyAndRejectsZero() public {
+        address nextFacilitator = makeAddr("next-facilitator");
+
+        vm.prank(makeAddr("not-admin"));
+        vm.expectRevert("not admin");
+        adapter.setFacilitatorAuthorization(nextFacilitator, true);
+
+        vm.prank(admin);
+        vm.expectRevert("zero facilitator");
+        adapter.setFacilitatorAuthorization(address(0), true);
+    }
+
+    function test_setFacilitatorAuthorizationSupportsRotationAndRevocation() public {
+        address nextFacilitator = makeAddr("next-facilitator");
+        vm.expectEmit(true, false, false, true, address(adapter));
+        emit IX402Adapter.FacilitatorAuthorizationSet(nextFacilitator, true);
+        vm.prank(admin);
+        adapter.setFacilitatorAuthorization(nextFacilitator, true);
+        assertTrue(adapter.authorizedFacilitators(nextFacilitator));
+
+        vm.prank(admin);
+        adapter.setFacilitatorAuthorization(relayer, false);
+        assertFalse(adapter.authorizedFacilitators(relayer));
+
+        bytes32 ref = keccak256("revoked");
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
+        vm.prank(relayer);
+        vm.expectRevert("facilitator not authorized");
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth);
     }
 
     function test_settleSanctionedSignerRevertsBeforeAuthorization() public {
@@ -234,7 +304,7 @@ contract X402AdapterTest is Test {
             100e6,
             0,
             block.timestamp + 10,
-            keccak256(abi.encode(ref, providerAgentId, serviceId))
+            keccak256("expired-random-nonce")
         );
         vm.warp(block.timestamp + 100);
         vm.prank(relayer);
@@ -283,7 +353,7 @@ contract X402AdapterTest is Test {
             100e6,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(ref, providerAgentId, serviceId))
+            keccak256("unaccepted-token-random-nonce")
         );
         vm.prank(relayer);
         vm.expectRevert("token not accepted");
@@ -297,7 +367,7 @@ contract X402AdapterTest is Test {
         router.setAcceptedToken(address(feeToken), true);
 
         bytes32 ref = keccak256("ref-fee");
-        bytes32 nonce = keccak256(abi.encode(ref, providerAgentId, serviceId));
+        bytes32 nonce = keccak256("fee-token-random-nonce");
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
             vm, BUYER_KEY, address(feeToken), buyer, address(router), 100e6, 0, block.timestamp + 1 hours, nonce
         );
@@ -311,49 +381,6 @@ contract X402AdapterTest is Test {
         assertFalse(feeToken.authorizationState(buyer, nonce));
         assertFalse(router.paymentKeyUsed(router.computePaymentKey(buyerAgentId, providerAgentId, serviceId, ref)));
         assertEq(router.nextPaymentId(), 1);
-    }
-
-    // ── Auth binding to (serviceRef, providerAgentId, serviceId) ─────────
-
-    function test_settleAuthMismatchOnServiceRefReverts() public {
-        bytes32 signedRef = keccak256("ref-signed");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, signedRef, providerAgentId, serviceId);
-
-        vm.prank(makeAddr("frontrunner"));
-        vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, keccak256("ref-attacker"), providerAgentId, serviceId, auth);
-
-        // Buyer's funds untouched — they can still retry.
-        assertEq(usdc.balanceOf(buyer), 1000e6, "no funds moved on mismatch");
-    }
-
-    function test_settleAuthMismatchOnProviderReverts() public {
-        bytes32 ref = keccak256("ref-pm");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
-
-        vm.prank(makeAddr("frontrunner"));
-        vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId + 99, serviceId, auth);
-    }
-
-    function test_settleAuthMismatchOnServiceIdReverts() public {
-        // Register a second service for the same provider.
-        vm.prank(provider);
-        bytes32 svc2 = services.registerService(providerAgentId, "skill", "2", "u", address(0));
-
-        bytes32 ref = keccak256("ref-svm");
-        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
-
-        // Submit with svc2 but the auth was bound to serviceId — reject.
-        vm.prank(makeAddr("frontrunner"));
-        vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, svc2, auth);
-    }
-
-    function test_authNonceFor_matchesCallBinding() public view {
-        bytes32 ref = keccak256("hashtest");
-        bytes32 expected = keccak256(abi.encode(ref, providerAgentId, serviceId));
-        assertEq(adapter.authNonceFor(ref, providerAgentId, serviceId), expected);
     }
 
     // --- settleWithRegistration (atomic gasless register-and-settle) -----
@@ -370,7 +397,7 @@ contract X402AdapterTest is Test {
         return AgentIndexSigner.signRegisterWithNonce(vm, key, agentIndex, uri, nonce, deadline);
     }
 
-    function _eip3009For(uint256 key, address from, uint256 value, bytes32 serviceRef, uint256 providerId, bytes32 svc)
+    function _eip3009For(uint256 key, address from, uint256 value, bytes32 serviceRef, uint256, bytes32)
         internal
         view
         returns (IX402Adapter.EIP3009Auth memory)
@@ -384,7 +411,7 @@ contract X402AdapterTest is Test {
             value,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(serviceRef, providerId, svc))
+            keccak256(abi.encode("x402-v2-registration-nonce", serviceRef, from))
         );
     }
 

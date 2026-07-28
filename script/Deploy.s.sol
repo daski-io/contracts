@@ -43,6 +43,8 @@ contract Deploy is Script {
         require(providerTreasury != address(0), "PROVIDER_TREASURY_ADDRESS is required");
         address paymentTreasury = vm.envAddress("PAYMENT_TREASURY_ADDRESS");
         require(paymentTreasury != address(0), "PAYMENT_TREASURY_ADDRESS is required");
+        address facilitator = vm.envAddress("FACILITATOR_ADDRESS");
+        require(facilitator != address(0), "FACILITATOR_ADDRESS is required");
 
         // The canonical ERC-8004 IdentityRegistry for this chain. Required —
         // there is deliberately no fallback that deploys a local registry.
@@ -181,6 +183,8 @@ contract Deploy is Script {
             )
         );
         console.log("X402Adapter proxy:", address(x402AdapterProxy));
+        X402Adapter(address(x402AdapterProxy)).setFacilitatorAuthorization(facilitator, true);
+        console.log("X402 facilitator:", facilitator);
 
         // ── (i) PermitAdapter ─────────────────────────────────────────
         PermitAdapter permitAdapterImpl = new PermitAdapter();
@@ -256,6 +260,7 @@ contract Deploy is Script {
         console.log("  PaymentRouter:      ", address(routerProxy));
         console.log("  ReputationStorage:  ", address(reputationProxy));
         console.log("  X402Adapter:        ", address(x402AdapterProxy));
+        console.log("  X402 facilitator:   ", facilitator);
         console.log("  PermitAdapter:      ", address(permitAdapterProxy));
         console.log("  ApprovalAdapter:    ", address(approvalAdapterProxy));
         _logImplementation("AgentIndex", address(agentIndexImpl));
