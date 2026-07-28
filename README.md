@@ -83,7 +83,7 @@ unavailable. Integrators should decode `SanctionedAddress(address)` and
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`) — deployed 2026-07-22
+### Base Sepolia (chain id `84532`) — deployed 2026-07-28
 
 Staged deployment: every proxy is admined by the governance Safe below; the
 sanctions oracle is the explicitly marked test mock (Chainalysis publishes no
@@ -96,27 +96,31 @@ ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 | Contract              | Address                                      |
 |-----------------------|----------------------------------------------|
 | Governance Safe (admin, 1-of-1 testnet) | `0xe6724f9317E872a0a7fa59B93614cc73C7529DDc` |
+| Authorized x402 V2 facilitator | `0x08004fDdB4e7b64977D341Ad9d6B98B4d10D6ed2` |
 | USDC (Circle)         | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | SanctionsOracle (MockSanctionsList) | `0xa94d2168820f349aafBa585c12E69aA387dCB815` |
-| AgentIndex            | `0x3C0F12ce13DF39C82bb6A4861BE5D77BD28A695e` |
-| DaskiValidationRegistry | `0x7B00F8AB014d6D7289DE743240131C4349232a5E` |
-| ProviderRegistry      | `0x1B17fB18968F099e2878194c8699c64e14F22080` |
-| ServiceRegistry       | `0x9EFcAB44a33bBD1bBe8DEf481f896cD287b904a0` |
-| PaymentRouter         | `0x50046ce6DcC49C900917B796eF53d435c57a7B6c` |
-| ReputationStorage     | `0xE024C8CB72Ddb08C6602e94c5585cD1DBE74DF6d` |
-| X402Adapter           | `0x6F77a5feFFDC16d8CE743897936DF825011E7878` |
-| PermitAdapter         | `0x90765d099D853D029Eb7d56b023Af10FEC21Da10` |
-| ApprovalAdapter       | `0xB3A23C4C21D6A02B141e1d829fc1A411A3fF198c` |
+| AgentIndex            | `0xdc47641AE39B304E37e41CA7915b93CCd19c05A5` |
+| DaskiValidationRegistry | `0x28BcDdeD434289eE3bCeB60d11075AC8b4191194` |
+| ProviderRegistry      | `0xDeb0A3692F988f72130a792A6Ac7146321871A2A` |
+| ServiceRegistry       | `0x48D67BD6F514b461f729D6970aebF6f228942e26` |
+| PaymentRouter         | `0x7E2D6cD01ecb6656BaBC78DcACE896978d55F48D` |
+| ReputationStorage     | `0x50590Fc2b4B7736ff2D30Cc581932EeB504A8250` |
+| X402Adapter           | `0x7778cF4B6bb2Dd84CBce941246d4D4Db34a8E035` |
+| PermitAdapter         | `0x90c2ab7a608Ccb5379A166a66Ea7e3b10E022440` |
+| ApprovalAdapter       | `0x4a92b6c4D949337499a75A1812939EB2bCF01aD5` |
 | EAS                   | `0x4200000000000000000000000000000000000021` |
 | Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0x6b7be197d0d05238289a44c7a54f3cd6ef18770f56a3287e174f757421333360`
-- Confirmation: `0x0d90927c3531d12664d8aebf8b40964123cfba655a5d02be2c3b0459b8b11142`
+- Outcome: `0xa52916b901f5c8366127d280f04b7426405b56f90e06ab18a685818e3e0fb4b6`
+- Confirmation: `0x36429e8cf20bcdb761c0103be7ae384cae2d7f5d14c0d30de7d6f210861329f5`
 
-The prior stack (deployed 2026-07-12, EOA-admined, incl. the
-DirectTransferAdapter) is retired by this deployment — full address set under
-`retired` in the machine-readable file; quiescing per the procedure below.
+This stack replaces the 2026-07-22 one, whose X402Adapter predates x402 V2
+facilitator authorization and must not be paired with the V2 gateway. The
+replaced proxies move under `retired` in the machine-readable file and are
+quiesced per the procedure below once every service has cut over. The
+2026-07-12 EOA-admined stack (incl. the DirectTransferAdapter) was already
+quiesced on 2026-07-22.
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
