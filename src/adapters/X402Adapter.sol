@@ -13,18 +13,21 @@ import {AdapterBaseUpgradeable} from "./AdapterBaseUpgradeable.sol";
 /// transfers directly into the router. After the transfer succeeds, this
 /// adapter calls `router.settle(...)`.
 ///
-/// AUTH BINDING — IMPORTANT FOR OFF-CHAIN SIGNERS:
+/// TRUST BOUNDARY:
 ///   The buyer's EIP-3009 signature commits only to (from, to, value,
 ///   validAfter, validBefore, nonce). It does NOT cover `serviceRef`,
 ///   `providerAgentId`, or `serviceId`, which are passed as separate
-///   adapter call args. Without a binding, a frontrunner could pull the
-///   buyer's funds and redirect them to a different (provider, service).
-///   To prevent this, the buyer's signer MUST set:
-///       nonce = keccak256(abi.encode(serviceRef, providerAgentId, serviceId))
-///   This adapter rejects calls whose nonce does not match. The token's
-///   per-(from, nonce) replay protection then doubles as a commitment to
-///   exactly one (service, provider) pair per authorization.
+///   adapter call args. Only an administrator-authorized Daski facilitator
+///   may select those routing fields. The facilitator resolves them from
+///   its persisted payment challenge before calling this adapter.
 contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
+    mapping(address facilitator => bool authorized) public authorizedFacilitators;
+
+    modifier onlyAuthorizedFacilitator() {
+        require(authorizedFacilitators[msg.sender], "facilitator not authorized");
+        _;
+    }
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -45,7 +48,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         uint256 providerAgentId,
         bytes32 serviceId,
         EIP3009Auth calldata auth
-    ) external returns (uint256 paymentId) {
+    ) external onlyAuthorizedFacilitator returns (uint256 paymentId) {
         // Pre-flight: reject unknown tokens before burning gas on the
         // EIP-3009 transfer. The router will also re-check at settle.
         require(router.isAcceptedToken(token), "token not accepted");
@@ -81,7 +84,7 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         string calldata agentURI,
         uint256 registrationDeadline,
         bytes calldata registrationSignature
-    ) external returns (uint256 buyerAgentId, uint256 paymentId) {
+    ) external onlyAuthorizedFacilitator returns (uint256 buyerAgentId, uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
         _requireNotSanctioned(auth.from);
 
@@ -103,12 +106,6 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         EIP3009Auth calldata auth,
         uint256 buyerAgentId
     ) internal returns (uint256 paymentId) {
-        // Bind serviceRef + providerAgentId + serviceId into the EIP-3009
-        // nonce. See contract-level NatSpec. Without this check, a
-        // frontrunner could re-submit the buyer's auth with substituted call
-        // args (different service or provider).
-        require(auth.nonce == keccak256(abi.encode(serviceRef, providerAgentId, serviceId)), "auth not bound to call");
-
         // Pull funds: buyer -> router via EIP-3009. Token signature binds
         // the signer to exactly this `to=router` value.
         uint256 balanceBefore = _routerBalance(token);
@@ -132,17 +129,13 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         paymentId = router.settle(token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId);
     }
 
-    /// @notice Helper for off-chain signers: returns the value the buyer
-    ///         must use as the EIP-3009 `nonce` when authorizing a payment
-    ///         for `(serviceRef, providerAgentId, serviceId)`. Pure — safe
-    ///         to call off-chain via eth_call.
-    function authNonceFor(bytes32 serviceRef, uint256 providerAgentId, bytes32 serviceId)
-        external
-        pure
-        returns (bytes32)
-    {
-        return keccak256(abi.encode(serviceRef, providerAgentId, serviceId));
+    /// @notice Add or revoke a facilitator allowed to submit Daski routing
+    ///         fields alongside standard x402 EIP-3009 authorizations.
+    function setFacilitatorAuthorization(address facilitator, bool authorized) external onlyAdmin {
+        require(facilitator != address(0), "zero facilitator");
+        authorizedFacilitators[facilitator] = authorized;
+        emit FacilitatorAuthorizationSet(facilitator, authorized);
     }
 
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 }

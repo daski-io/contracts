@@ -5,6 +5,8 @@ pragma solidity ^0.8.24;
 ///         payments. Funds move directly from buyer to the router via the
 ///         token's `transferWithAuthorization`; adapter never holds funds.
 interface IX402Adapter {
+    event FacilitatorAuthorizationSet(address indexed facilitator, bool authorized);
+
     struct EIP3009Auth {
         address from;
         uint256 validAfter;
@@ -40,4 +42,8 @@ interface IX402Adapter {
         uint256 registrationDeadline,
         bytes calldata registrationSignature
     ) external returns (uint256 buyerAgentId, uint256 paymentId);
+
+    function authorizedFacilitators(address facilitator) external view returns (bool);
+
+    function setFacilitatorAuthorization(address facilitator, bool authorized) external;
 }

@@ -155,6 +155,7 @@ contract ReputationStorageTest is Test {
         reputation.finalizeConfiguration();
         router.setReputationStorage(address(reputation));
         router.setAdapter(address(adapter), true);
+        adapter.setFacilitatorAuthorization(relayer, true);
         router.setAcceptedToken(address(usdc), true);
         router.setTokenReputationConfig(address(usdc), true, REPUTATION_MINIMUM);
         vm.stopPrank();
@@ -186,12 +187,10 @@ contract ReputationStorageTest is Test {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    /// @dev EIP-3009 nonce is bound to (serviceRef, providerAgentId, serviceId)
-    ///      per X402Adapter — see contract NatSpec.
     function _payAsBuyer(uint256 amount, bytes32 serviceRef, bytes32 svcId) internal returns (uint256) {
-        bytes32 boundNonce = keccak256(abi.encode(serviceRef, providerAgentId, svcId));
+        bytes32 nonce = keccak256(abi.encode("reputation-x402-v2", serviceRef));
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, BUYER_KEY, address(usdc), buyer, address(router), amount, 0, block.timestamp + 1 hours, boundNonce
+            vm, BUYER_KEY, address(usdc), buyer, address(router), amount, 0, block.timestamp + 1 hours, nonce
         );
         vm.prank(relayer);
         return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth);
@@ -508,7 +507,7 @@ contract ReputationStorageTest is Test {
             100e6,
             0,
             block.timestamp + 1 hours,
-            keccak256(abi.encode(attackSvc, provider2AgentId, svc2))
+            keccak256(abi.encode("reputation-attacker-x402-v2", attackSvc))
         );
         vm.prank(relayer);
         uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, svc2, auth);

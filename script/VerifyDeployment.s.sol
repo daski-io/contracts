@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Script} from "forge-std/Script.sol";
 import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
+import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 
 /// @notice Read-only verification for a deployed stack after governance has
 ///         accepted every two-step admin transfer.
@@ -59,6 +60,10 @@ contract VerifyDeployment is Script {
             DeploymentValidation.confirmationSchema()
         );
         DeploymentValidation.validateCoreWiring(deployment);
+        require(
+            IX402Adapter(deployment.x402Adapter).authorizedFacilitators(vm.envAddress("FACILITATOR_ADDRESS")),
+            "facilitator is not authorized"
+        );
         if (deploymentActive) {
             DeploymentValidation.validateOperationalState(deployment);
         } else {

@@ -158,6 +158,7 @@ contract IntegrationTest is Test {
 
         router.setReputationStorage(address(reputation));
         router.setAdapter(address(adapter), true);
+        adapter.setFacilitatorAuthorization(relayer, true);
         router.setAcceptedToken(address(usdc), true);
         router.setTokenReputationConfig(address(usdc), true, 250_000);
     }
@@ -170,9 +171,9 @@ contract IntegrationTest is Test {
         uint256 providerAgentId,
         bytes32 svcId
     ) internal returns (uint256 paymentId) {
-        bytes32 boundNonce = keccak256(abi.encode(ref, providerAgentId, svcId));
+        bytes32 nonce = keccak256(abi.encode("integration-x402-v2", ref));
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, buyerKey, address(usdc), buyerAddr, address(router), amount, 0, block.timestamp + 1 hours, boundNonce
+            vm, buyerKey, address(usdc), buyerAddr, address(router), amount, 0, block.timestamp + 1 hours, nonce
         );
         vm.prank(relayer);
         paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth);
