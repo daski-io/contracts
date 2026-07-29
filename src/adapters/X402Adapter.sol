@@ -91,6 +91,9 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
     }
 
+    // Both callers hold the nonReentrant guard for the complete registration,
+    // receive, routing, and balance-invariant sequence.
+    // slither-disable-start reentrancy-balance
     function _doSettle(
         address token,
         uint256 amount,
@@ -115,6 +118,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         require(IERC20(token).balanceOf(address(this)) == adapterBalanceBefore, "adapter balance changed");
         require(_routerBalance(token) == routerBalanceBefore, "router balance changed");
     }
+    // slither-disable-end reentrancy-balance
 
     function _validatePreflight(
         address token,
