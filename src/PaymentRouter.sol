@@ -205,11 +205,15 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         if (!config.enabled || request.amount < config.minimumAmount) return false;
         if (commission == 0) return false;
         if (request.buyerAgentId == request.providerAgentId) return false;
-        address[3] memory buyerAddresses = [request.buyerWallet, buyerOwner, buyerAgentWallet];
-        address[3] memory providerAddresses = [providerOwner, providerWallet, payee];
-        return !LibReputationEligibility.hasProvableControlOverlap(
-            identity, request.providerAgentId, buyerAddresses, providerAddresses
-        );
+        LibReputationEligibility.Party memory buyer = LibReputationEligibility.Party({
+            agentId: request.buyerAgentId,
+            owner: buyerOwner,
+            participants: [request.buyerWallet, buyerOwner, buyerAgentWallet]
+        });
+        LibReputationEligibility.Party memory provider = LibReputationEligibility.Party({
+            agentId: request.providerAgentId, owner: providerOwner, participants: [providerOwner, providerWallet, payee]
+        });
+        return !LibReputationEligibility.hasProvableControlOverlap(identity, buyer, provider);
     }
 
     function _attemptReputationSync(uint256 paymentId) private {

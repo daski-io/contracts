@@ -75,6 +75,13 @@ and to deliver the exact settlement amount. Adapter enablement verifies the
 adapter's router binding on-chain; deployment verification additionally checks
 its exact AgentIndex binding.
 
+Reputation eligibility excludes direct overlap and cross-control among the
+buyer payer, both NFT owners, both verified agent wallets, the service payee,
+and both current per-token approvees. It checks per-token and
+`isApprovedForAll` authority in both directions. ERC-721 operator sets are not
+enumerable, so a shared third-party operator that is not otherwise one of
+those discoverable controllers cannot be detected on-chain.
+
 Every participant wallet is screened on-chain against the configured
 Chainalysis-compatible sanctions oracle. Adapters reject payers before token
 calls and the router independently rechecks live payer, controller, payee, and
@@ -182,26 +189,29 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 244 tests across 15 suites
+forge test       # 321 tests across 18 suites
 forge test -vvv  # verbose
 forge fmt
 ```
 
 | Suite | Tests |
 |---|---|
-| PaymentRouter         | 78 |
-| ReputationStorage     | 35 |
+| PaymentRouter         | 98 |
+| ReputationStorage     | 39 |
 | ReputationConfiguration | 10 |
-| ServiceRegistry       | 26 |
-| AgentIndex            | 19 |
-| ProviderRegistry      | 19 |
-| X402Adapter           | 15 |
-| DaskiValidationRegistry | 16 |
-| PermitAdapter         | 6  |
-| ApprovalAdapter       | 5  |
-| DeploymentValidation  | 4  |
-| DeploymentGuards      | 5  |
+| ServiceRegistry       | 28 |
+| AgentIndex            | 25 |
+| ProviderRegistry      | 23 |
+| X402Adapter           | 26 |
+| DaskiValidationRegistry | 19 |
+| PermitAdapter         | 7  |
+| ApprovalAdapter       | 7  |
+| ReleaseManifest       | 12 |
+| DeploymentValidation  | 6  |
+| DeploymentGuards      | 7  |
+| SafeDeployment        | 6  |
 | Integration           | 3  |
+| RetireStack           | 2  |
 | Canonical identity mock | 2 |
 | EAS mock              | 1 |
 
@@ -306,33 +316,46 @@ resolver wiring are logged at the end. Accept all nine pending admin roles from
 the configured governance contract before activating the token and adapters.
 
 Copy `deployments/release-manifest.example.json` to a release-specific file
-and fill it from independently reviewed build artifacts and deployment
-receipts. It is the single reviewed identity for chain, source commit,
-compiler profile, all nine proxies and implementations, runtime fingerprints,
+outside the clean release checkout and fill it from deployment receipts. It is
+the single reviewed identity for chain, source commit, pinned compiler and
+Foundry profile, all nine proxies and implementations, runtime fingerprints,
 external dependencies, economics, schemas, the complete Safe profile, and the
-complete facilitator set. Verification and both governance batches load this
-same artifact:
+complete facilitator set.
+
+`script/release.py` is the trusted entry point. It requires a clean checkout,
+validates the release ref and submodules, builds into a fresh directory,
+patches only the proven OpenZeppelin UUPS `__self` immutable with each manifest
+implementation address, and compares the resulting implementation and proxy
+hashes with the manifest before contacting the chain. It archives the pinned
+manifest, local hashes, build log, chain verification, and exact governance
+payload under the manifest hash. The evidence directory must be outside the
+checkout:
 
 ```bash
-export RELEASE_MANIFEST_PATH=<reviewed-release-manifest.json>
+export RELEASE_MANIFEST=<absolute-reviewed-release-manifest.json>
+export RELEASE_EVIDENCE_DIR=<absolute-evidence-directory>
+export RPC_URL=<RPC_URL>
 
-# Read-only verification while the deployment is still dark:
-export DEPLOYMENT_ACTIVE=false
-forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
+# Read-only verification while dark, or add --active after activation:
+python3 script/release.py verify \
+  --manifest "$RELEASE_MANIFEST" --rpc-url "$RPC_URL" \
+  --release-ref origin/develop --evidence-dir "$RELEASE_EVIDENCE_DIR"
 
-# Safe batches:
-GOVERNANCE_BATCH=accept   forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
-GOVERNANCE_BATCH=activate forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+# Emit an exact payload for a reviewed multisig without broadcasting:
+export GOVERNANCE_SENDER=<current-admin-address>
+python3 script/release.py accept --emit-only \
+  --manifest "$RELEASE_MANIFEST" --rpc-url "$RPC_URL" \
+  --release-ref origin/develop --evidence-dir "$RELEASE_EVIDENCE_DIR"
 
-# Read-only operational verification:
-export DEPLOYMENT_ACTIVE=true
-forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
+# A 1-of-1 development Safe may execute by omitting --emit-only and setting:
+export DEPLOYER_PRIVATE_KEY=<key>
 ```
 
-Scripted execution requires a 1-of-1 developer Safe. For a release-candidate
-or mainnet multisig the script prints every call and the packed
-MultiSendCallOnly payload, then stops; review and execute that exact payload
-through the Safe app.
+Use mode `activate` for the activation payload. Actual scripted execution is
+limited to a 1-of-1 development Safe; release-candidate and mainnet signers
+must review and execute the archived `MultiSendCallOnly` payload through the
+Safe app. Reproduce the local-build evidence from a second clean environment
+using the manifest's exact Foundry version before Mainnet approval.
 
 Facilitator rotations are append-only manifest revisions. Copy
 `deployments/release-manifest-revision.example.json`, link it to the base and

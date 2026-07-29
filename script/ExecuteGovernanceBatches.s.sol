@@ -25,8 +25,15 @@ import {ReleaseManifest} from "./ReleaseManifest.sol";
 ///         same reviewed release manifest VerifyDeployment.s.sol reads.
 contract ExecuteGovernanceBatches is ReleaseManifest {
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address sender = vm.addr(deployerKey);
+        bool emitOnly = vm.envOr("EMIT_ONLY", false);
+        uint256 deployerKey;
+        address sender;
+        if (emitOnly) {
+            sender = vm.envAddress("GOVERNANCE_SENDER");
+        } else {
+            deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+            sender = vm.addr(deployerKey);
+        }
         string memory batch = vm.envString("GOVERNANCE_BATCH");
         Manifest memory manifest = _loadManifest();
         address safe = manifest.admin;
@@ -55,6 +62,11 @@ contract ExecuteGovernanceBatches is ReleaseManifest {
         }
 
         _logBatch(batch, targets, calls);
+        if (emitOnly) {
+            console.log("Payload emitted without execution for manifest:");
+            console.logBytes32(manifest.hash);
+            return;
+        }
 
         vm.startBroadcast(deployerKey);
         SafeDeployment.execMultiSendBatch(safe, sender, targets, calls);

@@ -77,6 +77,8 @@ contract ToggleReputationSink {
     address private immutable PAYMENT_ROUTER;
     bool public failPayment;
     bool public failRefund;
+    bool public lastEligibility;
+    uint256 public paymentCount;
 
     constructor(address paymentRouter_) {
         PAYMENT_ROUTER = paymentRouter_;
@@ -98,8 +100,10 @@ contract ToggleReputationSink {
         failPayment = fail;
     }
 
-    function recordPayment(uint256) external view {
+    function recordPayment(uint256 paymentId) external {
         require(!failPayment, "payment mirror failed");
+        paymentCount++;
+        lastEligibility = IPaymentRouter(PAYMENT_ROUTER).getPayment(paymentId).reputationEligible;
     }
 
     function recordRefund(uint256, uint256) external view {
@@ -155,6 +159,7 @@ contract PaymentRouterTest is Test {
     MockUSDC usdc;
     MockSanctionsList sanctions;
     PassThroughAdapter adapter;
+    ToggleReputationSink defaultSink;
 
     address admin = makeAddr("admin");
     address treasury = makeAddr("treasury");
@@ -239,9 +244,9 @@ contract PaymentRouterTest is Test {
         );
 
         adapter = new PassThroughAdapter(router);
-        ToggleReputationSink sink = new ToggleReputationSink(address(router));
+        defaultSink = new ToggleReputationSink(address(router));
         vm.prank(admin);
-        router.setReputationStorage(address(sink));
+        router.setReputationStorage(address(defaultSink));
         vm.prank(admin);
         router.setAdapter(address(adapter), true);
         vm.prank(admin);
@@ -289,6 +294,17 @@ contract PaymentRouterTest is Test {
         usdc.approve(address(adapter), amount);
         vm.prank(buyer);
         paymentId = adapter.settle(address(usdc), amount, ref, buyerAgentId, buyer, providerAgentId, svcId);
+    }
+
+    function _settleAs(uint256 agentId, address payer, uint256 amount, bytes32 ref)
+        internal
+        returns (uint256 paymentId)
+    {
+        usdc.mint(payer, amount);
+        vm.prank(payer);
+        usdc.approve(address(adapter), amount);
+        vm.prank(payer);
+        paymentId = adapter.settle(address(usdc), amount, ref, agentId, payer, providerAgentId, serviceId);
     }
 
     function _expectSanctionedSettlement(address account, bytes32 ref) internal {
@@ -770,6 +786,82 @@ contract PaymentRouterTest is Test {
         identity.approve(buyer, providerAgentId);
 
         uint256 paymentId = _settle(1e6, keccak256("buyer-token-approved"));
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleProviderApprovedForBuyerTokenDoesNotCreateReputation() public {
+        address payer = makeAddr("distinct-buyer-agent-wallet");
+        identity.forceSetAgentWallet(buyerAgentId, payer);
+        vm.prank(buyer);
+        identity.approve(provider, buyerAgentId);
+
+        uint256 providerBefore = usdc.balanceOf(provider);
+        uint256 treasuryBefore = usdc.balanceOf(treasury);
+        uint256 paymentId = _settleAs(buyerAgentId, payer, 1e6, keccak256("provider-token-approved"));
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+        assertFalse(defaultSink.lastEligibility());
+        assertEq(defaultSink.paymentCount(), 1);
+        assertEq(usdc.balanceOf(provider) - providerBefore, 950_000);
+        assertEq(usdc.balanceOf(treasury) - treasuryBefore, 50_000);
+    }
+
+    function test_settleBuyerOwnerApprovesProviderOperatorDoesNotCreateReputation() public {
+        address payer = makeAddr("buyer-agent-wallet-payer");
+        identity.forceSetAgentWallet(buyerAgentId, payer);
+        vm.prank(buyer);
+        identity.setApprovalForAll(provider, true);
+
+        uint256 paymentId = _settleAs(buyerAgentId, payer, 1e6, keccak256("provider-is-buyer-operator"));
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleServicePayeeApprovedForBuyerTokenDoesNotCreateReputation() public {
+        address servicePayee = makeAddr("approved-service-payee");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, servicePayee);
+        vm.prank(buyer);
+        identity.approve(servicePayee, buyerAgentId);
+
+        uint256 paymentId = _settle(1e6, keccak256("payee-controls-buyer"));
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleSharedPerTokenApproveeDoesNotCreateReputation() public {
+        address sharedApprovee = makeAddr("shared-token-approvee");
+        vm.prank(buyer);
+        identity.approve(sharedApprovee, buyerAgentId);
+        vm.prank(provider);
+        identity.approve(sharedApprovee, providerAgentId);
+
+        uint256 paymentId = _settle(1e6, keccak256("shared-token-approvee"));
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleBuyerApproveeOperatingProviderTokenDoesNotCreateReputation() public {
+        address sharedController = makeAddr("buyer-approvee-provider-operator");
+        vm.prank(buyer);
+        identity.approve(sharedController, buyerAgentId);
+        vm.prank(provider);
+        identity.setApprovalForAll(sharedController, true);
+
+        uint256 paymentId = _settle(1e6, keccak256("approvee-controls-provider"));
+
+        assertFalse(router.getPayment(paymentId).reputationEligible);
+    }
+
+    function test_settleProviderApproveeOperatingBuyerTokenDoesNotCreateReputation() public {
+        address sharedController = makeAddr("provider-approvee-buyer-operator");
+        vm.prank(provider);
+        identity.approve(sharedController, providerAgentId);
+        vm.prank(buyer);
+        identity.setApprovalForAll(sharedController, true);
+
+        uint256 paymentId = _settle(1e6, keccak256("approvee-controls-buyer"));
+
         assertFalse(router.getPayment(paymentId).reputationEligible);
     }
 

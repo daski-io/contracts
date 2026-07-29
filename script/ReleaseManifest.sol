@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
 import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
+import {ReleaseBuildProfile} from "./ReleaseBuildProfile.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
 
 /// @notice Loads the reviewed release identity used by verification and
 ///         activation. Expected hashes never come from independent env vars.
-abstract contract ReleaseManifest is Script {
+abstract contract ReleaseManifest is ReleaseBuildProfile {
     uint256 internal constant CONTRACT_COUNT = 9;
     bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
@@ -46,14 +46,7 @@ abstract contract ReleaseManifest is Script {
         manifest.phase = vm.parseJsonString(manifest.source, ".deploymentPhase");
         releaseCandidate = _isReleaseCandidate(manifest.phase);
         manifest.sourceCommit = vm.parseJsonString(manifest.source, ".build.sourceCommit");
-        require(bytes(manifest.sourceCommit).length == 40, "invalid source commit");
-        require(
-            keccak256(bytes(vm.parseJsonString(manifest.source, ".build.solcVersion"))) == keccak256("0.8.24"),
-            "wrong manifest solc version"
-        );
-        require(vm.parseJsonBool(manifest.source, ".build.optimizer"), "optimizer must be enabled");
-        require(vm.parseJsonUint(manifest.source, ".build.optimizerRuns") == 200, "wrong optimizer runs");
-        require(vm.parseJsonBool(manifest.source, ".build.viaIr"), "via-ir must be enabled");
+        _validateBuildProfile(manifest.source, manifest.sourceCommit);
         manifest.profileVersion = vm.parseJsonString(manifest.source, ".x402.profile");
         require(keccak256(bytes(manifest.profileVersion)) == keccak256("daski-exact/1"), "wrong x402 profile");
     }
@@ -117,6 +110,10 @@ abstract contract ReleaseManifest is Script {
         require(manifest.facilitators.length > 0, "facilitator set is empty");
         manifest.outcomeSchemaUid = vm.parseJsonBytes32(manifest.source, ".schemas.outcome.uid");
         manifest.confirmationSchemaUid = vm.parseJsonBytes32(manifest.source, ".schemas.confirmation.uid");
+        _validateSchemaDefinitions(
+            vm.parseJsonString(manifest.source, ".schemas.outcome.definition"),
+            vm.parseJsonString(manifest.source, ".schemas.confirmation.definition")
+        );
     }
 
     function _latestFacilitators(Manifest memory manifest) internal view returns (address[] memory expected) {

@@ -3,10 +3,13 @@
   "deploymentPhase": "release-candidate",
   "build": {
     "sourceCommit": "0000000000000000000000000000000000000000",
-    "solcVersion": "0.8.24",
+    "solcVersion": "0.8.24+commit.e11b9ed9",
     "optimizer": true,
     "optimizerRuns": 200,
-    "viaIr": true
+    "viaIr": true,
+    "evmVersion": "cancun",
+    "foundryVersion": "1.5.1-stable",
+    "foundryCommit": "b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2"
   },
   "contracts": {
     "order": [
