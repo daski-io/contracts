@@ -7,113 +7,55 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import verify_release_build as build_verifier
-
-
-class ReleaseError(RuntimeError):
-    pass
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ReleaseError(message)
-
-
-def output(command: list[str], cwd: Path) -> str:
-    result = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
-    require(result.returncode == 0, result.stderr.strip() or f"{command[0]} failed")
-    return result.stdout.strip()
-
-
-def run_logged(command: list[str], cwd: Path, env: dict[str, str], log_path: Path) -> None:
-    with log_path.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(
-            command,
-            cwd=cwd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        assert process.stdout is not None
-        for line in process.stdout:
-            print(line, end="")
-            log.write(line)
-        require(process.wait() == 0, f"{command[0]} failed; see {log_path}")
-
-
-def check_checkout(repo: Path, manifest: dict, release_ref: str) -> str:
-    status = output(["git", "status", "--porcelain=v1", "--untracked-files=all"], repo)
-    require(not status, f"release checkout is dirty:\n{status}")
-    head = output(["git", "rev-parse", "HEAD"], repo)
-    require(head == manifest["build"]["sourceCommit"], "HEAD does not equal build.sourceCommit")
-    ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", head, release_ref],
-        cwd=repo,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    require(ancestor.returncode == 0, f"{release_ref} does not contain HEAD")
-    submodules = output(["git", "submodule", "status", "--recursive"], repo)
-    bad = [line for line in submodules.splitlines() if line and not line.startswith(" ")]
-    require(not bad, "submodule commit does not match its recorded gitlink")
-    require((repo / "foundry.lock").is_file(), "foundry.lock is missing")
-    require(not (repo / "out").exists() and not (repo / "cache").exists(), "stale build output exists")
-    return head
-
-
-def forge_script(
-    repo: Path,
-    forge: str,
-    script: str,
-    rpc_url: str,
-    output_dir: Path,
-    cache_dir: Path,
-    env: dict[str, str],
-    log_path: Path,
-    broadcast: bool = False,
-) -> None:
-    command = [
-        forge,
-        "script",
-        script,
-        "--rpc-url",
-        rpc_url,
-        "--out",
-        str(output_dir),
-        "--cache-path",
-        str(cache_dir),
-    ]
-    if broadcast:
-        command.append("--broadcast")
-    run_logged(command, repo, env, log_path)
+import release_revision as revision_verifier
+from release_build import (
+    ReleaseError,
+    build_release_targets,
+    check_checkout,
+    effective_foundry_config,
+    forge_script,
+    hermetic_environment,
+    output,
+    require,
+    runtime_environment,
+    validate_ambient_environment,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("verify", "accept", "activate"))
+    parser.add_argument(
+        "mode",
+        choices=("verify", "accept", "guardian", "activate", "pause", "unpause", "revision-payload"),
+    )
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--release-ref", default="origin/develop")
     parser.add_argument("--evidence-dir", required=True, type=Path)
     parser.add_argument("--active", action="store_true", help="verify the operational rather than dark state")
     parser.add_argument("--emit-only", action="store_true", help="emit a reviewed Safe payload without broadcasting")
+    parser.add_argument("--revision", action="append", default=[], type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    require(not (args.mode == "verify" and args.emit_only), "--emit-only requires accept or activate")
+    governance_modes = ("accept", "guardian", "activate", "pause", "unpause")
+    require(not (args.mode == "verify" and args.emit_only), "--emit-only requires a governance mode")
+    require(not (args.mode not in governance_modes and args.emit_only), "--emit-only requires a governance mode")
     require(not (args.mode != "verify" and args.active), "--active is only valid with verify")
+    require(args.mode != "revision-payload" or args.revision, "revision-payload requires --revision")
     forge = shutil.which("forge")
     cast = shutil.which("cast")
     require(forge is not None and cast is not None, "forge and cast must be on PATH")
+    forge = str(Path(forge).resolve())
+    cast = str(Path(cast).resolve())
+    validate_ambient_environment(os.environ)
 
     repo = Path(output(["git", "rev-parse", "--show-toplevel"], Path.cwd())).resolve()
     manifest_path = args.manifest.resolve()
@@ -129,6 +71,7 @@ def main() -> None:
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
     forge_output = output([forge, "--version"], repo)
+    cast_output = output([cast, "--version"], repo)
     build_verifier.validate_manifest(manifest, forge_output)
     head = check_checkout(repo, manifest, args.release_ref)
 
@@ -138,41 +81,109 @@ def main() -> None:
         pinned_manifest.write_bytes(manifest_bytes)
         output_dir = temporary_root / "out"
         cache_dir = temporary_root / "cache"
-        run_logged(
-            [
-                forge,
-                "build",
-                "src",
-                "script/Deploy.s.sol",
-                "--force",
-                "--out",
-                str(output_dir),
-                "--cache-path",
-                str(cache_dir),
-            ],
+        build_info_dir = temporary_root / "build-info"
+        build_env = hermetic_environment(temporary_root)
+        foundry_config, foundry_config_hash = effective_foundry_config(repo, forge, cast, build_env)
+        build_release_targets(
             repo,
-            os.environ.copy(),
+            forge,
+            output_dir,
+            cache_dir,
+            build_info_dir,
+            build_env,
             temporary_root / "build.log",
         )
-        local_evidence = build_verifier.verify(pinned_manifest, output_dir, forge, cast)
+        local_evidence = build_verifier.verify(
+            pinned_manifest, output_dir, forge, cast, repo, foundry_config_hash
+        )
+        check_checkout(repo, manifest, args.release_ref)
+        revision_evidence = revision_verifier.process(
+            [path.resolve() for path in args.revision],
+            temporary_root / "revisions",
+            manifest_bytes,
+            manifest,
+            manifest["chainId"],
+            args.rpc_url,
+            cast,
+            args.mode == "revision-payload",
+        )
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         action = f"{args.mode}-{'payload' if args.emit_only else 'execution'}"
         if args.mode == "verify":
             action = f"verify-{'active' if args.active else 'dark'}"
-        evidence_dir = evidence_root / local_evidence["manifestHash"].removeprefix("0x") / f"{timestamp}-{action}"
+        evidence_key = revision_evidence.effective_release_hash
+        if revision_evidence.proposal is not None:
+            evidence_key = revision_evidence.proposal["revisionIntentHash"]
+            action = "revision-payload"
+        evidence_dir = evidence_root / evidence_key.removeprefix("0x") / f"{timestamp}-{action}"
         require(not evidence_dir.exists(), f"evidence run already exists: {evidence_dir}")
         evidence_dir.mkdir(parents=True)
         shutil.copyfile(pinned_manifest, evidence_dir / "release-manifest.json")
         shutil.copyfile(temporary_root / "build.log", evidence_dir / "build.log")
+        shutil.copytree(build_info_dir, evidence_dir / "build-info")
+        shutil.copytree(temporary_root / "revisions", evidence_dir / "revisions")
+        (evidence_dir / "foundry-config.json").write_text(
+            json.dumps(foundry_config, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         (evidence_dir / "local-build.json").write_text(
             json.dumps(local_evidence, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 
-        release_env = os.environ.copy()
+        release_env = runtime_environment()
         release_env["RELEASE_MANIFEST_PATH"] = str(evidence_dir / "release-manifest.json")
+        provenance_path = evidence_dir / "provenance.json"
+        provenance_path.write_text(
+            json.dumps(
+                {
+                    "manifestHash": local_evidence["manifestHash"],
+                    "sourceClosureHash": local_evidence["sourceProvenance"]["sourceClosureHash"],
+                    "compilerInputHash": local_evidence["sourceProvenance"]["compilerInputHash"],
+                    "foundryConfigHash": foundry_config_hash,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        release_env["RELEASE_PROVENANCE_PATH"] = str(provenance_path)
+        release_env["EFFECTIVE_RELEASE_HASH"] = revision_evidence.effective_release_hash
+        revision_evidence_path = evidence_dir / "revision-evidence.json"
+        revision_evidence_path.write_text(
+            json.dumps(
+                {
+                    "baseManifestHash": local_evidence["manifestHash"],
+                    "effectiveReleaseHash": revision_evidence.effective_release_hash,
+                    "effectiveFacilitators": revision_evidence.effective_facilitators,
+                    "revisions": revision_evidence.finalized,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        release_env["RELEASE_REVISION_EVIDENCE_PATH"] = str(revision_evidence_path)
 
-        if args.mode == "verify":
+        if args.mode == "revision-payload":
+            release_env["DEPLOYMENT_ACTIVE"] = "true"
+            release_env["EXTERNAL_DEPENDENCY_PAUSED"] = "false"
+            forge_script(
+                repo,
+                forge,
+                "script/VerifyDeployment.s.sol",
+                args.rpc_url,
+                output_dir,
+                cache_dir,
+                release_env,
+                evidence_dir / "pre-proposal-verification.log",
+            )
+            (evidence_dir / "revision-payload.json").write_text(
+                json.dumps(revision_evidence.proposal, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        elif args.mode == "verify":
             release_env["DEPLOYMENT_ACTIVE"] = str(args.active).lower()
             forge_script(
                 repo,
@@ -185,8 +196,9 @@ def main() -> None:
                 evidence_dir / "verification.log",
             )
         else:
-            if args.mode == "activate":
-                release_env["DEPLOYMENT_ACTIVE"] = "false"
+            if args.mode in ("activate", "unpause"):
+                release_env["DEPLOYMENT_ACTIVE"] = str(args.mode == "unpause").lower()
+                release_env["EXTERNAL_DEPENDENCY_PAUSED"] = str(args.mode == "unpause").lower()
                 forge_script(
                     repo,
                     forge,
@@ -212,8 +224,9 @@ def main() -> None:
                 evidence_dir / f"{args.mode}-batch.log",
                 broadcast=not args.emit_only,
             )
-            if not args.emit_only:
-                release_env["DEPLOYMENT_ACTIVE"] = str(args.mode == "activate").lower()
+            if not args.emit_only and args.mode != "guardian":
+                release_env["DEPLOYMENT_ACTIVE"] = str(args.mode in ("activate", "pause", "unpause")).lower()
+                release_env["EXTERNAL_DEPENDENCY_PAUSED"] = str(args.mode == "pause").lower()
                 forge_script(
                     repo,
                     forge,
@@ -225,12 +238,24 @@ def main() -> None:
                     evidence_dir / "post-execution.log",
                 )
 
+        revision_verifier.verify_inputs_unchanged(revision_evidence, cast)
+        check_checkout(repo, manifest, args.release_ref)
         summary = {
             "mode": args.mode,
             "emitOnly": args.emit_only,
             "manifestHash": local_evidence["manifestHash"],
             "sourceCommit": head,
             "releaseRef": args.release_ref,
+            "forgePath": forge,
+            "castPath": cast,
+            "forgeVersion": forge_output,
+            "castVersion": cast_output,
+            "sourceClosureHash": local_evidence["sourceProvenance"]["sourceClosureHash"],
+            "compilerInputHash": local_evidence["sourceProvenance"]["compilerInputHash"],
+            "foundryConfigHash": foundry_config_hash,
+            "effectiveReleaseHash": revision_evidence.effective_release_hash,
+            "effectiveFacilitators": revision_evidence.effective_facilitators,
+            "revisions": revision_evidence.finalized,
         }
         (evidence_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         print(f"Release evidence: {evidence_dir}")
@@ -239,5 +264,12 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, json.JSONDecodeError, ReleaseError, build_verifier.VerificationError) as error:
+    except (
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        ReleaseError,
+        build_verifier.VerificationError,
+        revision_verifier.RevisionError,
+    ) as error:
         raise SystemExit(f"release failed: {error}") from error

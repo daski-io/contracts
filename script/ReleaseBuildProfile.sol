@@ -13,6 +13,9 @@ abstract contract ReleaseBuildProfile is Script {
 
     function _validateBuildProfile(string memory json, string memory sourceCommit) internal pure {
         _validateSourceCommit(sourceCommit);
+        require(vm.parseJsonBytes32(json, ".build.sourceClosureHash") != bytes32(0), "zero source closure hash");
+        require(vm.parseJsonBytes32(json, ".build.compilerInputHash") != bytes32(0), "zero compiler input hash");
+        require(vm.parseJsonBytes32(json, ".build.foundryConfigHash") != bytes32(0), "zero Foundry config hash");
         require(
             keccak256(bytes(vm.parseJsonString(json, ".build.solcVersion"))) == keccak256(bytes(SOLC_VERSION)),
             "wrong manifest solc version"

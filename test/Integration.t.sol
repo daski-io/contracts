@@ -220,6 +220,51 @@ contract IntegrationTest is Test {
         return provider;
     }
 
+    function test_externalDependencyPauseBlocksEveryIdentityDependentWrite() public {
+        agentIndex.setPauseGuardian(address(this));
+        validationRegistry.setPauseGuardian(address(this));
+        registry.setPauseGuardian(address(this));
+        services.setPauseGuardian(address(this));
+        router.setPauseGuardian(address(this));
+
+        agentIndex.pauseExternalDependency();
+        validationRegistry.pauseExternalDependency();
+        registry.pauseExternalDependency();
+        services.pauseExternalDependency();
+        router.pauseExternalDependency();
+
+        vm.expectRevert("external dependency paused");
+        agentIndex.registerWithSig("", address(0), 0, "");
+        vm.expectRevert("external dependency paused");
+        agentIndex.claim(0);
+        vm.expectRevert("external dependency paused");
+        agentIndex.unbind();
+        vm.expectRevert("external dependency paused");
+        validationRegistry.validationRequest(address(1), 0, "request", bytes32(uint256(1)));
+        vm.expectRevert("external dependency paused");
+        registry.register(0);
+        vm.expectRevert("external dependency paused");
+        registry.setActive(0, false);
+        vm.expectRevert("external dependency paused");
+        services.registerService(0, "service", "1", "uri", address(0));
+        vm.expectRevert("external dependency paused");
+        services.updateServiceURI(bytes32(0), "uri");
+        vm.expectRevert("external dependency paused");
+        services.setServiceWallet(bytes32(0), address(1));
+        vm.expectRevert("external dependency paused");
+        services.setActive(bytes32(0), false);
+        vm.expectRevert("external dependency paused");
+        vm.prank(address(adapter));
+        router.settle(address(usdc), 1, bytes32(0), 0, address(1), 0, bytes32(0));
+        vm.expectRevert("external dependency paused");
+        router.refund(0, 1);
+
+        vm.expectRevert("no such request");
+        validationRegistry.validationResponse(bytes32(0), 1, "", bytes32(0), "");
+        vm.expectRevert("payment not found");
+        router.syncReputation(0);
+    }
+
     function test_fullProtocolFlow() public {
         usdc.mint(buyer, 1000e6);
 

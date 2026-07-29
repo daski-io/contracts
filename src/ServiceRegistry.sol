@@ -73,7 +73,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         string calldata version,
         string calldata serviceURI,
         address serviceWallet
-    ) external returns (bytes32 serviceId) {
+    ) external whenExternalDependencyOperational returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
         _requireProviderParticipantsAllowed(providerAgentId, msg.sender);
 
@@ -115,7 +115,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     }
 
     /// @inheritdoc IServiceRegistry
-    function updateServiceURI(bytes32 serviceId, string calldata newURI) external {
+    function updateServiceURI(bytes32 serviceId, string calldata newURI) external whenExternalDependencyOperational {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
@@ -130,7 +130,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     ///      register with serviceWallet = address(0) and never call this.
     ///      Non-zero overrides are valid only while the authorizing owner and
     ///      agentWallet both remain current.
-    function setServiceWallet(bytes32 serviceId, address newWallet) external {
+    function setServiceWallet(bytes32 serviceId, address newWallet) external whenExternalDependencyOperational {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
@@ -143,7 +143,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @dev Deactivating a service flips the flag but preserves the row so
     ///      historical payment records and reputation queries still resolve.
     ///      _servicesByProvider is append-only; deactivate does not remove.
-    function setActive(bytes32 serviceId, bool active) external {
+    function setActive(bytes32 serviceId, bool active) external whenExternalDependencyOperational {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);

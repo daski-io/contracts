@@ -24,62 +24,109 @@ import {ReleaseManifest} from "./ReleaseManifest.sol";
 ///         those into the Safe app instead. Stack identity comes from the
 ///         same reviewed release manifest VerifyDeployment.s.sol reads.
 contract ExecuteGovernanceBatches is ReleaseManifest {
-    function run() external {
-        bool emitOnly = vm.envOr("EMIT_ONLY", false);
+    struct RunContext {
+        bool emitOnly;
         uint256 deployerKey;
         address sender;
-        if (emitOnly) {
-            sender = vm.envAddress("GOVERNANCE_SENDER");
-        } else {
-            deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-            sender = vm.addr(deployerKey);
-        }
-        string memory batch = vm.envString("GOVERNANCE_BATCH");
+        string batch;
+        bytes32 batchId;
+    }
+
+    function run() external {
+        RunContext memory context = _runContext();
         Manifest memory manifest = _loadManifest();
-        address safe = manifest.admin;
-        DeploymentValidation.Stack memory deployment = manifest.stack;
-
         SafeDeployment.validateCanonicalDeployment();
-        _validateManifestCore(manifest);
+        (address[] memory targets, bytes[] memory calls) = _governanceCalls(context, manifest);
 
-        address[] memory targets;
-        bytes[] memory calls;
-        bytes32 batchId = keccak256(bytes(batch));
-        if (batchId == keccak256("accept")) {
-            DeploymentValidation.validateDarkState(deployment);
-            DeploymentValidation.validatePendingAdmins(
-                DeploymentValidation.adminContracts(deployment), sender, safe, manifest.governance
-            );
-            (targets, calls) = GovernanceBatches.adminAcceptance(deployment);
-        } else if (batchId == keccak256("activate")) {
-            DeploymentValidation.validateAcceptedAdmins(
-                DeploymentValidation.adminContracts(deployment), safe, manifest.governance
-            );
-            DeploymentValidation.validateDarkState(deployment);
-            (targets, calls) = GovernanceBatches.paymentActivation(deployment);
-        } else {
-            revert("GOVERNANCE_BATCH must be accept or activate");
-        }
-
-        _logBatch(batch, targets, calls);
-        if (emitOnly) {
+        _logBatch(context.batch, targets, calls);
+        if (context.emitOnly) {
             console.log("Payload emitted without execution for manifest:");
             console.logBytes32(manifest.hash);
+            console.log("Effective release hash:");
+            console.logBytes32(_effectiveReleaseHash(manifest));
             return;
         }
 
-        vm.startBroadcast(deployerKey);
-        SafeDeployment.execMultiSendBatch(safe, sender, targets, calls);
+        vm.startBroadcast(context.deployerKey);
+        SafeDeployment.execMultiSendBatch(manifest.admin, context.sender, targets, calls);
         vm.stopBroadcast();
+        _validateExecutedBatch(context.batchId, manifest);
+    }
 
+    function _runContext() private view returns (RunContext memory context) {
+        context.emitOnly = vm.envOr("EMIT_ONLY", false);
+        if (context.emitOnly) {
+            context.sender = vm.envAddress("GOVERNANCE_SENDER");
+        } else {
+            context.deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+            context.sender = vm.addr(context.deployerKey);
+        }
+        context.batch = vm.envString("GOVERNANCE_BATCH");
+        context.batchId = keccak256(bytes(context.batch));
+    }
+
+    function _governanceCalls(RunContext memory context, Manifest memory manifest)
+        private
+        view
+        returns (address[] memory targets, bytes[] memory calls)
+    {
+        DeploymentValidation.Stack memory deployment = manifest.stack;
+        if (context.batchId == keccak256("guardian")) {
+            _validateGuardianConfigurationCore(manifest);
+        } else if (context.batchId == keccak256("pause")) {
+            _validatePausedManifestCore(manifest, false);
+        } else if (context.batchId == keccak256("unpause")) {
+            _validateUnpauseManifestCore(manifest);
+        } else {
+            _validateManifestCore(manifest);
+        }
+
+        if (context.batchId == keccak256("accept")) {
+            DeploymentValidation.validateDarkState(deployment);
+            DeploymentValidation.validatePendingAdmins(
+                DeploymentValidation.adminContracts(deployment), context.sender, manifest.admin, manifest.governance
+            );
+            return GovernanceBatches.adminAcceptance(deployment);
+        }
+        DeploymentValidation.validateAcceptedAdmins(
+            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance
+        );
+        if (context.batchId == keccak256("guardian")) {
+            return GovernanceBatches.pauseGuardianConfiguration(deployment, manifest.pauseGuardian);
+        }
+        if (context.batchId == keccak256("activate")) {
+            DeploymentValidation.validateDarkState(deployment);
+            return GovernanceBatches.paymentActivation(deployment);
+        }
+        if (context.batchId == keccak256("pause")) {
+            return GovernanceBatches.externalDependencyPause(deployment);
+        }
+        if (context.batchId == keccak256("unpause")) {
+            return GovernanceBatches.externalDependencyUnpause(deployment);
+        }
+        revert("unsupported governance batch");
+    }
+
+    function _validateExecutedBatch(bytes32 batchId, Manifest memory manifest) private view {
+        DeploymentValidation.Stack memory deployment = manifest.stack;
         if (batchId == keccak256("accept")) {
             DeploymentValidation.validateAcceptedAdmins(
-                DeploymentValidation.adminContracts(deployment), safe, manifest.governance
+                DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance
             );
-            console.log("Batch 1 executed: all nine admin roles accepted by", safe);
-        } else {
+            console.log("Batch 1 executed: all nine admin roles accepted by", manifest.admin);
+        } else if (batchId == keccak256("guardian")) {
+            _validateManifestCore(manifest);
+            console.log("Pause guardian configuration executed");
+        } else if (batchId == keccak256("activate")) {
             DeploymentValidation.validateOperationalState(deployment);
             console.log("Batch 2 executed: token + adapters active; deployment operational");
+        } else if (batchId == keccak256("pause")) {
+            _validatePausedManifestCore(manifest, true);
+            console.log("External dependency pause executed");
+        } else {
+            _validateManifestCore(manifest);
+            DeploymentValidation.validateOperationalState(deployment);
+            console.log("External dependency unpause executed");
         }
     }
 

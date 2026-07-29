@@ -69,7 +69,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         address buyerWallet,
         uint256 providerAgentId,
         bytes32 serviceId
-    ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
+    ) external onlyAdapter nonReentrant whenExternalDependencyOperational returns (uint256 paymentId) {
         Settlement memory request = Settlement({
             token: token,
             amount: amount,
@@ -165,7 +165,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
     /// @inheritdoc IPaymentRouter
     /// @dev The authorized caller funds the refund. Historical refunds always
     ///      return to the wallet that made the original payment.
-    function refund(uint256 paymentId, uint256 amountToBuyer) external nonReentrant {
+    function refund(uint256 paymentId, uint256 amountToBuyer) external nonReentrant whenExternalDependencyOperational {
         require(amountToBuyer > 0, "zero refund");
         PaymentRecord memory record = _payments[paymentId];
         require(record.amount > 0, "payment not found");

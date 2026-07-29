@@ -28,6 +28,7 @@ FOUNDRY_COMMIT = "b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2"
 OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome"
 CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation"
 UUPS_SOURCE = "lib/openzeppelin-contracts/contracts/proxy/utils/UUPSUpgradeable.sol"
+HASH_FIELDS = ("sourceClosureHash", "compilerInputHash", "foundryConfigHash")
 
 
 class VerificationError(RuntimeError):
@@ -63,6 +64,10 @@ def validate_manifest(manifest: dict[str, Any], forge_output: str) -> None:
     source_commit = build.get("sourceCommit", "")
     require(re.fullmatch(r"[0-9a-f]{40}", source_commit) is not None, "invalid source commit")
     require(source_commit != "0" * 40, "zero source commit")
+    for field in HASH_FIELDS:
+        value = build.get(field, "")
+        require(re.fullmatch(r"0x[0-9a-f]{64}", value) is not None, f"invalid {field}")
+        require(int(value, 16) != 0, f"zero {field}")
     require(build.get("solcVersion") == SOLC_VERSION, "wrong manifest solc version")
     require(build.get("optimizer") is True, "optimizer must be enabled")
     require(build.get("optimizerRuns") == 200, "wrong optimizer runs")
@@ -108,6 +113,131 @@ def artifact_at(output: Path, contract: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    result = subprocess.run(["git", *args], cwd=repo, check=False, capture_output=True)
+    require(result.returncode == 0, result.stderr.decode(errors="replace").strip() or "git object read failed")
+    return result.stdout
+
+
+def _submodule_identities(repo: Path) -> list[tuple[Path, str, str]]:
+    result = subprocess.run(
+        ["git", "submodule", "status", "--recursive"],
+        cwd=repo,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    require(result.returncode == 0, result.stderr.strip() or "git submodule status failed")
+    identities: list[tuple[Path, str, str]] = []
+    for line in result.stdout.splitlines():
+        require(line.startswith(" "), "submodule commit does not match its recorded gitlink")
+        commit, path, *_ = line[1:].split()
+        identities.append(((repo / path).resolve(), path, commit))
+    return sorted(identities, key=lambda item: len(item[1]), reverse=True)
+
+
+def _source_git_bytes(
+    repo: Path, source_commit: str, logical_path: str, submodules: list[tuple[Path, str, str]]
+) -> tuple[str, bytes]:
+    require("\\" not in logical_path, f"non-canonical source path: {logical_path}")
+    relative = Path(logical_path)
+    require(not relative.is_absolute() and ".." not in relative.parts, f"source escapes repository: {logical_path}")
+    resolved = (repo / relative).resolve()
+    try:
+        resolved.relative_to(repo.resolve())
+    except ValueError as error:
+        raise VerificationError(f"source escapes repository: {logical_path}") from error
+
+    for submodule_root, submodule_path, commit in submodules:
+        try:
+            nested = resolved.relative_to(submodule_root).as_posix()
+        except ValueError:
+            continue
+        _git_bytes(submodule_root, "ls-files", "--error-unmatch", "--", nested)
+        return f"{submodule_path}@{commit}", _git_bytes(submodule_root, "show", f"{commit}:{nested}")
+
+    normalized = relative.as_posix()
+    _git_bytes(repo, "ls-files", "--error-unmatch", "--", normalized)
+    return f"root@{source_commit}", _git_bytes(repo, "show", f"{source_commit}:{normalized}")
+
+
+def calculate_source_closure(
+    repo: Path, output: Path, source_commit: str, cast: str
+) -> dict[str, Any]:
+    submodules = _submodule_identities(repo)
+    sources: dict[str, tuple[str, str]] = {}
+    compiler_units: dict[str, dict[str, Any]] = {}
+
+    for artifact_path in sorted(output.glob("**/*.json")):
+        if "build-info" in artifact_path.parts:
+            continue
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        raw = artifact.get("rawMetadata")
+        if not raw:
+            continue
+        metadata = json.loads(raw)
+        metadata_sources = metadata.get("sources", {})
+        if not metadata_sources:
+            continue
+        normalized_sources: dict[str, str] = {}
+        for logical_path, source_data in metadata_sources.items():
+            expected_hash = source_data.get("keccak256", "").lower()
+            require(re.fullmatch(r"0x[0-9a-f]{64}", expected_hash) is not None, "invalid metadata source hash")
+            repository_identity, git_content = _source_git_bytes(
+                repo, source_commit, logical_path, submodules
+            )
+            actual_hash = keccak(git_content, cast)
+            require(actual_hash == expected_hash, f"source differs from Git object: {logical_path}")
+            prior = sources.get(logical_path)
+            current = (repository_identity, actual_hash)
+            require(prior is None or prior == current, f"conflicting source identity: {logical_path}")
+            sources[logical_path] = current
+            normalized_sources[logical_path] = actual_hash
+
+        unit = {
+            "compiler": metadata.get("compiler"),
+            "language": metadata.get("language"),
+            "settings": metadata.get("settings"),
+            "sources": dict(sorted(normalized_sources.items())),
+        }
+        compiler_units[keccak(canonical_json(unit), cast)] = unit
+
+    require(sources, "compiler source closure is empty")
+    closure = [
+        {"logicalPath": path, "repositoryIdentity": identity, "sourceContentHash": source_hash}
+        for path, (identity, source_hash) in sorted(sources.items())
+    ]
+    compiler_input = [compiler_units[key] for key in sorted(compiler_units)]
+    source_closure_hash = keccak(canonical_json(closure), cast)
+    compiler_input_hash = keccak(canonical_json(compiler_input), cast)
+    return {
+        "sourceClosureHash": source_closure_hash,
+        "compilerInputHash": compiler_input_hash,
+        "sources": closure,
+        "compilerUnitHashes": sorted(compiler_units),
+        "compilerInputs": compiler_input,
+    }
+
+
+def verify_source_closure(
+    repo: Path, output: Path, manifest: dict[str, Any], cast: str
+) -> dict[str, Any]:
+    evidence = calculate_source_closure(repo, output, manifest["build"]["sourceCommit"], cast)
+    require(
+        evidence["sourceClosureHash"] == manifest["build"]["sourceClosureHash"],
+        "source closure hash mismatch",
+    )
+    require(
+        evidence["compilerInputHash"] == manifest["build"]["compilerInputHash"],
+        "compiler input hash mismatch",
+    )
+    return evidence
+
+
 def validate_uups_immutable(artifact: dict[str, Any]) -> list[dict[str, int]]:
     deployed = artifact.get("deployedBytecode", {})
     references = deployed.get("immutableReferences") or {}
@@ -146,7 +276,14 @@ def patched_runtime_hash(artifact: dict[str, Any], implementation: str, cast: st
     return keccak(bytes(runtime), cast)
 
 
-def verify(manifest_path: Path, output: Path, forge: str, cast: str) -> dict[str, Any]:
+def verify(
+    manifest_path: Path,
+    output: Path,
+    forge: str,
+    cast: str,
+    repo: Path | None = None,
+    foundry_config_hash: str | None = None,
+) -> dict[str, Any]:
     raw_manifest = manifest_path.read_bytes()
     manifest = json.loads(raw_manifest)
     forge_output = command_output([forge, "--version"])
@@ -154,6 +291,8 @@ def verify(manifest_path: Path, output: Path, forge: str, cast: str) -> dict[str
     cast_version, cast_commit = parse_toolchain(command_output([cast, "--version"]), "cast")
     require(cast_version == FOUNDRY_VERSION, "wrong cast version")
     require(cast_commit == FOUNDRY_COMMIT, "wrong cast commit")
+    if foundry_config_hash is not None:
+        require(foundry_config_hash == manifest["build"]["foundryConfigHash"], "Foundry config hash mismatch")
     contracts = manifest["contracts"]
 
     implementation_hashes: list[str] = []
@@ -178,13 +317,16 @@ def verify(manifest_path: Path, output: Path, forge: str, cast: str) -> dict[str
         "proxy runtime hash mismatch",
     )
 
-    return {
+    evidence = {
         "manifestHash": keccak(raw_manifest, cast),
         "sourceCommit": manifest["build"]["sourceCommit"],
         "build": manifest["build"],
         "proxyRuntimeCodehash": proxy_hash,
         "implementationRuntimeCodehashes": implementation_hashes,
     }
+    if repo is not None:
+        evidence["sourceProvenance"] = verify_source_closure(repo, output, manifest, cast)
+    return evidence
 
 
 def main() -> None:

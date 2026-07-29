@@ -75,7 +75,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         listingFee = _listingFee;
     }
 
-    function register(uint256 agentId) external nonReentrant {
+    function register(uint256 agentId) external nonReentrant whenExternalDependencyOperational {
         require(identity.ownerOf(agentId) == msg.sender, "not agent owner");
         require(!_isRegistered(agentId), "already registered");
         _requireNotSanctioned(msg.sender);
@@ -94,7 +94,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         emit ProviderRegistered(agentId, msg.sender);
     }
 
-    function setActive(uint256 agentId, bool active) external {
+    function setActive(uint256 agentId, bool active) external whenExternalDependencyOperational {
         LibAgentAuth.requireAgentAuth(identity, agentId, msg.sender);
         require(_isRegistered(agentId), "not registered");
         _requireNotSanctioned(msg.sender);

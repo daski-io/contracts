@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -96,6 +97,9 @@ class ReleaseBuildVerifierTest(unittest.TestCase):
         self.manifest = {
             "build": {
                 "sourceCommit": "1" * 40,
+                "sourceClosureHash": "0x" + "11" * 32,
+                "compilerInputHash": "0x" + "22" * 32,
+                "foundryConfigHash": "0x" + "33" * 32,
                 "solcVersion": verifier.SOLC_VERSION,
                 "optimizer": True,
                 "optimizerRuns": 200,
@@ -157,10 +161,107 @@ class ReleaseBuildVerifierTest(unittest.TestCase):
         with self.assertRaisesRegex(verifier.VerificationError, "proxy runtime hash mismatch"):
             verifier.verify(self.manifest_path, self.output, "forge", "cast")
 
+    @patch.object(verifier, "command_output", side_effect=fake_command)
+    def test_rejects_foundry_config_hash_mismatch(self, _command) -> None:
+        with self.assertRaisesRegex(verifier.VerificationError, "Foundry config hash mismatch"):
+            verifier.verify(
+                self.manifest_path,
+                self.output,
+                "forge",
+                "cast",
+                foundry_config_hash="0x" + "44" * 32,
+            )
+
     def test_rejects_wrong_evm_version(self) -> None:
         self.manifest["build"]["evmVersion"] = "prague"
         with self.assertRaisesRegex(verifier.VerificationError, "wrong manifest EVM version"):
             verifier.validate_manifest(self.manifest, FORGE_OUTPUT)
+
+
+class SourceClosureTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name)
+        subprocess.run(["git", "init", "-b", "develop"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Source Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.email", "source@example.com"], cwd=self.repo, check=True)
+        source = self.repo / "src" / "A.sol"
+        source.parent.mkdir()
+        source.write_text("contract A {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "src/A.sol"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "source"], cwd=self.repo, check=True, capture_output=True)
+        self.commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        self.output = self.repo / "artifacts"
+        artifact_dir = self.output / "A.sol"
+        artifact_dir.mkdir(parents=True)
+        source_hash = verifier.keccak(source.read_bytes(), "cast")
+        metadata = {
+            "compiler": {"version": verifier.SOLC_VERSION},
+            "language": "Solidity",
+            "settings": {"optimizer": {"enabled": True, "runs": 200}},
+            "sources": {"src/A.sol": {"keccak256": source_hash}},
+        }
+        (artifact_dir / "A.json").write_text(
+            json.dumps({"rawMetadata": json.dumps(metadata)}), encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_source_closure_is_bound_to_git_object(self) -> None:
+        evidence = verifier.calculate_source_closure(self.repo, self.output, self.commit, "cast")
+        self.assertEqual(evidence["sources"][0]["repositoryIdentity"], f"root@{self.commit}")
+
+    def test_untracked_compiler_source_is_rejected(self) -> None:
+        source = self.repo / "ignored.sol"
+        source.write_text("contract Ignored {}\n", encoding="utf-8")
+        artifact_path = self.output / "A.sol" / "A.json"
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        metadata = json.loads(artifact["rawMetadata"])
+        metadata["sources"] = {"ignored.sol": {"keccak256": verifier.keccak(source.read_bytes(), "cast")}}
+        artifact["rawMetadata"] = json.dumps(metadata)
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        with self.assertRaises(verifier.VerificationError):
+            verifier.calculate_source_closure(self.repo, self.output, self.commit, "cast")
+
+    def test_worktree_source_cannot_replace_committed_source(self) -> None:
+        source = self.repo / "src" / "A.sol"
+        source.write_text("contract Replaced {}\n", encoding="utf-8")
+        artifact_path = self.output / "A.sol" / "A.json"
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        metadata = json.loads(artifact["rawMetadata"])
+        metadata["sources"]["src/A.sol"]["keccak256"] = verifier.keccak(source.read_bytes(), "cast")
+        artifact["rawMetadata"] = json.dumps(metadata)
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        with self.assertRaisesRegex(verifier.VerificationError, "differs from Git object"):
+            verifier.calculate_source_closure(self.repo, self.output, self.commit, "cast")
+
+    def test_parent_traversal_source_is_rejected(self) -> None:
+        artifact_path = self.output / "A.sol" / "A.json"
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        metadata = json.loads(artifact["rawMetadata"])
+        source_hash = metadata["sources"]["src/A.sol"]["keccak256"]
+        metadata["sources"] = {"../A.sol": {"keccak256": source_hash}}
+        artifact["rawMetadata"] = json.dumps(metadata)
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        with self.assertRaisesRegex(verifier.VerificationError, "escapes repository"):
+            verifier.calculate_source_closure(self.repo, self.output, self.commit, "cast")
+
+    def test_symlink_escape_source_is_rejected(self) -> None:
+        link = self.repo / "escape.sol"
+        link.symlink_to("/etc/hosts")
+        artifact_path = self.output / "A.sol" / "A.json"
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        metadata = json.loads(artifact["rawMetadata"])
+        metadata["sources"] = {
+            "escape.sol": {"keccak256": verifier.keccak(Path("/etc/hosts").read_bytes(), "cast")}
+        }
+        artifact["rawMetadata"] = json.dumps(metadata)
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        with self.assertRaisesRegex(verifier.VerificationError, "escapes repository"):
+            verifier.calculate_source_closure(self.repo, self.output, self.commit, "cast")
 
 
 if __name__ == "__main__":

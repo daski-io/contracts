@@ -3,27 +3,24 @@ pragma solidity ^0.8.24;
 
 import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
+import {ExternalIdentityValidation} from "./ExternalIdentityValidation.sol";
 import {ReleaseBuildProfile} from "./ReleaseBuildProfile.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
 
 /// @notice Loads the reviewed release identity used by verification and
 ///         activation. Expected hashes never come from independent env vars.
-abstract contract ReleaseManifest is ReleaseBuildProfile {
+abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValidation {
     uint256 internal constant CONTRACT_COUNT = 9;
     bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
 
     struct Manifest {
-        string source;
         bytes32 hash;
-        string phase;
-        string sourceCommit;
-        string profileVersion;
         DeploymentValidation.Stack stack;
         address eas;
         address schemaRegistry;
         address admin;
+        address pauseGuardian;
         SafeDeployment.Profile governance;
-        address[] facilitators;
         address[9] proxies;
         address[9] implementations;
         bytes32[9] proxyCodehashes;
@@ -32,27 +29,53 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
         bytes32 confirmationSchemaUid;
     }
 
+    struct RevisionState {
+        address[] facilitators;
+        bytes32 effectiveHash;
+    }
+
     function _loadManifest() internal view returns (Manifest memory manifest) {
-        manifest.source = vm.readFile(vm.envString("RELEASE_MANIFEST_PATH"));
-        manifest.hash = keccak256(bytes(manifest.source));
-        require(vm.parseJsonUint(manifest.source, ".chainId") == block.chainid, "manifest chain mismatch");
+        string memory source = vm.readFile(vm.envString("RELEASE_MANIFEST_PATH"));
+        manifest.hash = keccak256(bytes(source));
+        require(vm.parseJsonUint(source, ".chainId") == block.chainid, "manifest chain mismatch");
 
-        bool releaseCandidate = _loadBuildIdentity(manifest);
-        _loadContracts(manifest);
-        _loadConfiguration(manifest, releaseCandidate);
+        bool releaseCandidate = _loadBuildIdentity(source);
+        _loadContracts(manifest, source);
+        _loadConfiguration(manifest, source, releaseCandidate);
+        _requireProvenance(manifest.hash, source);
     }
 
-    function _loadBuildIdentity(Manifest memory manifest) private view returns (bool releaseCandidate) {
-        manifest.phase = vm.parseJsonString(manifest.source, ".deploymentPhase");
-        releaseCandidate = _isReleaseCandidate(manifest.phase);
-        manifest.sourceCommit = vm.parseJsonString(manifest.source, ".build.sourceCommit");
-        _validateBuildProfile(manifest.source, manifest.sourceCommit);
-        manifest.profileVersion = vm.parseJsonString(manifest.source, ".x402.profile");
-        require(keccak256(bytes(manifest.profileVersion)) == keccak256("daski-exact/1"), "wrong x402 profile");
+    function _requireProvenance(bytes32 manifestHash, string memory source) private view {
+        string memory provenance = vm.readFile(vm.envString("RELEASE_PROVENANCE_PATH"));
+        require(vm.parseJsonBytes32(provenance, ".manifestHash") == manifestHash, "wrong provenance manifest");
+        require(
+            vm.parseJsonBytes32(provenance, ".sourceClosureHash")
+                == vm.parseJsonBytes32(source, ".build.sourceClosureHash"),
+            "wrong provenance source closure"
+        );
+        require(
+            vm.parseJsonBytes32(provenance, ".compilerInputHash")
+                == vm.parseJsonBytes32(source, ".build.compilerInputHash"),
+            "wrong provenance compiler input"
+        );
+        require(
+            vm.parseJsonBytes32(provenance, ".foundryConfigHash")
+                == vm.parseJsonBytes32(source, ".build.foundryConfigHash"),
+            "wrong provenance Foundry config"
+        );
     }
 
-    function _loadContracts(Manifest memory manifest) private view {
-        string[] memory order = vm.parseJsonStringArray(manifest.source, ".contracts.order");
+    function _loadBuildIdentity(string memory source) private view returns (bool releaseCandidate) {
+        releaseCandidate = _isReleaseCandidate(vm.parseJsonString(source, ".deploymentPhase"));
+        _validateBuildProfile(source, vm.parseJsonString(source, ".build.sourceCommit"));
+        require(
+            keccak256(bytes(vm.parseJsonString(source, ".x402.profile"))) == keccak256("daski-exact/1"),
+            "wrong x402 profile"
+        );
+    }
+
+    function _loadContracts(Manifest memory manifest, string memory source) private view {
+        string[] memory order = vm.parseJsonStringArray(source, ".contracts.order");
         bytes32[9] memory expectedOrder = [
             keccak256("AgentIndex"),
             keccak256("DaskiValidationRegistry"),
@@ -69,11 +92,11 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
             require(keccak256(bytes(order[i])) == expectedOrder[i], "wrong manifest contract order");
         }
 
-        address[] memory proxies = vm.parseJsonAddressArray(manifest.source, ".contracts.proxies");
-        address[] memory implementations = vm.parseJsonAddressArray(manifest.source, ".contracts.implementations");
-        bytes32[] memory proxyHashes = vm.parseJsonBytes32Array(manifest.source, ".contracts.proxyRuntimeCodehashes");
+        address[] memory proxies = vm.parseJsonAddressArray(source, ".contracts.proxies");
+        address[] memory implementations = vm.parseJsonAddressArray(source, ".contracts.implementations");
+        bytes32[] memory proxyHashes = vm.parseJsonBytes32Array(source, ".contracts.proxyRuntimeCodehashes");
         bytes32[] memory implementationHashes =
-            vm.parseJsonBytes32Array(manifest.source, ".contracts.implementationRuntimeCodehashes");
+            vm.parseJsonBytes32Array(source, ".contracts.implementationRuntimeCodehashes");
         require(
             proxies.length == CONTRACT_COUNT && implementations.length == CONTRACT_COUNT
                 && proxyHashes.length == CONTRACT_COUNT && implementationHashes.length == CONTRACT_COUNT,
@@ -89,63 +112,55 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
         }
     }
 
-    function _loadConfiguration(Manifest memory manifest, bool releaseCandidate) private view {
-        manifest.stack = _stack(manifest.source, manifest.proxies);
-        manifest.eas = vm.parseJsonAddress(manifest.source, ".external.eas");
-        manifest.schemaRegistry = vm.parseJsonAddress(manifest.source, ".external.schemaRegistry");
-        manifest.admin = vm.parseJsonAddress(manifest.source, ".governance.safe");
-        manifest.governance = SafeDeployment.Profile({
-            owners: vm.parseJsonAddressArray(manifest.source, ".governance.owners"),
-            threshold: vm.parseJsonUint(manifest.source, ".governance.threshold"),
-            modules: vm.parseJsonAddressArray(manifest.source, ".governance.modules"),
-            guard: vm.parseJsonAddress(manifest.source, ".governance.guard"),
-            fallbackHandler: vm.parseJsonAddress(manifest.source, ".governance.fallbackHandler"),
-            releaseCandidate: releaseCandidate
-        });
+    function _loadConfiguration(Manifest memory manifest, string memory source, bool releaseCandidate) private view {
+        manifest.stack = _stack(source, manifest.proxies);
+        manifest.eas = vm.parseJsonAddress(source, ".external.eas");
+        manifest.schemaRegistry = vm.parseJsonAddress(source, ".external.schemaRegistry");
+        manifest.admin = vm.parseJsonAddress(source, ".governance.safe");
+        manifest.pauseGuardian = vm.parseJsonAddress(source, ".governance.pauseGuardian");
+        if (releaseCandidate) require(manifest.pauseGuardian != address(0), "release guardian required");
+        manifest.governance = _loadGovernance(source, releaseCandidate);
         require(
-            keccak256(bytes(vm.parseJsonString(manifest.source, ".governance.profile"))) == keccak256("safe-l2-v1.4.1"),
+            keccak256(bytes(vm.parseJsonString(source, ".governance.profile"))) == keccak256("safe-l2-v1.4.1"),
             "unsupported governance profile"
         );
-        manifest.facilitators = vm.parseJsonAddressArray(manifest.source, ".x402.authorizedFacilitators");
-        require(manifest.facilitators.length > 0, "facilitator set is empty");
-        manifest.outcomeSchemaUid = vm.parseJsonBytes32(manifest.source, ".schemas.outcome.uid");
-        manifest.confirmationSchemaUid = vm.parseJsonBytes32(manifest.source, ".schemas.confirmation.uid");
+        require(vm.parseJsonAddressArray(source, ".x402.authorizedFacilitators").length > 0, "facilitator set is empty");
+        manifest.outcomeSchemaUid = vm.parseJsonBytes32(source, ".schemas.outcome.uid");
+        manifest.confirmationSchemaUid = vm.parseJsonBytes32(source, ".schemas.confirmation.uid");
         _validateSchemaDefinitions(
-            vm.parseJsonString(manifest.source, ".schemas.outcome.definition"),
-            vm.parseJsonString(manifest.source, ".schemas.confirmation.definition")
+            vm.parseJsonString(source, ".schemas.outcome.definition"),
+            vm.parseJsonString(source, ".schemas.confirmation.definition")
         );
     }
 
-    function _latestFacilitators(Manifest memory manifest) internal view returns (address[] memory expected) {
-        expected = manifest.facilitators;
-        string[] memory noRevisions = new string[](0);
-        string[] memory revisionPaths = vm.envOr("RELEASE_MANIFEST_REVISIONS", ",", noRevisions);
-        bytes32 previousHash = manifest.hash;
-        for (uint256 i = 0; i < revisionPaths.length; i++) {
-            string memory revision = vm.readFile(revisionPaths[i]);
-            require(vm.parseJsonBool(revision, ".approved"), "manifest revision is not approved");
-            require(vm.parseJsonUint(revision, ".revision") == i + 1, "non-monotonic manifest revision");
-            require(
-                vm.parseJsonBytes32(revision, ".baseManifestHash") == manifest.hash, "revision base manifest mismatch"
-            );
-            require(
-                vm.parseJsonBytes32(revision, ".previousManifestHash") == previousHash, "broken manifest revision link"
-            );
-            require(vm.parseJsonBytes32(revision, ".safeTransactionHash") != bytes32(0), "missing Safe tx hash");
+    function _loadGovernance(string memory source, bool releaseCandidate)
+        private
+        view
+        returns (SafeDeployment.Profile memory governance)
+    {
+        governance.owners = vm.parseJsonAddressArray(source, ".governance.owners");
+        governance.threshold = vm.parseJsonUint(source, ".governance.threshold");
+        governance.modules = vm.parseJsonAddressArray(source, ".governance.modules");
+        governance.guard = vm.parseJsonAddress(source, ".governance.guard");
+        governance.fallbackHandler = vm.parseJsonAddress(source, ".governance.fallbackHandler");
+        governance.releaseCandidate = releaseCandidate;
+    }
 
-            address[] memory next = vm.parseJsonAddressArray(revision, ".authorizedFacilitators");
-            require(next.length > 0, "revision facilitator set is empty");
-            if (keccak256(bytes(vm.parseJsonString(revision, ".kind"))) == keccak256("emergency-remove-only")) {
-                _requireSubset(next, expected);
-            } else {
-                require(
-                    keccak256(bytes(vm.parseJsonString(revision, ".kind"))) == keccak256("planned"),
-                    "unsupported manifest revision kind"
-                );
-            }
-            expected = next;
-            previousHash = keccak256(bytes(revision));
-        }
+    function _latestFacilitators(Manifest memory manifest) internal view returns (address[] memory expected) {
+        return _revisionState(manifest).facilitators;
+    }
+
+    function _effectiveReleaseHash(Manifest memory manifest) internal view returns (bytes32) {
+        return _revisionState(manifest).effectiveHash;
+    }
+
+    function _revisionState(Manifest memory manifest) private view returns (RevisionState memory state) {
+        string memory evidence = vm.readFile(vm.envString("RELEASE_REVISION_EVIDENCE_PATH"));
+        require(vm.parseJsonBytes32(evidence, ".baseManifestHash") == manifest.hash, "wrong revision base manifest");
+        state.effectiveHash = vm.parseJsonBytes32(evidence, ".effectiveReleaseHash");
+        require(state.effectiveHash == vm.envBytes32("EFFECTIVE_RELEASE_HASH"), "wrong effective release hash");
+        state.facilitators = vm.parseJsonAddressArray(evidence, ".effectiveFacilitators");
+        require(state.facilitators.length > 0, "effective facilitator set is empty");
     }
 
     function _validateRuntimeIdentities(Manifest memory manifest) internal view {
@@ -163,7 +178,18 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
     }
 
     function _validateManifestCore(Manifest memory manifest) internal view {
+        _validateExternalManifestCore(manifest);
+        _validateDaskiCore(manifest, false, true);
+    }
+
+    function _validateGuardianConfigurationCore(Manifest memory manifest) internal view {
+        _validateExternalManifestCore(manifest);
+        _validateDaskiCore(manifest, false, false);
+    }
+
+    function _validateExternalManifestCore(Manifest memory manifest) private view {
         DeploymentValidation.Stack memory deployment = manifest.stack;
+        _validateExternalIdentity(manifest);
         DeploymentValidation.validateExternalDependencies(
             deployment.identity,
             deployment.usdc,
@@ -173,6 +199,28 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
             false,
             block.chainid == DeploymentValidation.BASE_SEPOLIA
         );
+    }
+
+    function _validatePausedManifestCore(Manifest memory manifest, bool expectedPaused) internal view {
+        _validateDaskiCore(manifest, expectedPaused, true);
+    }
+
+    function _validateUnpauseManifestCore(Manifest memory manifest) internal view {
+        _validateExternalIdentity(manifest);
+        DeploymentValidation.validateExternalDependencies(
+            manifest.stack.identity,
+            manifest.stack.usdc,
+            manifest.eas,
+            manifest.schemaRegistry,
+            manifest.stack.sanctionsOracle,
+            false,
+            block.chainid == DeploymentValidation.BASE_SEPOLIA
+        );
+        _validateDaskiCore(manifest, true, true);
+    }
+
+    function _validateDaskiCore(Manifest memory manifest, bool expectedPaused, bool validateGuards) private view {
+        DeploymentValidation.Stack memory deployment = manifest.stack;
         DeploymentValidation.validateSchemas(
             manifest.eas,
             manifest.schemaRegistry,
@@ -185,6 +233,16 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
         DeploymentValidation.validateCoreWiring(deployment);
         DeploymentValidation.validateFacilitators(deployment.x402Adapter, _latestFacilitators(manifest));
         _validateRuntimeIdentities(manifest);
+        if (validateGuards) {
+            DeploymentValidation.validateExternalDependencyGuards(
+                DeploymentValidation.adminContracts(deployment), manifest.pauseGuardian, expectedPaused
+            );
+        }
+    }
+
+    function _validateExternalIdentity(Manifest memory manifest) internal view {
+        string memory source = vm.readFile(vm.envString("RELEASE_MANIFEST_PATH"));
+        _validateExternalIdentityFromManifest(source, manifest.stack.identity);
     }
 
     function _stack(string memory json, address[9] memory proxies)
@@ -193,7 +251,7 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
         returns (DeploymentValidation.Stack memory stack)
     {
         stack = DeploymentValidation.Stack({
-            identity: vm.parseJsonAddress(json, ".external.identityRegistry"),
+            identity: vm.parseJsonAddress(json, ".external.identityRegistry.proxy"),
             usdc: vm.parseJsonAddress(json, ".external.usdc"),
             providerTreasury: vm.parseJsonAddress(json, ".economics.providerTreasury"),
             paymentTreasury: vm.parseJsonAddress(json, ".economics.paymentTreasury"),
@@ -224,15 +282,5 @@ abstract contract ReleaseManifest is ReleaseBuildProfile {
             "unsupported deployment phase"
         );
         return phaseHash == keccak256("release-candidate");
-    }
-
-    function _requireSubset(address[] memory subset, address[] memory superset) private pure {
-        for (uint256 i = 0; i < subset.length; i++) {
-            bool found;
-            for (uint256 j = 0; j < superset.length; j++) {
-                if (subset[i] == superset[j]) found = true;
-            }
-            require(found, "emergency revision added facilitator");
-        }
     }
 }

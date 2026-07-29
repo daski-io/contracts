@@ -54,7 +54,7 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         uint256 agentId,
         string calldata requestURI,
         bytes32 requestHash
-    ) external override returns (bytes32 validationKey) {
+    ) external override whenExternalDependencyOperational returns (bytes32 validationKey) {
         // Spec: MUST be called by owner or operator of agentId.
         LibAgentAuth.requireAgentAuth(identityRegistry, agentId, msg.sender);
         require(validatorAddress != address(0), "zero validator");

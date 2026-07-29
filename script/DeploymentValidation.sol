@@ -16,6 +16,7 @@ import {IAdapterBinding} from "../src/interfaces/IAdapterBinding.sol";
 import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {ISanctionsList} from "../src/interfaces/ISanctionsList.sol";
 import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
+import {IExternalDependencyGuard} from "../src/interfaces/IExternalDependencyGuard.sol";
 import {ReputationSchemas} from "../src/reputation/ReputationSchemas.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
@@ -260,6 +261,18 @@ library DeploymentValidation {
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == expectedAdmin, "admin not accepted");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == address(0), "pending admin remains");
+        }
+    }
+
+    function validateExternalDependencyGuards(
+        address[9] memory contracts_,
+        address expectedGuardian,
+        bool expectedPaused
+    ) internal view {
+        for (uint256 i = 0; i < contracts_.length; i++) {
+            IExternalDependencyGuard guarded = IExternalDependencyGuard(contracts_[i]);
+            require(guarded.pauseGuardian() == expectedGuardian, "wrong pause guardian");
+            require(guarded.externalDependencyPaused() == expectedPaused, "wrong external dependency pause state");
         }
     }
 

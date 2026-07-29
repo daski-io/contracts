@@ -12,7 +12,12 @@ contract VerifyDeployment is ReleaseManifest {
         Manifest memory manifest = _loadManifest();
         DeploymentValidation.Stack memory deployment = manifest.stack;
 
-        _validateManifestCore(manifest);
+        bool dependencyPaused = vm.envOr("EXTERNAL_DEPENDENCY_PAUSED", false);
+        if (dependencyPaused) {
+            _validatePausedManifestCore(manifest, true);
+        } else {
+            _validateManifestCore(manifest);
+        }
 
         if (vm.envBool("DEPLOYMENT_ACTIVE")) {
             DeploymentValidation.validateOperationalState(deployment);
@@ -29,5 +34,7 @@ contract VerifyDeployment is ReleaseManifest {
         console.log("PaymentRouter USDC balance:", IERC20(deployment.usdc).balanceOf(deployment.router));
         console.log("Release manifest hash:");
         console.logBytes32(manifest.hash);
+        console.log("Effective release hash:");
+        console.logBytes32(_effectiveReleaseHash(manifest));
     }
 }

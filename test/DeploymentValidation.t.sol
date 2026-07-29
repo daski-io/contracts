@@ -18,6 +18,7 @@ import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
+import {IExternalDependencyGuard} from "../src/interfaces/IExternalDependencyGuard.sol";
 import {DeploymentValidation} from "../script/DeploymentValidation.sol";
 import {GovernanceBatches, IPaymentRouterGovernance} from "../script/GovernanceBatches.sol";
 
@@ -293,5 +294,22 @@ contract DeploymentValidationTest is Test {
         assertEq(bytes4(activateCalls[0]), IPaymentRouterGovernance.setAcceptedToken.selector);
         assertEq(bytes4(activateCalls[1]), IPaymentRouterGovernance.setTokenReputationConfig.selector);
         assertEq(bytes4(activateCalls[2]), IPaymentRouterGovernance.setAdapter.selector);
+
+        (address[] memory pauseTargets, bytes[] memory pauseCalls) = GovernanceBatches.externalDependencyPause(stack);
+        assertEq(pauseTargets.length, 9);
+        assertEq(pauseCalls.length, 9);
+        assertEq(bytes4(pauseCalls[0]), IExternalDependencyGuard.pauseExternalDependency.selector);
+
+        (address[] memory guardianTargets, bytes[] memory guardianCalls) =
+            GovernanceBatches.pauseGuardianConfiguration(stack, address(0xBEEF));
+        assertEq(guardianTargets.length, 9);
+        assertEq(guardianCalls.length, 9);
+        assertEq(bytes4(guardianCalls[0]), IExternalDependencyGuard.setPauseGuardian.selector);
+
+        (address[] memory unpauseTargets, bytes[] memory unpauseCalls) =
+            GovernanceBatches.externalDependencyUnpause(stack);
+        assertEq(unpauseTargets.length, 9);
+        assertEq(unpauseCalls.length, 9);
+        assertEq(bytes4(unpauseCalls[0]), IExternalDependencyGuard.unpauseExternalDependency.selector);
     }
 }

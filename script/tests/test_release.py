@@ -68,6 +68,15 @@ class ReleaseCheckoutTest(unittest.TestCase):
         with self.assertRaisesRegex(release_tool.ReleaseError, "develop does not contain HEAD"):
             release_tool.check_checkout(self.repo, self.manifest, "develop")
 
+    def test_rejects_ambient_build_overrides(self) -> None:
+        for variable in ("FOUNDRY_REMAPPINGS", "DAPP_LIBRARIES", "SOLC_PATH"):
+            with self.subTest(variable=variable):
+                with self.assertRaisesRegex(release_tool.ReleaseError, "unsafe build environment"):
+                    release_tool.validate_ambient_environment({"PATH": "/bin", variable: "malicious"})
+
+    def test_accepts_environment_without_build_overrides(self) -> None:
+        release_tool.validate_ambient_environment({"PATH": "/bin", "RPC_URL": "https://example.invalid"})
+
 
 if __name__ == "__main__":
     unittest.main()

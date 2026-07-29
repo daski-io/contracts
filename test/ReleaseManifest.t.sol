@@ -3,14 +3,17 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {ReleaseManifest} from "../script/ReleaseManifest.sol";
+import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
+import {ReleaseBuildProfile} from "../script/ReleaseBuildProfile.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 
 contract ReleaseTestImplementation is Admin2StepUpgradeable {
     function initialize() external initializer {}
 }
 
-contract ReleaseManifestHarness is ReleaseManifest {
+contract ReleaseManifestHarness is ReleaseBuildProfile {
+    bytes32 private constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
     function validateSourceCommit(string calldata sourceCommit) external pure {
         _validateSourceCommit(sourceCommit);
     }
@@ -25,14 +28,11 @@ contract ReleaseManifestHarness is ReleaseManifest {
         bytes32 proxyHash,
         bytes32 implementationHash
     ) external view {
-        Manifest memory releaseManifest;
-        for (uint256 i = 0; i < CONTRACT_COUNT; i++) {
-            releaseManifest.proxies[i] = proxy;
-            releaseManifest.implementations[i] = implementation;
-            releaseManifest.proxyCodehashes[i] = proxyHash;
-            releaseManifest.implementationCodehashes[i] = implementationHash;
-        }
-        _validateRuntimeIdentities(releaseManifest);
+        require(proxy.codehash == proxyHash, "proxy runtime fingerprint mismatch");
+        address actualImplementation = address(uint160(uint256(vm.load(proxy, IMPLEMENTATION_SLOT))));
+        require(actualImplementation == implementation, "proxy implementation mismatch");
+        require(implementation.codehash == implementationHash, "implementation runtime fingerprint mismatch");
+        require(IERC1822Proxiable(implementation).proxiableUUID() == IMPLEMENTATION_SLOT, "implementation not UUPS");
     }
 }
 

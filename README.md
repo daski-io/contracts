@@ -189,7 +189,7 @@ Requires [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 forge build
-forge test       # 321 tests across 18 suites
+forge test       # 335 tests across 20 suites
 forge test -vvv  # verbose
 forge fmt
 ```
@@ -210,7 +210,9 @@ forge fmt
 | DeploymentValidation  | 6  |
 | DeploymentGuards      | 7  |
 | SafeDeployment        | 6  |
-| Integration           | 3  |
+| Integration           | 4  |
+| External identity validation | 9 |
+| External dependency guard | 4 |
 | RetireStack           | 2  |
 | Canonical identity mock | 2 |
 | EAS mock              | 1 |
@@ -230,6 +232,8 @@ export PAYMENT_TREASURY_ADDRESS=<payment-commission treasury>
 export FACILITATOR_ADDRESS=<gateway-facilitator-address>
 # Deployed governance contract (never an EOA) — see "Governance Safe" below.
 export ADMIN_ADDRESS=<deployed multisig or timelock>
+# REQUIRED for release candidates/Mainnet: dedicated pause-only guardian.
+export PAUSE_GUARDIAN_ADDRESS=<HSM-or-KMS-backed-guardian>
 # REQUIRED: the canonical ERC-8004 IdentityRegistry for the target chain.
 #   Base Sepolia: 0x8004A818BFB912233c491871b3d84c89A494BD9e
 #   Base mainnet: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432
@@ -315,21 +319,31 @@ no token or adapter is enabled. Contract addresses, EAS schema UIDs, and
 resolver wiring are logged at the end. Accept all nine pending admin roles from
 the configured governance contract before activating the token and adapters.
 
+From a clean checkout, generate the draft manifest's reproducible build fields:
+
+```bash
+python3 script/prepare_release_build.py --release-ref origin/develop
+```
+
 Copy `deployments/release-manifest.example.json` to a release-specific file
-outside the clean release checkout and fill it from deployment receipts. It is
-the single reviewed identity for chain, source commit, pinned compiler and
+outside the checkout, insert those build fields, and fill the remaining values
+from deployment receipts. It is the single reviewed identity for chain, source
+commit, pinned compiler and
 Foundry profile, all nine proxies and implementations, runtime fingerprints,
-external dependencies, economics, schemas, the complete Safe profile, and the
+the canonical identity proxy/implementation/admin/owner/version pins,
+economics, schemas, the complete Safe profile and pause guardian, and the
 complete facilitator set.
 
 `script/release.py` is the trusted entry point. It requires a clean checkout,
-validates the release ref and submodules, builds into a fresh directory,
-patches only the proven OpenZeppelin UUPS `__self` immutable with each manifest
-implementation address, and compares the resulting implementation and proxy
-hashes with the manifest before contacting the chain. It archives the pinned
-manifest, local hashes, build log, chain verification, and exact governance
-payload under the manifest hash. The evidence directory must be outside the
-checkout:
+validates the release ref and recursive submodules, rejects ambient Foundry
+configuration, compares the complete effective remapping set with
+`script/release-remappings.lock`, and builds with the committed config in an
+isolated environment. Every compiler source is then matched to its root or
+recursive-submodule Git object. The wrapper patches only the proven
+OpenZeppelin UUPS `__self` immutable, compares local and manifest runtime
+hashes, and pins the canonical identity implementation and upgrade authority
+before governance work. Evidence is archived under the effective release hash.
+The evidence directory must be outside the checkout:
 
 ```bash
 export RELEASE_MANIFEST=<absolute-reviewed-release-manifest.json>
@@ -351,18 +365,38 @@ python3 script/release.py accept --emit-only \
 export DEPLOYER_PRIVATE_KEY=<key>
 ```
 
-Use mode `activate` for the activation payload. Actual scripted execution is
-limited to a 1-of-1 development Safe; release-candidate and mainnet signers
-must review and execute the archived `MultiSendCallOnly` payload through the
-Safe app. Reproduce the local-build evidence from a second clean environment
-using the manifest's exact Foundry version before Mainnet approval.
+Use mode `activate` for activation. Mode `guardian` configures the reviewed
+guardian across an already-upgraded stack; include the same calls in an
+existing-proxy upgrade batch. Modes `pause` and `unpause` emit or execute the
+all-nine external-dependency circuit-breaker batches. An automated guardian
+pauses `PaymentRouter` first and then the other proxies; the Safe batch is the
+manual fallback. Only the Safe may unpause, after the wrapper verifies either
+the unchanged reviewed identity pins or a newly reviewed base manifest.
+Deploy `script/monitor_external_identity.py` through the release-operations
+environment using
+[`EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md`](EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md).
+Scripted execution remains limited to a 1-of-1 development Safe;
+release-candidate and Mainnet signers review the archived
+`MultiSendCallOnly` payload in the Safe app. Reproduce local-build evidence in
+a second clean environment before Mainnet approval.
 
 Facilitator rotations are append-only manifest revisions. Copy
-`deployments/release-manifest-revision.example.json`, link it to the base and
-previous manifest hashes, record the executed Safe transaction hash, and pass
-the ordered files through comma-delimited `RELEASE_MANIFEST_REVISIONS`.
-Emergency revisions may only remove facilitators. Planned revisions may
-replace the set, but must go through normal review and Safe approval.
+`deployments/release-manifest-revision.example.json` and link it to the base and
+previous hashes. Generate provisional Safe payload evidence with:
+
+```bash
+python3 script/release.py revision-payload \
+  --manifest "$RELEASE_MANIFEST" --revision <revision.json> \
+  --rpc-url "$RPC_URL" --release-ref origin/develop \
+  --evidence-dir "$RELEASE_EVIDENCE_DIR"
+```
+
+After Safe execution, record both `safeTransactionHash` and
+`executionTransactionHash`, then pass every ordered revision with repeated
+`--revision` arguments during verification. The wrapper verifies the Safe
+receipt, `ExecutionSuccess` event, and exact decoded MultiSend payload.
+Emergency revisions may only remove facilitators; planned revisions may replace
+the set through normal review.
 
 ProviderRegistry and PaymentRouter treasury controls are intentionally
 independent. A governance treasury change must review both destinations and

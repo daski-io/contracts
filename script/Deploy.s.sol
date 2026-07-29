@@ -232,6 +232,7 @@ contract Deploy is Script {
             commissionBps: commissionBps,
             reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
         });
+        _configurePauseGuardians(deployment, governance.releaseCandidate);
         DeploymentValidation.validateCoreWiring(deployment);
         DeploymentValidation.validateDarkState(deployment);
 
@@ -287,6 +288,18 @@ contract Deploy is Script {
         console.log(string.concat("  ", name, " implementation:"), implementation);
         console.log("    codehash:");
         console.logBytes32(implementation.codehash);
+    }
+
+    function _configurePauseGuardians(DeploymentValidation.Stack memory deployment, bool releaseCandidate) private {
+        address pauseGuardian = vm.envOr("PAUSE_GUARDIAN_ADDRESS", address(0));
+        require(!releaseCandidate || pauseGuardian != address(0), "release guardian required");
+        address[9] memory contracts_ = DeploymentValidation.adminContracts(deployment);
+        if (pauseGuardian != address(0)) {
+            for (uint256 i = 0; i < contracts_.length; i++) {
+                Admin2StepUpgradeable(contracts_[i]).setPauseGuardian(pauseGuardian);
+            }
+        }
+        DeploymentValidation.validateExternalDependencyGuards(contracts_, pauseGuardian, false);
     }
 
     function _governanceProfile(address deployer) private view returns (SafeDeployment.Profile memory profile) {
