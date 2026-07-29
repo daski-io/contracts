@@ -200,6 +200,58 @@ contract ReputationStorageTest is Test {
         return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth, nonceSalt);
     }
 
+    function _createSecondPayment() internal returns (uint256 paymentId2, uint256 provider2AgentId, address buyer2) {
+        address provider2 = makeAddr("provider2");
+        bytes32 secondServiceId;
+        (provider2AgentId, secondServiceId) = _registerSecondProvider(provider2);
+
+        uint256 secondBuyerKey = 0xDEAD;
+        buyer2 = vm.addr(secondBuyerKey);
+        vm.prank(buyer2);
+        uint256 buyer2AgentId = identity.register();
+        vm.prank(buyer2);
+        agentIndex.claim(buyer2AgentId);
+        usdc.mint(buyer2, 100e6);
+
+        paymentId2 = _settleSecondPayment(secondBuyerKey, buyer2, provider2AgentId, secondServiceId);
+        providerRecipients[paymentId2] = provider2;
+    }
+
+    function _registerSecondProvider(address provider2)
+        internal
+        returns (uint256 provider2AgentId, bytes32 secondServiceId)
+    {
+        vm.prank(provider2);
+        provider2AgentId = identity.register("https://provider2.example/agent.json");
+        identity.forceSetAgentWallet(provider2AgentId, provider2);
+        usdc.mint(provider2, 1_000_000);
+        vm.startPrank(provider2);
+        usdc.approve(address(registry), 1_000_000);
+        registry.register(provider2AgentId);
+        vm.stopPrank();
+        vm.prank(provider2);
+        secondServiceId = services.registerService(provider2AgentId, "skill", "1", "u", address(0));
+    }
+
+    function _settleSecondPayment(
+        uint256 secondBuyerKey,
+        address buyer2,
+        uint256 provider2AgentId,
+        bytes32 secondServiceId
+    ) internal returns (uint256) {
+        bytes32 serviceRef = keccak256("attack-svc");
+        bytes32 nonceSalt = keccak256(abi.encode("reputation-attacker-x402-v2", serviceRef));
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = adapter.authNonceFor(
+            address(usdc), buyer2, 100e6, 0, validBefore, serviceRef, provider2AgentId, secondServiceId, nonceSalt
+        );
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
+            vm, secondBuyerKey, address(usdc), buyer2, address(adapter), 100e6, 0, validBefore, nonce
+        );
+        vm.prank(relayer);
+        return adapter.settle(address(usdc), 100e6, serviceRef, provider2AgentId, secondServiceId, auth, nonceSalt);
+    }
+
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)
         internal
         view
@@ -480,39 +532,7 @@ contract ReputationStorageTest is Test {
             eas.attest(_confirmReq(paymentId, ReputationStorageBase.BuyerConfirmation.Confirmed, bytes32(0)));
         assertEq(reputation.confirmedCount(providerAgentId), 1);
 
-        uint256 attackerKey = 0xDEAD;
-        address buyer2 = vm.addr(attackerKey);
-        address provider2 = makeAddr("provider2");
-
-        vm.prank(provider2);
-        uint256 provider2AgentId = identity.register("https://provider2.example/agent.json");
-        identity.forceSetAgentWallet(provider2AgentId, provider2);
-        usdc.mint(provider2, 1_000_000);
-        vm.startPrank(provider2);
-        usdc.approve(address(registry), 1_000_000);
-        registry.register(provider2AgentId);
-        vm.stopPrank();
-        vm.prank(provider2);
-        bytes32 svc2 = services.registerService(provider2AgentId, "skill", "1", "u", address(0));
-
-        vm.prank(buyer2);
-        uint256 buyer2AgentId = identity.register();
-        vm.prank(buyer2);
-        agentIndex.claim(buyer2AgentId);
-        usdc.mint(buyer2, 100e6);
-
-        bytes32 attackSvc = keccak256("attack-svc");
-        bytes32 nonceSalt = keccak256(abi.encode("reputation-attacker-x402-v2", attackSvc));
-        uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
-            address(usdc), buyer2, 100e6, 0, validBefore, attackSvc, provider2AgentId, svc2, nonceSalt
-        );
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, attackerKey, address(usdc), buyer2, address(adapter), 100e6, 0, validBefore, nonce
-        );
-        vm.prank(relayer);
-        uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, svc2, auth, nonceSalt);
-        providerRecipients[paymentId2] = provider2;
+        (uint256 paymentId2, uint256 provider2AgentId, address buyer2) = _createSecondPayment();
 
         vm.prank(buyer2);
         vm.expectRevert("refUID is not a tracked confirmation");
