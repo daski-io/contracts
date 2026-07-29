@@ -1,6 +1,8 @@
 {
   "chainId": 84532,
   "name": "base-sepolia",
+  "status": "retired",
+  "retiredReason": "Superseded by the daski-exact receive-authorization release; must not be reactivated",
   "deployedAt": "2026-07-28",
   "canonical": {
     "IdentityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",

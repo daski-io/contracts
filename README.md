@@ -9,9 +9,10 @@ backed by EAS attestations — built on top of the **canonical ERC-8004
 registries**. For the full protocol design, read the
 [whitepaper](https://sandbox.daski.io/MarketplaceProtocolWhitePaper.pdf).
 
-**Status:** the Base Sepolia addresses below run the previous pre-production
-revision. The current revision requires a fresh deployment; an external audit
-is still pending.
+**Status:** the Base Sepolia addresses below are retired pre-production
+infrastructure and must not be used with this revision. The current revision
+requires a fresh manifest-reviewed deployment; an external audit is still
+pending.
 
 ## Canonical ERC-8004 registries
 
@@ -57,7 +58,7 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. Optional service payee overrides are bound to both the authorizing NFT owner and the live canonical `agentWallet`; skills are declared off-chain. |
 | **PaymentRouter**      | Rail-agnostic settlement that splits accepted tokens between provider/service wallet and the payment treasury. Per-token policy independently controls payment acceptance and reputation eligibility/minimums. It validates (provider, service) on every settlement, namespaces replay protection, and excludes relationships provable from on-chain identity state at settlement time from reputation. |
-| **X402Adapter**        | x402 V2 Exact-EVM rail using EIP-3009 `transferWithAuthorization` (Circle USDC). Random client nonces are accepted only through an admin-allowlisted facilitator. |
+| **X402Adapter**        | Daski's x402 V2 `daski-exact/1` rail using EIP-3009 `receiveWithAuthorization` (Circle USDC). Each opaque EOA/ERC-1271 signature is bound to the complete settlement route and a fresh client salt; only enumerated admin-allowlisted facilitators may submit it. |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
 | **DaskiValidationRegistry** | Daski-specific, ERC-8004-inspired validation requests with namespaced keys and paginated reads. `validationRequest` returns `computeValidationKey(agentId, requestHash)`; calls and paginated lists use that key, while events carry both it and the raw payload hash. This intentionally avoids the draft registry's global request-hash squatting and unbounded getter behavior rather than claiming drop-in compatibility. |
@@ -65,9 +66,9 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **MockUSDC**           | Testnet ERC-20 (6 decimals, public mint). Test deploys only. |
 
 All contracts are UUPS-upgradeable (OpenZeppelin v5) behind a 2-step admin.
-Fresh deployments require one deployed governance contract (multisig or
-timelock) as the pending admin of every proxy. Payment rails remain disabled
-until that governance contract accepts every admin role.
+Fresh deployments require the exact canonical Safe profile recorded in the
+reviewed release manifest as the pending admin of every proxy. Payment rails
+remain disabled until that Safe accepts every admin role.
 
 Allowlisted adapters are trusted to authenticate or establish buyer consent
 and to deliver the exact settlement amount. Adapter enablement verifies the
@@ -83,11 +84,12 @@ unavailable. Integrators should decode `SanctionedAddress(address)` and
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`) — deployed 2026-07-28
+### Base Sepolia (chain id `84532`) — retired 2026-07-29
 
-Staged deployment: every proxy is admined by the governance Safe below; the
-sanctions oracle is the explicitly marked test mock (Chainalysis publishes no
-Base Sepolia deployment).
+This address set is retained only as a historical record. It implements the
+superseded generic Exact-EVM/random-nonce profile and is explicitly marked
+retired in the machine-readable deployment file. Do not configure a gateway
+or buyer against it.
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
@@ -115,12 +117,10 @@ EAS schema UIDs (resolver = ReputationStorage):
 - Outcome: `0xa52916b901f5c8366127d280f04b7426405b56f90e06ab18a685818e3e0fb4b6`
 - Confirmation: `0x36429e8cf20bcdb761c0103be7ae384cae2d7f5d14c0d30de7d6f210861329f5`
 
-This stack replaces the 2026-07-22 one, whose X402Adapter predates x402 V2
-facilitator authorization and must not be paired with the V2 gateway. The
-replaced proxies move under `retired` in the machine-readable file and are
-quiesced per the procedure below once every service has cut over. The
-2026-07-12 EOA-admined stack (incl. the DirectTransferAdapter) was already
-quiesced on 2026-07-22.
+The 2026-07-22 and 2026-07-12 proxy sets are also retired. A new Base Sepolia
+release-candidate rehearsal must deploy fresh proxies and implementations,
+then publish a completed release manifest before any dependent service cuts
+over.
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
@@ -273,15 +273,13 @@ missing production dependency.
 
 ### Governance Safe (`ADMIN_ADDRESS`)
 
-`ADMIN_ADDRESS` must be an already-deployed governance contract — an EOA is
-rejected. The supported governance contract is a Safe created through the
-canonical Safe v1.4.1 deployment (`script/SafeDeployment.sol` pins the
-SafeProxyFactory, SafeL2 singleton, CompatibilityFallbackHandler, and
-MultiSendCallOnly addresses by codehash; verified identical on Base mainnet
-and Base Sepolia).
+`ADMIN_ADDRESS` must be the Safe recorded by the release manifest — an EOA or
+arbitrary contract is rejected. Validation pins the canonical Safe v1.4.1
+proxy runtime, SafeL2 singleton, fallback handler, owners, threshold, modules,
+guard, and fallback storage. `script/SafeDeployment.sol` also pins the
+SafeProxyFactory and MultiSendCallOnly deployments by runtime codehash.
 
-On testnet the Safe is auto-deployed — no prior setup, defaults to a 1-of-1
-Safe owned by the deployer:
+Developer-only testnets may use a 1-of-1 Safe owned by the deployer:
 
 ```bash
 forge script script/DeploySafe.s.sol --rpc-url <RPC_URL> --broadcast
@@ -290,9 +288,15 @@ export ADMIN_ADDRESS=<logged Safe address>
 
 `SAFE_OWNERS` (comma-separated), `SAFE_THRESHOLD`, and `SAFE_SALT_NONCE`
 override the defaults; the same owners+threshold+salt always yields the same
-create2 address, so a fresh Safe needs a new salt. On Base mainnet the script
-refuses anything weaker than 2 owners with threshold 2 — create the real
-multisig there (with this script or the Safe app) before deploying.
+create2 address, so a fresh Safe needs a new salt. Base mainnet and every
+release-candidate rehearsal require at least two owners and threshold two:
+
+```bash
+export RELEASE_CANDIDATE=true
+export SAFE_OWNERS=<owner-1>,<owner-2>
+export SAFE_THRESHOLD=2
+forge script script/DeploySafe.s.sol --rpc-url <RPC_URL> --broadcast
+```
 
 ### Staged deployment and governance batches
 
@@ -301,80 +305,56 @@ no token or adapter is enabled. Contract addresses, EAS schema UIDs, and
 resolver wiring are logged at the end. Accept all nine pending admin roles from
 the configured governance contract before activating the token and adapters.
 
-Both governance batches (`script/GovernanceBatches.sol`) are driven through
-the Safe by `script/ExecuteGovernanceBatches.s.sol`, which validates the
-expected pre-state, executes the batch as a single MultiSendCallOnly
-transaction, and re-validates afterwards:
+Copy `deployments/release-manifest.example.json` to a release-specific file
+and fill it from independently reviewed build artifacts and deployment
+receipts. It is the single reviewed identity for chain, source commit,
+compiler profile, all nine proxies and implementations, runtime fingerprints,
+external dependencies, economics, schemas, the complete Safe profile, and the
+complete facilitator set. Verification and both governance batches load this
+same artifact:
 
 ```bash
-# after Deploy.s.sol, with the stack env exported (same names as the verifier):
-GOVERNANCE_BATCH=accept   forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
-GOVERNANCE_BATCH=activate forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
-```
+export RELEASE_MANIFEST_PATH=<reviewed-release-manifest.json>
 
-Scripted execution requires the broadcasting EOA to be an owner of a 1-of-1
-Safe (the testnet shape). With a higher threshold the script prints every call
-plus the packed MultiSend payload and stops — execute those from the Safe app
-instead.
-
-After exporting the logged component addresses and schema UIDs, run the
-read-only verifier first with `DEPLOYMENT_ACTIVE=false` after all admin roles
-have been accepted, then with `DEPLOYMENT_ACTIVE=true` after the activation
-batch:
-
-```bash
-export IDENTITY_REGISTRY_ADDRESS=<canonical-address>
-export USDC_ADDRESS=<circle-usdc-address>
-export SANCTIONS_ORACLE_ADDRESS=<configured-oracle-address>
-export EAS_ADDRESS=0x4200000000000000000000000000000000000021
-export EAS_SCHEMA_REGISTRY_ADDRESS=0x4200000000000000000000000000000000000020
-export PROVIDER_TREASURY_ADDRESS=<address>
-export PAYMENT_TREASURY_ADDRESS=<address>
-export FACILITATOR_ADDRESS=<gateway-facilitator-address>
-export ADMIN_ADDRESS=<governance-contract-address>
-export AGENT_INDEX_ADDRESS=<address>
-export DASKI_VALIDATION_REGISTRY_ADDRESS=<address>
-export PROVIDER_REGISTRY_ADDRESS=<address>
-export SERVICE_REGISTRY_ADDRESS=<address>
-export PAYMENT_ROUTER_ADDRESS=<address>
-export REPUTATION_STORAGE_ADDRESS=<address>
-export X402_ADAPTER_ADDRESS=<address>
-export PERMIT_ADAPTER_ADDRESS=<address>
-export APPROVAL_ADAPTER_ADDRESS=<address>
-export OUTCOME_SCHEMA_UID=<bytes32>
-export CONFIRMATION_SCHEMA_UID=<bytes32>
-export LISTING_FEE=1000000
-export COMMISSION_BPS=500
-export USDC_REPUTATION_MINIMUM=250000
-
-# Copy the nine implementation code hashes logged by Deploy.s.sol.
-export AGENT_INDEX_IMPLEMENTATION_CODEHASH=<bytes32>
-export DASKI_VALIDATION_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
-export PROVIDER_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
-export SERVICE_REGISTRY_IMPLEMENTATION_CODEHASH=<bytes32>
-export PAYMENT_ROUTER_IMPLEMENTATION_CODEHASH=<bytes32>
-export REPUTATION_STORAGE_IMPLEMENTATION_CODEHASH=<bytes32>
-export X402_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
-export PERMIT_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
-export APPROVAL_ADAPTER_IMPLEMENTATION_CODEHASH=<bytes32>
-
+# Read-only verification while the deployment is still dark:
 export DEPLOYMENT_ACTIVE=false
 forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
 
-# After the Safe activation batch:
+# Safe batches:
+GOVERNANCE_BATCH=accept   forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+GOVERNANCE_BATCH=activate forge script script/ExecuteGovernanceBatches.s.sol --rpc-url <RPC_URL> --broadcast
+
+# Read-only operational verification:
 export DEPLOYMENT_ACTIVE=true
 forge script script/VerifyDeployment.s.sol --rpc-url <RPC_URL>
 ```
+
+Scripted execution requires a 1-of-1 developer Safe. For a release-candidate
+or mainnet multisig the script prints every call and the packed
+MultiSendCallOnly payload, then stops; review and execute that exact payload
+through the Safe app.
+
+Facilitator rotations are append-only manifest revisions. Copy
+`deployments/release-manifest-revision.example.json`, link it to the base and
+previous manifest hashes, record the executed Safe transaction hash, and pass
+the ordered files through comma-delimited `RELEASE_MANIFEST_REVISIONS`.
+Emergency revisions may only remove facilitators. Planned revisions may
+replace the set, but must go through normal review and Safe approval.
 
 ProviderRegistry and PaymentRouter treasury controls are intentionally
 independent. A governance treasury change must review both destinations and
 record whether equality or divergence is intended.
 
-x402 V2 EIP-3009 payments use `X402Adapter`, which executes the token
-authorization and router settlement atomically. Standard clients choose a
-random 32-byte nonce. Redirect protection comes from the signed EIP-3009
-recipient and amount plus the adapter's facilitator allowlist and the
-facilitator's verified Daski challenge binding.
+x402 V2 EIP-3009 payments use the custom `daski-exact` scheme.
+`X402Adapter` derives the signed nonce from chain, adapter, router, token,
+payer, amount, authorization window, provider, service, service reference,
+and a fresh 32-byte client salt. It then executes
+`receiveWithAuthorization`, adapter-to-router transfer, and router settlement
+atomically with exact balance-delta checks. Payment replay protection remains
+the router's `(buyerAgentId, providerAgentId, serviceId, serviceRef)` key; a
+service reference is not globally unique. Pre-existing token dust is reported
+by verification but does not block activation because settlement is
+delta-based and both contracts must return to their pre-call balances.
 
 Provider-facing services should map `SanctionedAddress(account)` to the stable
 code `SANCTIONS_ADDRESS_REJECTED` (not retryable) and

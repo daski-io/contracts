@@ -8,8 +8,30 @@ import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
 import {DeploymentValidationHarness} from "./helpers/DeploymentValidationHarness.sol";
 import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
+import {DeploymentValidation} from "../script/DeploymentValidation.sol";
+import {SafeDeployment} from "../script/SafeDeployment.sol";
 
 contract GovernanceCodeStub {}
+
+contract FinalAdminValidationHarness {
+    function validate(address finalAdmin, address deployer) external view {
+        address[] memory owners = new address[](1);
+        owners[0] = address(0xA11CE);
+        address[] memory modules = new address[](0);
+        DeploymentValidation.validateFinalAdmin(
+            finalAdmin,
+            deployer,
+            SafeDeployment.Profile({
+                owners: owners,
+                threshold: 1,
+                modules: modules,
+                guard: address(0),
+                fallbackHandler: SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER,
+                releaseCandidate: false
+            })
+        );
+    }
+}
 
 contract SchemaRegistryCodeStub {}
 
@@ -27,23 +49,27 @@ contract EASRegistryPointer {
 
 contract DeploymentGuardsTest is Test {
     DeploymentValidationHarness validation;
+    FinalAdminValidationHarness finalAdminValidation;
     MockSanctionsList sanctions;
 
     function setUp() public {
         validation = new DeploymentValidationHarness();
+        finalAdminValidation = new FinalAdminValidationHarness();
         sanctions = new MockSanctionsList();
     }
 
-    function test_finalAdminMustBeASeparateContract() public {
+    function test_finalAdminMustBeThePinnedSafeProfile() public {
         address deployer = makeAddr("deployer");
+        GovernanceCodeStub arbitraryContract = new GovernanceCodeStub();
         vm.expectRevert("ADMIN_ADDRESS is required");
-        validation.validateFinalAdmin(address(0), deployer);
+        finalAdminValidation.validate(address(0), deployer);
         vm.expectRevert("ADMIN_ADDRESS must differ from deployer");
-        validation.validateFinalAdmin(deployer, deployer);
-        vm.expectRevert("ADMIN_ADDRESS must be a governance contract");
-        validation.validateFinalAdmin(makeAddr("eoaAdmin"), deployer);
+        finalAdminValidation.validate(deployer, deployer);
+        vm.expectRevert("governance is not canonical SafeProxy");
+        finalAdminValidation.validate(makeAddr("eoaAdmin"), deployer);
 
-        validation.validateFinalAdmin(address(new GovernanceCodeStub()), deployer);
+        vm.expectRevert("governance is not canonical SafeProxy");
+        finalAdminValidation.validate(address(arbitraryContract), deployer);
     }
 
     function test_externalDependenciesRejectUnsupportedChain() public {

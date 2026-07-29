@@ -8,12 +8,8 @@ import {DeploymentValidation} from "./DeploymentValidation.sol";
 /// @notice Deploys the governance Safe that Deploy.s.sol requires as
 ///         ADMIN_ADDRESS, via the canonical Safe v1.4.1 proxy factory.
 ///
-///         Testnet: run with the defaults for an automated 1-of-1 Safe owned
-///         by the deployer — enough to satisfy the contract-admin requirement
-///         and drive both governance batches from a script.
-///         Mainnet: a 1-of-1 Safe is refused; provide the real owner set and
-///         a threshold of at least two, or create the Safe in the Safe app
-///         and skip this script entirely.
+///         Developer testnet deployments may use the 1-of-1 default.
+///         Mainnet and release-candidate rehearsals refuse that profile.
 ///
 ///         SAFE_OWNERS      comma-separated owner addresses (default: deployer)
 ///         SAFE_THRESHOLD   confirmation threshold (default: 1)
@@ -30,12 +26,13 @@ contract DeploySafe is Script {
         address[] memory owners = vm.envOr("SAFE_OWNERS", ",", defaultOwners);
         uint256 threshold = vm.envOr("SAFE_THRESHOLD", uint256(1));
         uint256 saltNonce = vm.envOr("SAFE_SALT_NONCE", uint256(0));
+        bool releaseCandidate = vm.envOr("RELEASE_CANDIDATE", false);
 
         SafeDeployment.validateCanonicalDeployment();
-        if (block.chainid == DeploymentValidation.BASE_MAINNET) {
+        if (block.chainid == DeploymentValidation.BASE_MAINNET || releaseCandidate) {
             require(
                 owners.length >= 2 && threshold >= 2,
-                "mainnet governance Safe must be a real multisig (>=2 owners, threshold >=2)"
+                "release governance Safe must be a real multisig (>=2 owners, threshold >=2)"
             );
         }
         bytes memory initializer = SafeDeployment.setupInitializer(owners, threshold);
@@ -45,13 +42,20 @@ contract DeploySafe is Script {
             .createProxyWithNonce(SafeDeployment.SAFE_L2_SINGLETON, initializer, saltNonce);
         vm.stopBroadcast();
 
-        // Read back the live Safe rather than trusting the factory call.
+        address[] memory noModules = new address[](0);
+        SafeDeployment.validateSafeProfile(
+            safe,
+            SafeDeployment.Profile({
+                owners: owners,
+                threshold: threshold,
+                modules: noModules,
+                guard: address(0),
+                fallbackHandler: SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER,
+                releaseCandidate: releaseCandidate
+            })
+        );
+
         address[] memory liveOwners = ISafe(safe).getOwners();
-        require(liveOwners.length == owners.length, "owner count mismatch");
-        for (uint256 i = 0; i < owners.length; i++) {
-            require(ISafe(safe).isOwner(owners[i]), "owner missing on deployed Safe");
-        }
-        require(ISafe(safe).getThreshold() == threshold, "threshold mismatch");
 
         console.log("Governance Safe (v1.4.1, SafeL2):", safe);
         console.log("  owners:", liveOwners.length);

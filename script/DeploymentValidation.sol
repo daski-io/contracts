@@ -15,8 +15,10 @@ import {IEAS, ISchemaRegistry, SchemaRecord} from "../src/interfaces/IEAS.sol";
 import {IAdapterBinding} from "../src/interfaces/IAdapterBinding.sol";
 import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 import {ISanctionsList} from "../src/interfaces/ISanctionsList.sol";
+import {IX402Adapter} from "../src/interfaces/IX402Adapter.sol";
 import {ReputationSchemas} from "../src/reputation/ReputationSchemas.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
+import {SafeDeployment} from "./SafeDeployment.sol";
 
 /// @notice Shared deployment invariants used during deployment and by the
 ///         read-only post-deployment verifier.
@@ -114,10 +116,13 @@ library DeploymentValidation {
         require(address(IEAS(eas).getSchemaRegistry()) == schemaRegistry, "wrong EAS schema registry");
     }
 
-    function validateFinalAdmin(address finalAdmin, address deployer) internal view {
+    function validateFinalAdmin(address finalAdmin, address deployer, SafeDeployment.Profile memory governance)
+        internal
+        view
+    {
         require(finalAdmin != address(0), "ADMIN_ADDRESS is required");
         require(finalAdmin != deployer, "ADMIN_ADDRESS must differ from deployer");
-        require(finalAdmin.code.length > 0, "ADMIN_ADDRESS must be a governance contract");
+        SafeDeployment.validateSafeProfile(finalAdmin, governance);
     }
 
     function validateSchemas(
@@ -233,21 +238,40 @@ library DeploymentValidation {
         _validateAdapterBindings(deployment);
     }
 
-    function validatePendingAdmins(address[9] memory contracts_, address currentAdmin, address pendingAdmin)
-        internal
-        view
-    {
+    function validatePendingAdmins(
+        address[9] memory contracts_,
+        address currentAdmin,
+        address pendingAdmin,
+        SafeDeployment.Profile memory governance
+    ) internal view {
+        SafeDeployment.validateSafeProfile(pendingAdmin, governance);
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == currentAdmin, "unexpected current admin");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == pendingAdmin, "wrong pending admin");
         }
     }
 
-    function validateAcceptedAdmins(address[9] memory contracts_, address expectedAdmin) internal view {
-        require(expectedAdmin.code.length > 0, "admin has no code");
+    function validateAcceptedAdmins(
+        address[9] memory contracts_,
+        address expectedAdmin,
+        SafeDeployment.Profile memory governance
+    ) internal view {
+        SafeDeployment.validateSafeProfile(expectedAdmin, governance);
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == expectedAdmin, "admin not accepted");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == address(0), "pending admin remains");
+        }
+    }
+
+    function validateFacilitators(address x402Adapter, address[] memory expected) internal view {
+        IX402Adapter adapter = IX402Adapter(x402Adapter);
+        require(adapter.getFacilitatorCount() == expected.length, "wrong facilitator count");
+        for (uint256 i = 0; i < expected.length; i++) {
+            require(expected[i] != address(0), "zero expected facilitator");
+            require(adapter.authorizedFacilitators(expected[i]), "expected facilitator missing");
+            for (uint256 j = i + 1; j < expected.length; j++) {
+                require(expected[i] != expected[j], "duplicate expected facilitator");
+            }
         }
     }
 

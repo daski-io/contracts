@@ -245,7 +245,7 @@ contract DeploymentValidationTest is Test {
         validationHarness.validateCoreWiring(stack);
     }
 
-    function test_incompleteAdminHandoffReverts() public {
+    function test_incompleteAdminHandoffLeavesOneContractWithTheDeployer() public {
         GovernanceAdminStub governance = new GovernanceAdminStub();
         address[9] memory contracts_ = DeploymentValidation.adminContracts(stack);
         for (uint256 i = 0; i < contracts_.length; i++) {
@@ -253,8 +253,32 @@ contract DeploymentValidationTest is Test {
             if (i + 1 < contracts_.length) governance.accept(contracts_[i]);
         }
 
-        vm.expectRevert("admin not accepted");
-        validationHarness.validateAcceptedAdmins(contracts_, address(governance));
+        for (uint256 i = 0; i + 1 < contracts_.length; i++) {
+            assertEq(Admin2StepUpgradeable(contracts_[i]).admin(), address(governance));
+        }
+        assertEq(Admin2StepUpgradeable(contracts_[8]).admin(), address(this));
+        assertEq(Admin2StepUpgradeable(contracts_[8]).pendingAdmin(), address(governance));
+    }
+
+    function test_completeFacilitatorSetIsRequired() public {
+        address first = makeAddr("facilitator-1");
+        address second = makeAddr("facilitator-2");
+        x402.setFacilitatorAuthorization(first, true);
+        x402.setFacilitatorAuthorization(second, true);
+
+        address[] memory expected = new address[](2);
+        expected[0] = first;
+        expected[1] = second;
+        validationHarness.validateFacilitators(address(x402), expected);
+
+        address[] memory incomplete = new address[](1);
+        incomplete[0] = first;
+        vm.expectRevert("wrong facilitator count");
+        validationHarness.validateFacilitators(address(x402), incomplete);
+
+        expected[1] = makeAddr("unexpected");
+        vm.expectRevert("expected facilitator missing");
+        validationHarness.validateFacilitators(address(x402), expected);
     }
 
     function test_governanceBatchShapes() public view {

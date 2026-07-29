@@ -18,10 +18,6 @@ contract DeploymentValidationHarness {
         );
     }
 
-    function validateFinalAdmin(address finalAdmin, address deployer) external view {
-        DeploymentValidation.validateFinalAdmin(finalAdmin, deployer);
-    }
-
     function validateCoreWiring(DeploymentValidation.Stack calldata deployment) external view {
         DeploymentValidation.validateCoreWiring(deployment);
     }
@@ -34,7 +30,7 @@ contract DeploymentValidationHarness {
         DeploymentValidation.validateOperationalState(deployment);
     }
 
-    function validateAcceptedAdmins(address[9] calldata contracts_, address expectedAdmin) external view {
-        DeploymentValidation.validateAcceptedAdmins(contracts_, expectedAdmin);
+    function validateFacilitators(address adapter, address[] calldata facilitators) external view {
+        DeploymentValidation.validateFacilitators(adapter, facilitators);
     }
 }

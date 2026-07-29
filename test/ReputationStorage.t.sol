@@ -188,12 +188,16 @@ contract ReputationStorageTest is Test {
     // ── Helpers ─────────────────────────────────────────────────────────
 
     function _payAsBuyer(uint256 amount, bytes32 serviceRef, bytes32 svcId) internal returns (uint256) {
-        bytes32 nonce = keccak256(abi.encode("reputation-x402-v2", serviceRef));
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, BUYER_KEY, address(usdc), buyer, address(router), amount, 0, block.timestamp + 1 hours, nonce
+        bytes32 nonceSalt = keccak256(abi.encode("reputation-x402-v2", serviceRef));
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = adapter.authNonceFor(
+            address(usdc), buyer, amount, 0, validBefore, serviceRef, providerAgentId, svcId, nonceSalt
+        );
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
+            vm, BUYER_KEY, address(usdc), buyer, address(adapter), amount, 0, validBefore, nonce
         );
         vm.prank(relayer);
-        return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth);
+        return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth, nonceSalt);
     }
 
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)
@@ -498,19 +502,16 @@ contract ReputationStorageTest is Test {
         usdc.mint(buyer2, 100e6);
 
         bytes32 attackSvc = keccak256("attack-svc");
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm,
-            attackerKey,
-            address(usdc),
-            buyer2,
-            address(router),
-            100e6,
-            0,
-            block.timestamp + 1 hours,
-            keccak256(abi.encode("reputation-attacker-x402-v2", attackSvc))
+        bytes32 nonceSalt = keccak256(abi.encode("reputation-attacker-x402-v2", attackSvc));
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = adapter.authNonceFor(
+            address(usdc), buyer2, 100e6, 0, validBefore, attackSvc, provider2AgentId, svc2, nonceSalt
+        );
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
+            vm, attackerKey, address(usdc), buyer2, address(adapter), 100e6, 0, validBefore, nonce
         );
         vm.prank(relayer);
-        uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, svc2, auth);
+        uint256 paymentId2 = adapter.settle(address(usdc), 100e6, attackSvc, provider2AgentId, svc2, auth, nonceSalt);
         providerRecipients[paymentId2] = provider2;
 
         vm.prank(buyer2);

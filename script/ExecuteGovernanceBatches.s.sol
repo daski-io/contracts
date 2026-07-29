@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
 import {GovernanceBatches} from "./GovernanceBatches.sol";
+import {ReleaseManifest} from "./ReleaseManifest.sol";
 
 /// @notice Drives the two staged-deployment governance batches through the
 ///         Safe configured as ADMIN_ADDRESS, one Safe transaction per batch
@@ -20,44 +21,33 @@ import {GovernanceBatches} from "./GovernanceBatches.sol";
 ///         Execution is testnet automation: the broadcasting EOA must be an
 ///         owner of a 1-of-1 Safe. With a higher threshold the script logs
 ///         every call plus the packed MultiSend payload and reverts — feed
-///         those into the Safe app instead. Stack addresses come from the
-///         same env names VerifyDeployment.s.sol reads.
-contract ExecuteGovernanceBatches is Script {
+///         those into the Safe app instead. Stack identity comes from the
+///         same reviewed release manifest VerifyDeployment.s.sol reads.
+contract ExecuteGovernanceBatches is ReleaseManifest {
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address sender = vm.addr(deployerKey);
-        address safe = vm.envAddress("ADMIN_ADDRESS");
         string memory batch = vm.envString("GOVERNANCE_BATCH");
+        Manifest memory manifest = _loadManifest();
+        address safe = manifest.admin;
+        DeploymentValidation.Stack memory deployment = manifest.stack;
 
         SafeDeployment.validateCanonicalDeployment();
-        DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
-            identity: vm.envAddress("IDENTITY_REGISTRY_ADDRESS"),
-            usdc: vm.envAddress("USDC_ADDRESS"),
-            providerTreasury: vm.envAddress("PROVIDER_TREASURY_ADDRESS"),
-            paymentTreasury: vm.envAddress("PAYMENT_TREASURY_ADDRESS"),
-            sanctionsOracle: vm.envAddress("SANCTIONS_ORACLE_ADDRESS"),
-            agentIndex: vm.envAddress("AGENT_INDEX_ADDRESS"),
-            daskiValidationRegistry: vm.envAddress("DASKI_VALIDATION_REGISTRY_ADDRESS"),
-            providerRegistry: vm.envAddress("PROVIDER_REGISTRY_ADDRESS"),
-            serviceRegistry: vm.envAddress("SERVICE_REGISTRY_ADDRESS"),
-            router: vm.envAddress("PAYMENT_ROUTER_ADDRESS"),
-            reputation: vm.envAddress("REPUTATION_STORAGE_ADDRESS"),
-            x402Adapter: vm.envAddress("X402_ADAPTER_ADDRESS"),
-            permitAdapter: vm.envAddress("PERMIT_ADAPTER_ADDRESS"),
-            approvalAdapter: vm.envAddress("APPROVAL_ADAPTER_ADDRESS"),
-            listingFee: vm.envOr("LISTING_FEE", uint256(1_000_000)),
-            commissionBps: vm.envOr("COMMISSION_BPS", uint256(500)),
-            reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
-        });
+        _validateManifestCore(manifest);
 
         address[] memory targets;
         bytes[] memory calls;
         bytes32 batchId = keccak256(bytes(batch));
         if (batchId == keccak256("accept")) {
-            DeploymentValidation.validatePendingAdmins(DeploymentValidation.adminContracts(deployment), sender, safe);
+            DeploymentValidation.validateDarkState(deployment);
+            DeploymentValidation.validatePendingAdmins(
+                DeploymentValidation.adminContracts(deployment), sender, safe, manifest.governance
+            );
             (targets, calls) = GovernanceBatches.adminAcceptance(deployment);
         } else if (batchId == keccak256("activate")) {
-            DeploymentValidation.validateAcceptedAdmins(DeploymentValidation.adminContracts(deployment), safe);
+            DeploymentValidation.validateAcceptedAdmins(
+                DeploymentValidation.adminContracts(deployment), safe, manifest.governance
+            );
             DeploymentValidation.validateDarkState(deployment);
             (targets, calls) = GovernanceBatches.paymentActivation(deployment);
         } else {
@@ -71,7 +61,9 @@ contract ExecuteGovernanceBatches is Script {
         vm.stopBroadcast();
 
         if (batchId == keccak256("accept")) {
-            DeploymentValidation.validateAcceptedAdmins(DeploymentValidation.adminContracts(deployment), safe);
+            DeploymentValidation.validateAcceptedAdmins(
+                DeploymentValidation.adminContracts(deployment), safe, manifest.governance
+            );
             console.log("Batch 1 executed: all nine admin roles accepted by", safe);
         } else {
             DeploymentValidation.validateOperationalState(deployment);

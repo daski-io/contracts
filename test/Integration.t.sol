@@ -171,12 +171,16 @@ contract IntegrationTest is Test {
         uint256 providerAgentId,
         bytes32 svcId
     ) internal returns (uint256 paymentId) {
-        bytes32 nonce = keccak256(abi.encode("integration-x402-v2", ref));
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, buyerKey, address(usdc), buyerAddr, address(router), amount, 0, block.timestamp + 1 hours, nonce
+        bytes32 nonceSalt = keccak256(abi.encode("integration-x402-v2", ref));
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = adapter.authNonceFor(
+            address(usdc), buyerAddr, amount, 0, validBefore, ref, providerAgentId, svcId, nonceSalt
+        );
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
+            vm, buyerKey, address(usdc), buyerAddr, address(adapter), amount, 0, validBefore, nonce
         );
         vm.prank(relayer);
-        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth);
+        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth, nonceSalt);
     }
 
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)

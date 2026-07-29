@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @notice Adapter that settles x402 (EIP-3009 TransferWithAuthorization)
-///         payments. Funds move directly from buyer to the router via the
-///         token's `transferWithAuthorization`; adapter never holds funds.
+/// @notice Adapter for Daski's x402 V2 receive-authorization payment profile.
 interface IX402Adapter {
     event FacilitatorAuthorizationSet(address indexed facilitator, bool authorized);
 
@@ -12,9 +10,7 @@ interface IX402Adapter {
         uint256 validAfter;
         uint256 validBefore;
         bytes32 nonce;
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
+        bytes signature;
     }
 
     function settle(
@@ -23,7 +19,8 @@ interface IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
-        EIP3009Auth calldata auth
+        EIP3009Auth calldata auth,
+        bytes32 nonceSalt
     ) external returns (uint256 paymentId);
 
     /// @notice Atomic gasless-registration + settle. If `auth.from` has no
@@ -38,12 +35,29 @@ interface IX402Adapter {
         uint256 providerAgentId,
         bytes32 serviceId,
         EIP3009Auth calldata auth,
+        bytes32 nonceSalt,
         string calldata agentURI,
         uint256 registrationDeadline,
         bytes calldata registrationSignature
     ) external returns (uint256 buyerAgentId, uint256 paymentId);
 
     function authorizedFacilitators(address facilitator) external view returns (bool);
+
+    function getFacilitatorCount() external view returns (uint256);
+
+    function getFacilitatorAt(uint256 index) external view returns (address);
+
+    function authNonceFor(
+        address token,
+        address payer,
+        uint256 amount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 serviceRef,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        bytes32 nonceSalt
+    ) external view returns (bytes32);
 
     function setFacilitatorAuthorization(address facilitator, bool authorized) external;
 }
