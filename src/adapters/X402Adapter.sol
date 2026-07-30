@@ -168,24 +168,13 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         address expectedPayee,
         bytes32 nonceSalt
     ) public view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                DASKI_X402_RECEIVE_DOMAIN,
-                block.chainid,
-                address(this),
-                address(router),
-                token,
-                payer,
-                amount,
-                validAfter,
-                validBefore,
-                providerAgentId,
-                serviceId,
-                expectedPayee,
-                serviceRef,
-                nonceSalt
-            )
-        );
+        // All fields are ABI-static, so concatenating these encoded segments
+        // preserves the canonical payload while bounding compiler stack use.
+        bytes memory paymentContext =
+            abi.encode(DASKI_X402_RECEIVE_DOMAIN, block.chainid, address(this), address(router), token, payer, amount);
+        bytes memory routeContext =
+            abi.encode(validAfter, validBefore, providerAgentId, serviceId, expectedPayee, serviceRef, nonceSalt);
+        return keccak256(bytes.concat(paymentContext, routeContext));
     }
 
     function setFacilitatorAuthorization(address facilitator, bool authorized) external onlyAdmin {

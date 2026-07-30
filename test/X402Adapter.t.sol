@@ -424,24 +424,25 @@ contract X402AdapterTest is Test {
     }
 
     function test_authNonceMatchesSharedBaseSepoliaVector() public pure {
-        bytes32 nonce = keccak256(
-            abi.encode(
-                keccak256("DASKI_X402_RECEIVE_V1"),
-                uint256(84_532),
-                address(0xA004),
-                address(0xA002),
-                address(0xA003),
-                0x1111111111111111111111111111111111111111,
-                uint256(15_000_000),
-                uint256(0),
-                uint256(2_000_000_000),
-                uint256(2),
-                bytes32(uint256(0x2222222222222222222222222222222222222222222222222222222222222222)),
-                address(0xBEEF),
-                bytes32(uint256(0x3333333333333333333333333333333333333333333333333333333333333333)),
-                bytes32(uint256(0x4444444444444444444444444444444444444444444444444444444444444444))
-            )
+        bytes memory paymentContext = abi.encode(
+            keccak256("DASKI_X402_RECEIVE_V1"),
+            uint256(84_532),
+            address(0xA004),
+            address(0xA002),
+            address(0xA003),
+            0x1111111111111111111111111111111111111111,
+            uint256(15_000_000)
         );
+        bytes memory routeContext = abi.encode(
+            uint256(0),
+            uint256(2_000_000_000),
+            uint256(2),
+            bytes32(uint256(0x2222222222222222222222222222222222222222222222222222222222222222)),
+            address(0xBEEF),
+            bytes32(uint256(0x3333333333333333333333333333333333333333333333333333333333333333)),
+            bytes32(uint256(0x4444444444444444444444444444444444444444444444444444444444444444))
+        );
+        bytes32 nonce = keccak256(bytes.concat(paymentContext, routeContext));
         assertEq(nonce, 0x6895237ed56c402a03e8bdad76bdaaa360aea6460ca448a08c4bb2afcf8e901e);
     }
 

@@ -44,24 +44,19 @@ contract X402VectorsTest is Test {
 
     function _assertVector(uint256 index) private view {
         Vector memory vector = _loadVector(index);
-        bytes32 nonce = keccak256(
-            abi.encode(
-                NONCE_DOMAIN,
-                vector.chainId,
-                vector.adapter,
-                vector.router,
-                vector.token,
-                vector.payer,
-                vector.amount,
-                vector.validAfter,
-                vector.validBefore,
-                vector.providerAgentId,
-                vector.serviceId,
-                vector.expectedPayee,
-                vector.serviceRef,
-                vector.nonceSalt
-            )
+        bytes memory paymentContext = abi.encode(
+            NONCE_DOMAIN, vector.chainId, vector.adapter, vector.router, vector.token, vector.payer, vector.amount
         );
+        bytes memory routeContext = abi.encode(
+            vector.validAfter,
+            vector.validBefore,
+            vector.providerAgentId,
+            vector.serviceId,
+            vector.expectedPayee,
+            vector.serviceRef,
+            vector.nonceSalt
+        );
+        bytes32 nonce = keccak256(bytes.concat(paymentContext, routeContext));
         assertEq(nonce, vector.nonce);
 
         bytes32 domain = EIP3009Signer.domainSeparator(vector.token, vector.name, vector.version, vector.chainId);
