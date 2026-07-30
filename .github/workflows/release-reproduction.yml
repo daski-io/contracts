@@ -44,8 +44,13 @@ jobs:
         with:
           version: v1.5.1
 
-      - name: Install pinned compiler without a shared cache
-        run: svm install 0.8.24
+      - name: Prewarm pinned compiler without a shared cache
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
 
       - name: Reproduce release in isolated temporary directories
         env:
@@ -86,8 +91,13 @@ jobs:
         with:
           version: v1.5.1
 
-      - name: Install pinned compiler without a shared cache
-        run: svm install 0.8.24
+      - name: Prewarm pinned compiler without a shared cache
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
 
       - name: Reproduce release in isolated temporary directories
         env:

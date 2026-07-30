@@ -26,8 +26,13 @@ jobs:
         with:
           version: v1.5.1
 
-      - name: Install pinned compiler
-        run: svm install 0.8.24
+      - name: Prewarm pinned compiler
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
 
       - name: Create isolated recursive checkout
         run: |
