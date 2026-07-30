@@ -18,6 +18,10 @@ CAST_OUTPUT = """cast Version: 1.5.1-stable
 Commit SHA: b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2
 Build Timestamp: test
 Build Profile: test"""
+ACTION_FORGE_OUTPUT = """forge Version: 1.5.1-v1.5.1
+Commit SHA: b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2
+Build Timestamp: test
+Build Profile: test"""
 
 
 def fake_hash(data: bytes) -> str:
@@ -134,6 +138,17 @@ class ReleaseBuildVerifierTest(unittest.TestCase):
 
     def _write_manifest(self) -> None:
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+
+    def test_normalizes_official_foundry_action_version_label(self) -> None:
+        self.assertEqual(
+            verifier.parse_toolchain(ACTION_FORGE_OUTPUT, "forge"),
+            (verifier.FOUNDRY_VERSION, verifier.FOUNDRY_COMMIT),
+        )
+
+    def test_rejects_unpinned_foundry_version_label(self) -> None:
+        output = ACTION_FORGE_OUTPUT.replace("1.5.1-v1.5.1", "1.5.2-v1.5.2")
+        with self.assertRaisesRegex(verifier.VerificationError, "unsupported forge version"):
+            verifier.parse_toolchain(output, "forge")
 
     @patch.object(verifier, "keccak", side_effect=fake_keccak)
     @patch.object(verifier, "command_output", side_effect=fake_command)

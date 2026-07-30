@@ -24,6 +24,7 @@ CONTRACTS = (
 SOLC_VERSION = "0.8.24+commit.e11b9ed9"
 EVM_VERSION = "cancun"
 FOUNDRY_VERSION = "1.5.1-stable"
+FOUNDRY_VERSION_OUTPUTS = frozenset({"1.5.1-stable", "1.5.1-v1.5.1"})
 FOUNDRY_COMMIT = "b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2"
 OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome"
 CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation"
@@ -101,7 +102,8 @@ def parse_toolchain(output: str, tool: str) -> tuple[str, str]:
     version = re.search(rf"^{tool} Version: (.+)$", output, re.MULTILINE)
     commit = re.search(r"^Commit SHA: ([0-9a-f]{40})$", output, re.MULTILINE)
     require(version is not None and commit is not None, f"unrecognized {tool} --version output")
-    return version.group(1), commit.group(1)
+    require(version.group(1) in FOUNDRY_VERSION_OUTPUTS, f"unsupported {tool} version")
+    return FOUNDRY_VERSION, commit.group(1)
 
 
 def validate_manifest(manifest: dict[str, Any], forge_output: str) -> None:
