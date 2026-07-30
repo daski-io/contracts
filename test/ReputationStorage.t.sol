@@ -190,8 +190,9 @@ contract ReputationStorageTest is Test {
     function _payAsBuyer(uint256 amount, bytes32 serviceRef, bytes32 svcId) internal returns (uint256) {
         bytes32 nonceSalt = keccak256(abi.encode("reputation-x402-v2", serviceRef));
         uint256 validBefore = block.timestamp + 1 hours;
+        (,,,, address expectedPayee) = services.resolveSettlement(svcId);
         bytes32 nonce = adapter.authNonceFor(
-            address(usdc), buyer, amount, 0, validBefore, serviceRef, providerAgentId, svcId, nonceSalt
+            address(usdc), buyer, amount, 0, validBefore, serviceRef, providerAgentId, svcId, expectedPayee, nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
@@ -208,7 +209,7 @@ contract ReputationStorageTest is Test {
             nonce
         );
         vm.prank(relayer);
-        return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth, nonceSalt);
+        return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, expectedPayee, auth, nonceSalt);
     }
 
     function _createSecondPayment() internal returns (uint256 paymentId2, uint256 provider2AgentId, address buyer2) {
@@ -253,8 +254,18 @@ contract ReputationStorageTest is Test {
         bytes32 serviceRef = keccak256("attack-svc");
         bytes32 nonceSalt = keccak256(abi.encode("reputation-attacker-x402-v2", serviceRef));
         uint256 validBefore = block.timestamp + 1 hours;
+        (,,,, address expectedPayee) = services.resolveSettlement(secondServiceId);
         bytes32 nonce = adapter.authNonceFor(
-            address(usdc), buyer2, 100e6, 0, validBefore, serviceRef, provider2AgentId, secondServiceId, nonceSalt
+            address(usdc),
+            buyer2,
+            100e6,
+            0,
+            validBefore,
+            serviceRef,
+            provider2AgentId,
+            secondServiceId,
+            expectedPayee,
+            nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
@@ -271,7 +282,9 @@ contract ReputationStorageTest is Test {
             nonce
         );
         vm.prank(relayer);
-        return adapter.settle(address(usdc), 100e6, serviceRef, provider2AgentId, secondServiceId, auth, nonceSalt);
+        return adapter.settle(
+            address(usdc), 100e6, serviceRef, provider2AgentId, secondServiceId, expectedPayee, auth, nonceSalt
+        );
     }
 
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)

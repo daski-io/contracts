@@ -48,13 +48,14 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         bytes32 nonceSalt
     ) external onlyAuthorizedFacilitator nonReentrant returns (uint256 paymentId) {
-        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, auth, nonceSalt);
+        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, nonceSalt);
 
         uint256 buyerAgentId = _resolveBuyer(auth.from);
-        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
+        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, buyerAgentId);
     }
 
     /// @notice Atomic registration + settle. If the buyer (auth.from) has no
@@ -74,13 +75,14 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         bytes32 nonceSalt,
         string calldata agentURI,
         uint256 registrationDeadline,
         bytes calldata registrationSignature
     ) external onlyAuthorizedFacilitator nonReentrant returns (uint256 buyerAgentId, uint256 paymentId) {
-        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, auth, nonceSalt);
+        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, nonceSalt);
 
         bool found;
         (buyerAgentId, found) = _tryResolveBuyer(auth.from);
@@ -88,7 +90,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
             buyerAgentId = agentIndex.registerWithSig(agentURI, auth.from, registrationDeadline, registrationSignature);
         }
 
-        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
+        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, buyerAgentId);
     }
 
     // Both callers hold the nonReentrant guard for the complete registration,
@@ -100,6 +102,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         uint256 buyerAgentId
     ) internal returns (uint256 paymentId) {
@@ -113,7 +116,9 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
 
         IERC20(token).safeTransfer(address(router), amount);
         _requireExactFunding(token, routerBalanceBefore, amount);
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId);
+        paymentId = router.settle(
+            token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId, expectedPayee
+        );
 
         require(IERC20(token).balanceOf(address(this)) == adapterBalanceBefore, "adapter balance changed");
         require(_routerBalance(token) == routerBalanceBefore, "router balance changed");
@@ -126,6 +131,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         bytes32 nonceSalt
     ) internal view {
@@ -143,6 +149,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
                     serviceRef,
                     providerAgentId,
                     serviceId,
+                    expectedPayee,
                     nonceSalt
                 ),
             "auth not bound to call"
@@ -158,6 +165,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         bytes32 nonceSalt
     ) public view returns (bytes32) {
         return keccak256(
@@ -173,6 +181,7 @@ contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
                 validBefore,
                 providerAgentId,
                 serviceId,
+                expectedPayee,
                 serviceRef,
                 nonceSalt
             )

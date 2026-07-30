@@ -3,11 +3,14 @@
 ## Scope and residual trust
 
 Daski depends on the canonical ERC-8004 identity registry for ownership and
-operator authorization. The pause control limits damage after an unexpected
-registry change; it does not remove trust in the registry owner or eliminate
-the interval between detection and confirmed pause transactions. Mainnet
-sign-off must record the registry governance model and explicitly accept that
-residual interval and the guardian's denial-of-service authority.
+operator authorization. Buyers pin the quoted service payee in each payment
+authorization, so a later registry change cannot redirect that payment. The
+monitor and pause control limit denial-of-service and authorization exposure
+after an unexpected registry change; they do not remove trust in the registry
+owner or eliminate the interval between detection and confirmed pause
+transactions. Mainnet sign-off must record the registry governance model and
+explicitly accept that residual interval and the guardian's denial-of-service
+authority.
 
 ## Production prerequisites
 
@@ -55,9 +58,12 @@ alert adapter with:
 
 ## Automated response
 
-The monitor compares the proxy and implementation codehashes, ERC-1967
-implementation and admin slots, `owner()`, and `getVersion()` with the manifest.
-On a mismatch it:
+At one pinned block, the monitor compares the proxy and implementation
+codehashes, ERC-1967 implementation and admin slots, `owner()`, and
+`getVersion()` with the manifest. It also scans a persisted, contiguous block
+cursor for `Upgraded`, `AdminChanged`, and `OwnershipTransferred` logs, catching
+changes that were restored between observations. On a mismatch or identity
+change event it:
 
 1. pauses `PaymentRouter`;
 2. pauses AgentIndex, DaskiValidationRegistry, ProviderRegistry, and
@@ -67,10 +73,12 @@ On a mismatch it:
 5. archives the observation and guardian transaction outputs under the
    effective release hash, then exits nonzero for alerting.
 
-An RPC failure before the core slots and codehashes can be observed exits
-nonzero without signing. A metadata call that fails after those observations is
-treated as a compatibility mismatch and authorizes the guardian. Operations
-must investigate every monitor or provider failure.
+An RPC failure archives evidence and invokes the alert adapter without signing
+guardian transactions. The continuous monitor then retries instead of exiting;
+the one-shot pre-start check exits nonzero. The event cursor advances only
+after a complete, clean observation, and defaults to
+`<evidence-dir>/external-identity-cursor.json`. Operations must investigate
+every monitor or provider failure.
 
 ## Manual Safe fallback
 

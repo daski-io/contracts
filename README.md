@@ -57,7 +57,7 @@ A *service* is a marketable product — the unit of buyer discovery and reputati
 | **AgentIndex**         | Daski companion to the canonical IdentityRegistry: a verified wallet→agentId reverse index (the canonical registry has none) plus gasless onboarding — `registerWithSig` mints a canonical agent for a fresh buyer wallet (relayer pays gas, wallet signs EIP-712 consent) and hands it the NFT. `resolve` returns an explicit found flag because agent ID 0 is valid. |
 | **ProviderRegistry**   | Provider listings: USDC listing fee, active toggle. Gates canonical ERC-8004 agents into the Daski "provider" role (caller must own the agent NFT). |
 | **ServiceRegistry**    | Per-provider product catalog. A service is a row, not its own NFT — keyed by `keccak256(providerAgentId, serviceSlug, version)`. Optional service payee overrides are bound to both the authorizing NFT owner and the live canonical `agentWallet`; skills are declared off-chain. |
-| **PaymentRouter**      | Rail-agnostic settlement that splits accepted tokens between provider/service wallet and the payment treasury. Per-token policy independently controls payment acceptance and reputation eligibility/minimums. It validates (provider, service) on every settlement, namespaces replay protection, and excludes relationships provable from on-chain identity state at settlement time from reputation. |
+| **PaymentRouter**      | Rail-agnostic settlement that splits accepted tokens between provider/service wallet and the payment treasury. Per-token policy independently controls payment acceptance and reputation eligibility/minimums. It validates (provider, service) on every settlement and requires the live resolved payee to match the buyer-quoted payee, namespaces replay protection, and excludes relationships provable from on-chain identity state at settlement time from reputation. |
 | **X402Adapter**        | Daski's x402 V2 `daski-exact/1` rail using EIP-3009 `receiveWithAuthorization` (Circle USDC). Each opaque EOA/ERC-1271 signature is bound to the complete settlement route and a fresh client salt; only enumerated admin-allowlisted facilitators may submit it. |
 | **PermitAdapter**      | EIP-2612 permit rail. |
 | **ApprovalAdapter**    | Plain `approve` + `transferFrom` rail (fallback). |
@@ -431,8 +431,8 @@ record whether equality or divergence is intended.
 
 x402 V2 EIP-3009 payments use the custom `daski-exact` scheme.
 `X402Adapter` derives the signed nonce from chain, adapter, router, token,
-payer, amount, authorization window, provider, service, service reference,
-and a fresh 32-byte client salt. It then executes
+payer, amount, authorization window, provider, service, expected payee,
+service reference, and a fresh 32-byte client salt. It then executes
 `receiveWithAuthorization`, adapter-to-router transfer, and router settlement
 atomically with exact balance-delta checks. Payment replay protection remains
 the router's `(buyerAgentId, providerAgentId, serviceId, serviceRef)` key; a

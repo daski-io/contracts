@@ -160,13 +160,52 @@ contract X402AdapterTest is Test {
         return keccak256(abi.encode("x402-v2-registration-salt", serviceRef, from));
     }
 
+    function _authNonceFor(
+        address token,
+        address payer,
+        uint256 amount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 serviceRef,
+        uint256 targetProviderAgentId,
+        bytes32 targetServiceId,
+        bytes32 nonceSalt
+    ) internal view returns (bytes32) {
+        return adapter.authNonceFor(
+            token,
+            payer,
+            amount,
+            validAfter,
+            validBefore,
+            serviceRef,
+            targetProviderAgentId,
+            targetServiceId,
+            provider,
+            nonceSalt
+        );
+    }
+
+    function _settleAdapter(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 targetProviderAgentId,
+        bytes32 targetServiceId,
+        IX402Adapter.EIP3009Auth memory auth,
+        bytes32 nonceSalt
+    ) internal returns (uint256 paymentId) {
+        return adapter.settle(
+            token, amount, serviceRef, targetProviderAgentId, targetServiceId, provider, auth, nonceSalt
+        );
+    }
+
     function _authFor(uint256 value, bytes32 serviceRef, uint256 targetProviderAgentId, bytes32 targetServiceId)
         internal
         view
         returns (IX402Adapter.EIP3009Auth memory)
     {
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
+        bytes32 nonce = _authNonceFor(
             address(usdc),
             buyer,
             value,
@@ -217,7 +256,7 @@ contract X402AdapterTest is Test {
         bytes32 ref = keccak256("ref-1");
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        uint256 paymentId = _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(treasury), 6e6); // includes 1 USDC listing fee from setUp
@@ -236,13 +275,12 @@ contract X402AdapterTest is Test {
         bytes32 ref = keccak256("duplicate-payment-key");
         IX402Adapter.EIP3009Auth memory firstAuth = _authFor(100e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, firstAuth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, firstAuth, _saltFor(ref));
 
         bytes32 secondSalt = keccak256("fresh-salt");
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 secondNonce = adapter.authNonceFor(
-            address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, secondSalt
-        );
+        bytes32 secondNonce =
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, secondSalt);
         IX402Adapter.EIP3009Auth memory secondAuth = EIP3009Signer.signReceive(
             vm,
             BUYER_KEY,
@@ -261,7 +299,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert("payment key used");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, secondAuth, secondSalt);
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, secondAuth, secondSalt);
 
         assertFalse(usdc.authorizationState(buyer, secondNonce));
         assertEq(usdc.balanceOf(buyer), buyerBefore);
@@ -289,7 +327,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert("auth not bound to call");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
 
         assertFalse(usdc.authorizationState(buyer, nonce));
     }
@@ -297,9 +335,8 @@ contract X402AdapterTest is Test {
     function test_settleRejectsZeroNonceSalt() public {
         bytes32 ref = keccak256("zero-salt");
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
-            address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, bytes32(0)
-        );
+        bytes32 nonce =
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, bytes32(0));
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
             BUYER_KEY,
@@ -317,7 +354,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert("zero nonce salt");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, bytes32(0));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, bytes32(0));
         assertFalse(usdc.authorizationState(buyer, nonce));
     }
 
@@ -326,48 +363,64 @@ contract X402AdapterTest is Test {
         bytes32 salt = _saltFor(ref);
         uint256 validBefore = block.timestamp + 1 hours;
         bytes32 expected =
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
 
         assertNotEq(
             expected,
-            adapter.authNonceFor(
-                address(usdc), address(0xBEEF), 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt
-            )
+            _authNonceFor(address(usdc), address(0xBEEF), 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt)
+        );
+        assertNotEq(
+            expected, _authNonceFor(address(usdc), buyer, 101e6, 0, validBefore, ref, providerAgentId, serviceId, salt)
+        );
+        assertNotEq(
+            expected, _authNonceFor(address(usdc), buyer, 100e6, 1, validBefore, ref, providerAgentId, serviceId, salt)
         );
         assertNotEq(
             expected,
-            adapter.authNonceFor(address(usdc), buyer, 101e6, 0, validBefore, ref, providerAgentId, serviceId, salt)
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore + 1, ref, providerAgentId, serviceId, salt)
         );
         assertNotEq(
             expected,
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 1, validBefore, ref, providerAgentId, serviceId, salt)
-        );
-        assertNotEq(
-            expected,
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore + 1, ref, providerAgentId, serviceId, salt)
-        );
-        assertNotEq(
-            expected,
-            adapter.authNonceFor(
+            _authNonceFor(
                 address(usdc), buyer, 100e6, 0, validBefore, bytes32(uint256(ref) + 1), providerAgentId, serviceId, salt
             )
         );
         assertNotEq(
             expected,
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId + 1, serviceId, salt)
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId + 1, serviceId, salt)
         );
         assertNotEq(
             expected,
-            adapter.authNonceFor(
+            _authNonceFor(
                 address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, bytes32(uint256(serviceId) + 1), salt
             )
         );
         assertNotEq(
             expected,
-            adapter.authNonceFor(
+            _authNonceFor(
                 address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, bytes32(uint256(salt) + 1)
             )
         );
+        assertNotEq(
+            expected,
+            adapter.authNonceFor(
+                address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, address(0xBEEF), salt
+            )
+        );
+    }
+
+    function test_settleRejectsExpectedPayeeNotSignedByBuyer() public {
+        bytes32 ref = keccak256("changed-expected-payee");
+        bytes32 salt = _saltFor(ref);
+        IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
+
+        vm.prank(relayer);
+        vm.expectRevert("auth not bound to call");
+        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, address(0xBEEF), auth, salt);
+
+        assertFalse(usdc.authorizationState(buyer, auth.nonce));
+        assertEq(usdc.balanceOf(address(adapter)), 0);
+        assertEq(usdc.balanceOf(address(router)), 0);
     }
 
     function test_authNonceMatchesSharedBaseSepoliaVector() public pure {
@@ -384,11 +437,12 @@ contract X402AdapterTest is Test {
                 uint256(2_000_000_000),
                 uint256(2),
                 bytes32(uint256(0x2222222222222222222222222222222222222222222222222222222222222222)),
+                address(0xBEEF),
                 bytes32(uint256(0x3333333333333333333333333333333333333333333333333333333333333333)),
                 bytes32(uint256(0x4444444444444444444444444444444444444444444444444444444444444444))
             )
         );
-        assertEq(nonce, 0xf0872764c2542890513764a8d23790424f3c5ce54c069086da3c05fbe36bc73a);
+        assertEq(nonce, 0x6895237ed56c402a03e8bdad76bdaaa360aea6460ca448a08c4bb2afcf8e901e);
     }
 
     function test_receiveAuthorizationCannotBeFrontRunOutsideAdapter() public {
@@ -403,7 +457,7 @@ contract X402AdapterTest is Test {
         assertFalse(usdc.authorizationState(buyer, auth.nonce));
 
         vm.prank(relayer);
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
         assertTrue(usdc.authorizationState(buyer, auth.nonce));
     }
 
@@ -412,7 +466,7 @@ contract X402AdapterTest is Test {
         bytes32 salt = _saltFor(ref);
         uint256 validBefore = block.timestamp + 1 hours;
         bytes32 nonce =
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
             vm,
             BUYER_KEY,
@@ -430,7 +484,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
         assertFalse(usdc.authorizationState(buyer, nonce));
     }
 
@@ -440,7 +494,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(makeAddr("unauthorized"));
         vm.expectRevert("facilitator not authorized");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
     }
 
     function test_settleWithRegistrationUnauthorizedCallerReverts() public {
@@ -460,6 +514,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _registrationSaltFor(ref, freshBuyer),
             "ipfs://fresh",
@@ -505,7 +560,7 @@ contract X402AdapterTest is Test {
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
         vm.expectRevert("facilitator not authorized");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
     }
 
     function test_settleSanctionedSignerRevertsBeforeAuthorization() public {
@@ -515,7 +570,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
 
         assertFalse(usdc.authorizationState(buyer, auth.nonce));
         assertEq(usdc.balanceOf(buyer), 1000e6);
@@ -528,7 +583,7 @@ contract X402AdapterTest is Test {
         auth = _corruptSignature(auth);
         vm.prank(relayer);
         vm.expectRevert("invalid signature");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
     }
 
     function test_settleExpiredAuthReverts() public {
@@ -536,7 +591,7 @@ contract X402AdapterTest is Test {
         bytes32 salt = _saltFor(ref);
         uint256 validBefore = block.timestamp + 10;
         bytes32 nonce =
-            adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
+            _authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
             BUYER_KEY,
@@ -554,19 +609,19 @@ contract X402AdapterTest is Test {
         vm.warp(block.timestamp + 100);
         vm.prank(relayer);
         vm.expectRevert("auth expired");
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
     }
 
     function test_settleNonceReplayReverts() public {
         bytes32 ref = keccak256("ref-replay");
         IX402Adapter.EIP3009Auth memory auth = _authFor(50e6, ref, providerAgentId, serviceId);
         vm.prank(relayer);
-        adapter.settle(address(usdc), 50e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 50e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
 
         // The same authorization cannot be replayed after successful settlement.
         vm.prank(relayer);
         vm.expectRevert("auth already used");
-        adapter.settle(address(usdc), 50e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 50e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
     }
 
     function test_settleBuyerNoAgentReverts() public {
@@ -580,7 +635,7 @@ contract X402AdapterTest is Test {
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, keccak256("ref-na"), providerAgentId, serviceId);
         vm.prank(relayer);
         vm.expectRevert("buyer has no agent");
-        adapter.settle(
+        _settleAdapter(
             address(usdc), 100e6, keccak256("ref-na"), providerAgentId, serviceId, auth, _saltFor(keccak256("ref-na"))
         );
     }
@@ -605,7 +660,7 @@ contract X402AdapterTest is Test {
         );
         vm.prank(relayer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(other), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
     }
 
     function test_settleFeeOnTransferTokenRevertsAtomically() public {
@@ -617,9 +672,8 @@ contract X402AdapterTest is Test {
         bytes32 ref = keccak256("ref-fee");
         bytes32 salt = _saltFor(ref);
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
-            address(feeToken), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt
-        );
+        bytes32 nonce =
+            _authNonceFor(address(feeToken), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
             BUYER_KEY,
@@ -637,7 +691,7 @@ contract X402AdapterTest is Test {
 
         vm.prank(relayer);
         vm.expectRevert("unexpected token amount");
-        adapter.settle(address(feeToken), 100e6, ref, providerAgentId, serviceId, auth, salt);
+        _settleAdapter(address(feeToken), 100e6, ref, providerAgentId, serviceId, auth, salt);
 
         assertEq(feeToken.balanceOf(buyer), 100e6);
         assertEq(feeToken.balanceOf(address(router)), 0);
@@ -655,7 +709,7 @@ contract X402AdapterTest is Test {
         IX402Adapter.EIP3009Auth memory auth = _authFor(100e6, ref, providerAgentId, serviceId);
 
         vm.prank(relayer);
-        adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
+        _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, _saltFor(ref));
 
         assertEq(usdc.balanceOf(address(adapter)), adapterDust);
         assertEq(usdc.balanceOf(address(router)), routerDust);
@@ -675,9 +729,8 @@ contract X402AdapterTest is Test {
         bytes32 ref = keccak256("erc1271-buyer");
         bytes32 salt = keccak256("erc1271-salt");
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
-            address(usdc), address(wallet), 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt
-        );
+        bytes32 nonce =
+            _authNonceFor(address(usdc), address(wallet), 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
             walletOwnerKey,
@@ -694,7 +747,7 @@ contract X402AdapterTest is Test {
         );
 
         vm.prank(relayer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
+        uint256 paymentId = _settleAdapter(address(usdc), 100e6, ref, providerAgentId, serviceId, auth, salt);
 
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
         assertEq(rec.buyerAgentId, walletAgentId);
@@ -725,7 +778,7 @@ contract X402AdapterTest is Test {
         bytes32 targetServiceId
     ) internal view returns (IX402Adapter.EIP3009Auth memory) {
         uint256 validBefore = block.timestamp + 1 hours;
-        bytes32 nonce = adapter.authNonceFor(
+        bytes32 nonce = _authNonceFor(
             address(usdc),
             from,
             value,
@@ -761,6 +814,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _registrationSaltFor(ref, freshBuyer),
             "ipfs://fresh",
@@ -799,6 +853,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _registrationSaltFor(ref, freshBuyer),
             "ipfs://blocked",
@@ -828,6 +883,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _saltFor(ref),
             "anything",
@@ -860,6 +916,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _registrationSaltFor(ref, freshBuyer),
             "ipfs://x",
@@ -893,6 +950,7 @@ contract X402AdapterTest is Test {
             ref,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             _registrationSaltFor(ref, freshBuyer),
             "ipfs://x",

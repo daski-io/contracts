@@ -1,11 +1,14 @@
+import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import monitor_external_identity as monitor
+import monitor_identity_chain as monitor_identity
 
 
 class ExternalIdentityMonitorTest(unittest.TestCase):
@@ -17,6 +20,100 @@ class ExternalIdentityMonitorTest(unittest.TestCase):
         expected = {"proxy": "0x" + "AA" * 20, "version": "2.0.0"}
         actual = {"proxy": "0x" + "aa" * 20, "version": "2.0.0"}
         self.assertEqual(monitor.mismatches(expected, actual), {})
+
+    def test_observation_pins_every_rpc_read_to_one_block(self) -> None:
+        proxy = "0x" + "11" * 20
+        implementation = "0x" + "22" * 20
+        identity = {
+            "proxy": proxy,
+            "proxyRuntimeCodehash": "0x" + "33" * 32,
+            "implementation": implementation,
+            "implementationRuntimeCodehash": "0x" + "44" * 32,
+            "erc1967Admin": "0x" + "00" * 20,
+            "upgradeAuthority": "0x" + "55" * 20,
+            "version": "2.0.0",
+        }
+        calls: list[list[str]] = []
+
+        def fake_command(arguments: list[str]) -> str:
+            calls.append(arguments)
+            self.assertIn("--block", arguments)
+            self.assertEqual(arguments[arguments.index("--block") + 1], "123")
+            if arguments[1] == "storage":
+                address = (
+                    implementation
+                    if arguments[3] == monitor_identity.IMPLEMENTATION_SLOT
+                    else "0x" + "00" * 20
+                )
+                return "0x" + "00" * 12 + address[2:]
+            if arguments[1] == "codehash":
+                return (
+                    identity["proxyRuntimeCodehash"]
+                    if arguments[2] == proxy
+                    else identity["implementationRuntimeCodehash"]
+                )
+            if arguments[3] == "owner()(address)":
+                return identity["upgradeAuthority"]
+            if arguments[3] == "getVersion()(string)":
+                return json.dumps(identity["version"])
+            raise AssertionError(f"unexpected command: {arguments}")
+
+        actual = monitor.observe(
+            identity,
+            "http://localhost",
+            "cast",
+            fake_command,
+            123,
+        )
+
+        self.assertEqual(monitor.mismatches(identity, actual), {})
+        self.assertEqual(actual["observedBlock"], "123")
+        self.assertEqual(len(calls), 6)
+
+    def test_event_scan_uses_contiguous_range_and_all_security_topics(self) -> None:
+        proxy = "0x" + "11" * 20
+
+        def fake_command(arguments: list[str]) -> str:
+            event_filter = json.loads(arguments[3])
+            self.assertEqual(event_filter["fromBlock"], "0xa")
+            self.assertEqual(event_filter["toBlock"], "0xc")
+            self.assertEqual(
+                set(event_filter["topics"][0]),
+                set(monitor_identity.EVENT_TOPICS),
+            )
+            return json.dumps(
+                [
+                    {
+                        "topics": [next(iter(monitor_identity.EVENT_TOPICS))],
+                        "blockNumber": "0xb",
+                    }
+                ]
+            )
+
+        events = monitor.scan_identity_events(
+            proxy,
+            10,
+            12,
+            "http://localhost",
+            "cast",
+            fake_command,
+        )
+        self.assertEqual(events[0]["event"], "Upgraded")
+
+    def test_cursor_resumes_at_the_next_unscanned_block(self) -> None:
+        proxy = "0x" + "11" * 20
+        manifest_hash = "0x" + "22" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            cursor = Path(directory) / "cursor.json"
+            self.assertEqual(
+                monitor.next_cursor_block(cursor, proxy, manifest_hash, 50),
+                50,
+            )
+            monitor.write_cursor(cursor, proxy, manifest_hash, 55)
+            self.assertEqual(
+                monitor.next_cursor_block(cursor, proxy, manifest_hash, 99),
+                56,
+            )
 
     def test_pause_orders_payment_router_first_and_confirms_every_proxy(self) -> None:
         proxies = ["0x" + f"{index + 1:040x}" for index in range(9)]

@@ -36,6 +36,7 @@ contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         PermitData calldata permit
     ) external returns (uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
@@ -57,7 +58,9 @@ contract PermitAdapter is AdapterBaseUpgradeable, IPermitAdapter {
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
         _requireExactFunding(token, balanceBefore, amount);
 
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId);
+        paymentId = router.settle(
+            token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId, expectedPayee
+        );
     }
 
     uint256[50] private __gap;

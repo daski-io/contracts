@@ -24,6 +24,7 @@ contract X402VectorsTest is Test {
         uint256 validBefore;
         uint256 providerAgentId;
         bytes32 serviceId;
+        address expectedPayee;
         bytes32 serviceRef;
         bytes32 nonceSalt;
         bytes32 nonce;
@@ -56,6 +57,7 @@ contract X402VectorsTest is Test {
                 vector.validBefore,
                 vector.providerAgentId,
                 vector.serviceId,
+                vector.expectedPayee,
                 vector.serviceRef,
                 vector.nonceSalt
             )
@@ -99,6 +101,7 @@ contract X402VectorsTest is Test {
         vector.validBefore = vm.parseUint(vm.parseJsonString(json, string.concat(root, ".validBefore")));
         vector.providerAgentId = vm.parseUint(vm.parseJsonString(json, string.concat(root, ".providerAgentId")));
         vector.serviceId = vm.parseJsonBytes32(json, string.concat(root, ".serviceId"));
+        vector.expectedPayee = vm.parseJsonAddress(json, string.concat(root, ".expectedPayee"));
         vector.serviceRef = vm.parseJsonBytes32(json, string.concat(root, ".serviceRef"));
         vector.nonceSalt = vm.parseJsonBytes32(json, string.concat(root, ".nonceSalt"));
         vector.nonce = vm.parseJsonBytes32(json, string.concat(root, ".nonce"));

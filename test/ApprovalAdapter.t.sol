@@ -145,7 +145,8 @@ contract ApprovalAdapterTest is Test {
         vm.prank(buyer);
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("a-ref"), providerAgentId, serviceId);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, keccak256("a-ref"), providerAgentId, serviceId, provider);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         IPaymentRouter.PaymentRecord memory rec = router.getPayment(paymentId);
@@ -161,7 +162,7 @@ contract ApprovalAdapterTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
-        adapter.settle(address(usdc), 100e6, keccak256("sanctioned-approval"), providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("sanctioned-approval"), providerAgentId, serviceId, provider);
 
         assertEq(usdc.balanceOf(buyer), 1000e6);
         assertEq(router.nextPaymentId(), 1);
@@ -174,7 +175,7 @@ contract ApprovalAdapterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         uint256 paymentId =
-            adapter.settle(address(usdc), 100e6, keccak256("removed-sanction"), providerAgentId, serviceId);
+            adapter.settle(address(usdc), 100e6, keccak256("removed-sanction"), providerAgentId, serviceId, provider);
         assertEq(paymentId, 1);
     }
 
@@ -183,7 +184,7 @@ contract ApprovalAdapterTest is Test {
         usdc.approve(address(adapter), 50e6);
         vm.prank(buyer);
         vm.expectRevert();
-        adapter.settle(address(usdc), 100e6, keccak256("a-noall"), providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("a-noall"), providerAgentId, serviceId, provider);
     }
 
     function test_settleUnacceptedTokenReverts() public {
@@ -193,7 +194,7 @@ contract ApprovalAdapterTest is Test {
         other.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, keccak256("a-unk"), providerAgentId, serviceId);
+        adapter.settle(address(other), 100e6, keccak256("a-unk"), providerAgentId, serviceId, provider);
     }
 
     function test_settleBuyerNoAgentReverts() public {
@@ -206,7 +207,7 @@ contract ApprovalAdapterTest is Test {
         usdc.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("buyer has no agent");
-        adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId, serviceId);
+        adapter.settle(address(usdc), 100e6, keccak256("a-noid"), providerAgentId, serviceId, provider);
     }
 
     function test_settleFeeOnTransferTokenRevertsAtomically() public {
@@ -219,7 +220,7 @@ contract ApprovalAdapterTest is Test {
         feeToken.approve(address(adapter), 100e6);
         vm.prank(buyer);
         vm.expectRevert("unexpected token amount");
-        adapter.settle(address(feeToken), 100e6, keccak256("a-fee"), providerAgentId, serviceId);
+        adapter.settle(address(feeToken), 100e6, keccak256("a-fee"), providerAgentId, serviceId, provider);
 
         assertEq(feeToken.balanceOf(buyer), 100e6);
         assertEq(feeToken.balanceOf(address(router)), 0);

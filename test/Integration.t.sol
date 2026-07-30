@@ -173,8 +173,9 @@ contract IntegrationTest is Test {
     ) internal returns (uint256 paymentId) {
         bytes32 nonceSalt = keccak256(abi.encode("integration-x402-v2", ref));
         uint256 validBefore = block.timestamp + 1 hours;
+        (,,,, address expectedPayee) = services.resolveSettlement(svcId);
         bytes32 nonce = adapter.authNonceFor(
-            address(usdc), buyerAddr, amount, 0, validBefore, ref, providerAgentId, svcId, nonceSalt
+            address(usdc), buyerAddr, amount, 0, validBefore, ref, providerAgentId, svcId, expectedPayee, nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
             vm,
@@ -191,7 +192,7 @@ contract IntegrationTest is Test {
             nonce
         );
         vm.prank(relayer);
-        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth, nonceSalt);
+        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, expectedPayee, auth, nonceSalt);
     }
 
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)
@@ -266,7 +267,7 @@ contract IntegrationTest is Test {
         services.setActive(bytes32(0), false);
         vm.expectRevert("external dependency paused");
         vm.prank(address(adapter));
-        router.settle(address(usdc), 1, bytes32(0), 0, address(1), 0, bytes32(0));
+        router.settle(address(usdc), 1, bytes32(0), 0, address(1), 0, bytes32(0), address(1));
         vm.expectRevert("external dependency paused");
         router.refund(0, 1);
 

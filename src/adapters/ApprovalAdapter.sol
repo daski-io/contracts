@@ -31,10 +31,14 @@ contract ApprovalAdapter is AdapterBaseUpgradeable, IApprovalAdapter {
     }
 
     /// @inheritdoc IApprovalAdapter
-    function settle(address token, uint256 amount, bytes32 serviceRef, uint256 providerAgentId, bytes32 serviceId)
-        external
-        returns (uint256 paymentId)
-    {
+    function settle(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        address expectedPayee
+    ) external returns (uint256 paymentId) {
         require(router.isAcceptedToken(token), "token not accepted");
         _requireNotSanctioned(msg.sender);
 
@@ -46,7 +50,9 @@ contract ApprovalAdapter is AdapterBaseUpgradeable, IApprovalAdapter {
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
         _requireExactFunding(token, balanceBefore, amount);
 
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId);
+        paymentId = router.settle(
+            token, amount, serviceRef, buyerAgentId, msg.sender, providerAgentId, serviceId, expectedPayee
+        );
     }
 
     uint256[50] private __gap;

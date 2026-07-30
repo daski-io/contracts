@@ -10,12 +10,18 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
 
 from monitor_evidence import archive_alert, write_alert
+from monitor_identity_chain import (
+    block_number,
+    mismatches,
+    next_cursor_block,
+    observe,
+    scan_identity_events,
+    storage_address,
+    write_cursor,
+)
 
-IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
-ADMIN_SLOT = "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
 PAYMENT_ROUTER_INDEX = 4
 PAUSE_ORDER = (4, 0, 1, 2, 3, 5, 6, 7, 8)
 
@@ -33,64 +39,6 @@ def command(arguments: list[str]) -> str:
     result = subprocess.run(arguments, check=False, capture_output=True, text=True)
     require(result.returncode == 0, result.stderr.strip() or f"{arguments[0]} failed")
     return result.stdout.strip()
-
-
-def storage_address(value: str) -> str:
-    require(
-        value.startswith("0x") and len(value) == 66,
-        "RPC returned an invalid storage word",
-    )
-    return "0x" + value[-40:]
-
-
-def cast_string(value: str) -> str:
-    try:
-        decoded = json.loads(value)
-    except json.JSONDecodeError:
-        decoded = value
-    require(isinstance(decoded, str), "RPC returned an invalid string")
-    return decoded
-
-
-def observe(identity: dict[str, Any], rpc_url: str, cast: str) -> dict[str, str]:
-    proxy = identity["proxy"]
-    implementation = storage_address(command([cast, "storage", proxy, IMPLEMENTATION_SLOT, "--rpc-url", rpc_url]))
-    actual = {
-        "proxy": proxy.lower(),
-        "proxyRuntimeCodehash": command([cast, "codehash", proxy, "--rpc-url", rpc_url]).lower(),
-        "implementation": implementation.lower(),
-        "implementationRuntimeCodehash": command(
-            [cast, "codehash", implementation, "--rpc-url", rpc_url]
-        ).lower(),
-        "erc1967Admin": storage_address(
-            command([cast, "storage", proxy, ADMIN_SLOT, "--rpc-url", rpc_url])
-        ).lower(),
-    }
-    if mismatches({field: identity[field] for field in actual}, actual):
-        return actual
-    try:
-        actual["upgradeAuthority"] = command(
-            [cast, "call", proxy, "owner()(address)", "--rpc-url", rpc_url]
-        ).lower()
-    except MonitorError as error:
-        actual["upgradeAuthority"] = f"<read-failed: {error}>"
-    try:
-        actual["version"] = cast_string(
-            command([cast, "call", proxy, "getVersion()(string)", "--rpc-url", rpc_url])
-        )
-    except MonitorError as error:
-        actual["version"] = f"<read-failed: {error}>"
-    return actual
-
-
-def mismatches(expected: dict[str, Any], actual: dict[str, str]) -> dict[str, dict[str, str]]:
-    differences: dict[str, dict[str, str]] = {}
-    for field, expected_value in expected.items():
-        actual_value = actual.get(field)
-        normalized_expected = expected_value.lower() if field != "version" else expected_value
-        if actual_value != normalized_expected:
-            differences[field] = {"expected": expected_value, "actual": actual_value or ""}
-    return differences
 
 
 def pause_stack(
@@ -176,6 +124,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--release-summary", required=True, type=Path)
     parser.add_argument("--rpc-url", required=True)
     parser.add_argument("--evidence-dir", required=True, type=Path)
+    parser.add_argument("--cursor-file", type=Path)
     parser.add_argument("--interval-seconds", type=int, default=30)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--check-only", action="store_true")
@@ -212,10 +161,89 @@ def main() -> None:
         re.fullmatch(r"0x[0-9a-fA-F]{64}", effective_release_hash) is not None,
         "invalid effective release hash",
     )
+    cursor_file = (
+        args.cursor_file.resolve()
+        if args.cursor_file
+        else args.evidence_dir.resolve() / "external-identity-cursor.json"
+    )
 
     while True:
-        actual = observe(expected, args.rpc_url, cast)
+        try:
+            observed_block = block_number(args.rpc_url, cast, command)
+            actual = observe(
+                expected,
+                args.rpc_url,
+                cast,
+                command,
+                observed_block,
+            )
+            cursor_start = next_cursor_block(
+                cursor_file,
+                expected["proxy"],
+                manifest_hash,
+                observed_block,
+            )
+            require(
+                cursor_start <= observed_block + 1,
+                "identity event cursor is ahead of the observed chain",
+            )
+            events = scan_identity_events(
+                expected["proxy"],
+                cursor_start,
+                observed_block,
+                args.rpc_url,
+                cast,
+                command,
+            )
+        except (MonitorError, OSError, ValueError, json.JSONDecodeError) as error:
+            actual = {"rpcError": str(error)}
+            differences = {
+                "rpcRead": {
+                    "expected": "successful pinned observation",
+                    "actual": str(error),
+                }
+            }
+            directory = archive_alert(
+                args.evidence_dir.resolve(),
+                effective_release_hash,
+                manifest_hash,
+                actual,
+                differences,
+                [],
+            )
+            if not args.check_only:
+                alert_command = args.alert_command.resolve()
+                require(alert_command.is_file(), "alert command does not exist")
+                alert = notify(
+                    alert_command,
+                    args.alert_arg,
+                    directory,
+                    effective_release_hash,
+                    manifest_hash,
+                )
+                write_alert(
+                    directory,
+                    manifest_hash,
+                    effective_release_hash,
+                    actual,
+                    differences,
+                    [],
+                    alert,
+                )
+            if args.once:
+                raise MonitorError(
+                    f"external identity observation failed; evidence: {directory}"
+                ) from error
+            time.sleep(args.interval_seconds)
+            continue
+
         differences = mismatches(expected, actual)
+        if events:
+            actual["identityEvents"] = json.dumps(events, sort_keys=True)
+            differences["identityEvents"] = {
+                "expected": "none",
+                "actual": actual["identityEvents"],
+            }
         if differences:
             transactions: list[dict[str, str]] = []
             alert: dict[str, str] | None = None
@@ -262,6 +290,12 @@ def main() -> None:
                             alert,
                         )
             raise MonitorError(f"external identity mismatch; evidence: {directory}")
+        write_cursor(
+            cursor_file,
+            expected["proxy"],
+            manifest_hash,
+            observed_block,
+        )
         if args.once:
             return
         time.sleep(args.interval_seconds)

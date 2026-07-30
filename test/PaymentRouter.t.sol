@@ -36,7 +36,28 @@ contract PassThroughAdapter {
         bytes32 serviceId
     ) external returns (uint256 paymentId) {
         IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
-        return router.settle(token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId);
+        (,,,, address expectedPayee) = router.serviceRegistry().resolveSettlement(serviceId);
+        return
+            router.settle(
+                token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId, expectedPayee
+            );
+    }
+
+    function settleWithExpectedPayee(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        address buyerWallet,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        address expectedPayee
+    ) external returns (uint256 paymentId) {
+        IERC20(token).safeTransferFrom(msg.sender, address(router), amount);
+        return
+            router.settle(
+                token, amount, serviceRef, buyerAgentId, buyerWallet, providerAgentId, serviceId, expectedPayee
+            );
     }
 }
 
@@ -659,9 +680,36 @@ contract PaymentRouterTest is Test {
         assertEq(usdc.balanceOf(provider) - providerBefore, 95e6);
     }
 
+    function test_settleRevertsWhenResolvedPayeeChangesAfterAuthorization() public {
+        address quotedServicePayee = makeAddr("quotedServicePayee");
+        address attacker = makeAddr("compromisedRegistryPayee");
+        vm.prank(provider);
+        serviceRegistry.setServiceWallet(serviceId, quotedServicePayee);
+        identity.forceSetAgentWallet(providerAgentId, attacker);
+
+        vm.prank(buyer);
+        usdc.approve(address(adapter), 100e6);
+        vm.prank(buyer);
+        vm.expectRevert("payee changed");
+        adapter.settleWithExpectedPayee(
+            address(usdc),
+            100e6,
+            keccak256("payee-change"),
+            buyerAgentId,
+            buyer,
+            providerAgentId,
+            serviceId,
+            quotedServicePayee
+        );
+
+        assertEq(usdc.balanceOf(attacker), 0);
+        assertEq(usdc.balanceOf(quotedServicePayee), 0);
+        assertEq(usdc.balanceOf(address(router)), 0);
+    }
+
     function test_settleNonAdapterReverts() public {
         vm.expectRevert("not adapter");
-        router.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId);
+        router.settle(address(usdc), 100e6, keccak256("ref"), buyerAgentId, buyer, providerAgentId, serviceId, provider);
     }
 
     function test_settleUnacceptedTokenReverts() public {

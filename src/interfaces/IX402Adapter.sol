@@ -19,6 +19,7 @@ interface IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         bytes32 nonceSalt
     ) external returns (uint256 paymentId);
@@ -34,6 +35,7 @@ interface IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         bytes32 nonceSalt,
         string calldata agentURI,
@@ -56,6 +58,7 @@ interface IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         bytes32 nonceSalt
     ) external view returns (bytes32);
 

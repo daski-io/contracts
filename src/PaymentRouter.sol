@@ -29,6 +29,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         address buyerWallet;
         uint256 providerAgentId;
         bytes32 serviceId;
+        address expectedPayee;
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -68,7 +69,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         uint256 buyerAgentId,
         address buyerWallet,
         uint256 providerAgentId,
-        bytes32 serviceId
+        bytes32 serviceId,
+        address expectedPayee
     ) external onlyAdapter nonReentrant whenExternalDependencyOperational returns (uint256 paymentId) {
         Settlement memory request = Settlement({
             token: token,
@@ -77,7 +79,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
             buyerAgentId: buyerAgentId,
             buyerWallet: buyerWallet,
             providerAgentId: providerAgentId,
-            serviceId: serviceId
+            serviceId: serviceId,
+            expectedPayee: expectedPayee
         });
         paymentId = _settle(request);
     }
@@ -160,6 +163,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         providerWallet = wallet;
         payee = resolvedPayee;
         require(payee != address(0), "no payee wallet");
+        require(request.expectedPayee != address(0), "zero expected payee");
+        require(payee == request.expectedPayee, "payee changed");
     }
 
     /// @inheritdoc IPaymentRouter

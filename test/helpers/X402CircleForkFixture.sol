@@ -161,7 +161,7 @@ abstract contract X402CircleForkFixture is Test {
     ) internal view returns (IX402Adapter.EIP3009Auth memory auth) {
         uint256 validBefore = block.timestamp + 1 hours;
         bytes32 nonce = adapter.authNonceFor(
-            address(usdc), from, amount, 0, validBefore, serviceRef, providerAgentId, serviceId, nonceSalt
+            address(usdc), from, amount, 0, validBefore, serviceRef, providerAgentId, serviceId, provider, nonceSalt
         );
         auth = EIP3009Signer.signReceive(
             vm,

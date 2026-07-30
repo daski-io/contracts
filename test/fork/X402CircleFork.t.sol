@@ -56,13 +56,14 @@ contract X402CircleForkTest is X402CircleForkFixture {
         uint256 providerBefore = usdc.balanceOf(provider);
         uint256 treasuryBefore = usdc.balanceOf(treasury);
         vm.prank(facilitator);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, serviceId, auth, salt);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, serviceId, provider, auth, salt);
         _assertPayment(paymentId, buyerAgentId, serviceRef, providerBefore, treasuryBefore);
         assertTrue(usdc.authorizationState(buyer, auth.nonce), "authorization unused");
 
         vm.prank(facilitator);
         vm.expectRevert();
-        adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, serviceId, auth, salt);
+        adapter.settle(address(usdc), 100e6, serviceRef, providerAgentId, serviceId, provider, auth, salt);
         assertEq(usdc.balanceOf(address(adapter)), 0, "adapter retained replay funds");
         assertEq(usdc.balanceOf(address(router)), 0, "router retained replay funds");
 
@@ -73,7 +74,7 @@ contract X402CircleForkTest is X402CircleForkFixture {
         uint256 buyerBefore = usdc.balanceOf(buyer);
         vm.prank(facilitator);
         vm.expectRevert();
-        adapter.settle(address(usdc), 50e6, wrongRef, providerAgentId, serviceId, wrongAuth, wrongSalt);
+        adapter.settle(address(usdc), 50e6, wrongRef, providerAgentId, serviceId, provider, wrongAuth, wrongSalt);
         assertFalse(usdc.authorizationState(buyer, wrongAuth.nonce), "wrong domain consumed nonce");
         assertEq(usdc.balanceOf(buyer), buyerBefore, "wrong domain moved funds");
 
@@ -88,7 +89,9 @@ contract X402CircleForkTest is X402CircleForkFixture {
         providerBefore = usdc.balanceOf(provider);
         treasuryBefore = usdc.balanceOf(treasury);
         vm.prank(facilitator);
-        paymentId = adapter.settle(address(usdc), 80e6, walletRef, providerAgentId, serviceId, walletAuth, walletSalt);
+        paymentId = adapter.settle(
+            address(usdc), 80e6, walletRef, providerAgentId, serviceId, provider, walletAuth, walletSalt
+        );
         _assertPayment(paymentId, walletAgentId, walletRef, providerBefore, treasuryBefore);
     }
 
@@ -109,6 +112,7 @@ contract X402CircleForkTest is X402CircleForkFixture {
             serviceRef,
             providerAgentId,
             serviceId,
+            provider,
             auth,
             salt,
             "ipfs://fork-buyer",
