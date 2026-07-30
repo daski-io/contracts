@@ -338,11 +338,17 @@ complete facilitator set.
 validates the release ref and recursive submodules, rejects ambient Foundry
 configuration, compares the complete effective remapping set with
 `script/release-remappings.lock`, and builds with the committed config in an
-isolated environment. Every compiler source is then matched to its root or
-recursive-submodule Git object. The wrapper patches only the proven
-OpenZeppelin UUPS `__self` immutable, compares local and manifest runtime
-hashes, and pins the canonical identity implementation and upgrade authority
-before governance work. Evidence is archived under the effective release hash.
+isolated environment. The pinned compiler runs through
+`script/solc_capture.py`; the verifier hashes the exact standard-JSON input
+selected for every release target and matches every source byte to its root or
+recursive-submodule Git object. Artifact metadata remains an independent
+cross-check rather than the compiler-input source. The wrapper patches only
+the proven OpenZeppelin UUPS `__self` immutable, compares local and manifest
+runtime hashes, and pins the canonical identity implementation and upgrade
+authority before governance work. Each run creates a random, temporary v2
+provenance marker bound to the manifest, canonical revision evidence,
+effective release, and build hashes. The archived marker is evidence and is
+never reused as a live input. Evidence is archived under the effective release hash.
 The evidence directory must be outside the checkout:
 
 ```bash
@@ -365,7 +371,9 @@ python3 script/release.py accept --emit-only \
 export DEPLOYER_PRIVATE_KEY=<key>
 ```
 
-Use mode `activate` for activation. Mode `guardian` configures the reviewed
+Use mode `activate` for activation and provide `--gateway-url`; activation and
+unpause fail unless the gateway's public chain descriptor exactly matches the
+reviewed release manifest. Mode `guardian` configures the reviewed
 guardian across an already-upgraded stack; include the same calls in an
 existing-proxy upgrade batch. Modes `pause` and `unpause` emit or execute the
 all-nine external-dependency circuit-breaker batches. An automated guardian
@@ -377,8 +385,27 @@ environment using
 [`EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md`](EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md).
 Scripted execution remains limited to a 1-of-1 development Safe;
 release-candidate and Mainnet signers review the archived
-`MultiSendCallOnly` payload in the Safe app. Reproduce local-build evidence in
-a second clean environment before Mainnet approval.
+`MultiSendCallOnly` payload in the Safe app. Run the protected independent
+release-reproduction workflow before approval. Its two cache-isolated jobs
+retain both evidence sets and require exact equality. CI separately compares
+all nine normalized upgradeable layouts with
+`storage-layout/baseline.json`; CI never regenerates that reviewed baseline.
+The protected Circle fork workflow archives pinned-block and token-domain
+preflights together with both real-token fork suites. The clean-clone release
+ceremony workflow creates a recursive temporary clone and fresh Anvil chain,
+regenerates the build profile with no repository output/cache, then drives the
+full manifest parser through dark verification, emit-only and execution
+branches for every governance mode, a finalized facilitator revision, and
+final evidence archival:
+
+```bash
+python3 script/run_release_e2e.py \
+  --rpc-url http://127.0.0.1:8545 \
+  --evidence-dir /tmp/daski-release-e2e
+```
+
+`RELEASE_E2E_LOCAL_FIXTURE` is chain-bound to local Anvil chain ID 31337 and
+is rejected by the trusted release wrapper.
 
 Facilitator rotations are append-only manifest revisions. Copy
 `deployments/release-manifest-revision.example.json` and link it to the base and

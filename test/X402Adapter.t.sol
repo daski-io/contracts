@@ -177,10 +177,20 @@ contract X402AdapterTest is Test {
             targetServiceId,
             _saltFor(serviceRef)
         );
-        return
-            EIP3009Signer.signReceive(
-                vm, BUYER_KEY, address(usdc), buyer, address(adapter), value, 0, validBefore, nonce
-            );
+        return EIP3009Signer.signReceive(
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            value,
+            0,
+            validBefore,
+            nonce
+        );
     }
 
     function _corruptSignature(IX402Adapter.EIP3009Auth memory auth)
@@ -234,7 +244,18 @@ contract X402AdapterTest is Test {
             address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, secondSalt
         );
         IX402Adapter.EIP3009Auth memory secondAuth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, 0, validBefore, secondNonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            secondNonce
         );
         uint256 buyerBefore = usdc.balanceOf(buyer);
 
@@ -252,7 +273,18 @@ contract X402AdapterTest is Test {
         bytes32 ref = keccak256("random-nonce-ref");
         bytes32 nonce = keccak256("official-client-random-nonce");
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, 0, block.timestamp + 1 hours, nonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            block.timestamp + 1 hours,
+            nonce
         );
 
         vm.prank(relayer);
@@ -269,7 +301,18 @@ contract X402AdapterTest is Test {
             address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, bytes32(0)
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
 
         vm.prank(relayer);
@@ -371,7 +414,18 @@ contract X402AdapterTest is Test {
         bytes32 nonce =
             adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
 
         vm.prank(relayer);
@@ -484,7 +538,18 @@ contract X402AdapterTest is Test {
         bytes32 nonce =
             adapter.authNonceFor(address(usdc), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt);
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
         vm.warp(block.timestamp + 100);
         vm.prank(relayer);
@@ -528,6 +593,9 @@ contract X402AdapterTest is Test {
             vm,
             BUYER_KEY,
             address(other),
+            "USDC",
+            "2",
+            block.chainid,
             buyer,
             address(adapter),
             100e6,
@@ -553,7 +621,18 @@ contract X402AdapterTest is Test {
             address(feeToken), buyer, 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(feeToken), buyer, address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            BUYER_KEY,
+            address(feeToken),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
 
         vm.prank(relayer);
@@ -600,7 +679,18 @@ contract X402AdapterTest is Test {
             address(usdc), address(wallet), 100e6, 0, validBefore, ref, providerAgentId, serviceId, salt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, walletOwnerKey, address(usdc), address(wallet), address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            walletOwnerKey,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            address(wallet),
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
 
         vm.prank(relayer);
@@ -646,7 +736,9 @@ contract X402AdapterTest is Test {
             targetServiceId,
             _registrationSaltFor(serviceRef, from)
         );
-        return EIP3009Signer.signReceive(vm, key, address(usdc), from, address(adapter), value, 0, validBefore, nonce);
+        return EIP3009Signer.signReceive(
+            vm, key, address(usdc), "USDC", "2", block.chainid, from, address(adapter), value, 0, validBefore, nonce
+        );
     }
 
     function test_settleWithRegistration_unregisteredBuyer() public {

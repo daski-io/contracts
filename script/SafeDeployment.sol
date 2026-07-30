@@ -104,6 +104,17 @@ library SafeDeployment {
 
     /// @notice Validate the complete governance identity and configuration.
     function validateSafeProfile(address safe, Profile memory profile) internal view {
+        _validateSafeProfile(safe, profile, true);
+    }
+
+    /// @notice Validate the complete Safe configuration in the isolated local
+    /// release fixture, where canonical dependency code is not installed.
+    function validateLocalFixtureSafeProfile(address safe, Profile memory profile) internal view {
+        require(block.chainid == 31337, "local Safe fixture only allowed on chain 31337");
+        _validateSafeProfile(safe, profile, false);
+    }
+
+    function _validateSafeProfile(address safe, Profile memory profile, bool validateDependencyCode) private view {
         require(safe.codehash == SAFE_PROXY_CODEHASH, "governance is not canonical SafeProxy");
         ISafe target = ISafe(safe);
         require(target.masterCopy() == SAFE_L2_SINGLETON, "wrong Safe singleton");
@@ -123,8 +134,12 @@ library SafeDeployment {
                 "release governance requires >=2 owners and threshold >=2"
             );
         }
-        _requireCodehash(SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_CODEHASH, "SafeL2 singleton");
-        _requireCodehash(COMPATIBILITY_FALLBACK_HANDLER, COMPATIBILITY_FALLBACK_HANDLER_CODEHASH, "fallback handler");
+        if (validateDependencyCode) {
+            _requireCodehash(SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_CODEHASH, "SafeL2 singleton");
+            _requireCodehash(
+                COMPATIBILITY_FALLBACK_HANDLER, COMPATIBILITY_FALLBACK_HANDLER_CODEHASH, "fallback handler"
+            );
+        }
     }
 
     /// @notice Safe.setup calldata for a fresh Safe: no module setup call, no

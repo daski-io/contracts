@@ -26,6 +26,7 @@ from release_build import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--release-ref", default="origin/develop")
+    parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
@@ -63,7 +64,13 @@ def main() -> None:
             build_env,
             temporary_root / "build.log",
         )
-        provenance = build_verifier.calculate_source_closure(repo, output_dir, head, cast)
+        provenance = build_verifier.calculate_source_closure(
+            repo,
+            output_dir,
+            temporary_root / "build-info",
+            head,
+            cast,
+        )
         check_checkout(repo, {"build": {"sourceCommit": head}}, args.release_ref)
 
     profile = {
@@ -79,7 +86,17 @@ def main() -> None:
         "foundryVersion": foundry_version,
         "foundryCommit": foundry_commit,
     }
-    print(json.dumps({"build": profile}, indent=2))
+    result = json.dumps({"build": profile}, indent=2) + "\n"
+    if args.output is not None:
+        destination = args.output.resolve()
+        try:
+            destination.relative_to(repo)
+        except ValueError:
+            pass
+        else:
+            raise ReleaseError("build profile output must be outside the release checkout")
+        destination.write_text(result, encoding="utf-8")
+    print(result, end="")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,10 @@ contract SafeValidationHarness {
     function validate(address safe, SafeDeployment.Profile calldata profile) external view {
         SafeDeployment.validateSafeProfile(safe, profile);
     }
+
+    function validateLocalFixture(address safe, SafeDeployment.Profile calldata profile) external view {
+        SafeDeployment.validateLocalFixtureSafeProfile(safe, profile);
+    }
 }
 
 contract SafeDeploymentTest is Test {
@@ -79,6 +83,12 @@ contract SafeDeploymentTest is Test {
 
         vm.expectRevert("release governance requires >=2 owners and threshold >=2");
         harness.validate(safe, profile);
+    }
+
+    function test_localFixtureValidationIsChainBound() public {
+        vm.chainId(8453);
+        vm.expectRevert("local Safe fixture only allowed on chain 31337");
+        harness.validateLocalFixture(safe, _profile(1, new address[](0), address(0)));
     }
 
     function _mockBaseProfile() internal {

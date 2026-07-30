@@ -15,6 +15,14 @@ residual interval and the guardian's denial-of-service authority.
   environment against the reviewed manifest and wrapper-generated
   `summary.json`. The monitor verifies the summary's manifest hash and uses its
   effective release hash for evidence.
+- Deploy the committed `ops/external-identity-monitor.service` definition (or
+  a byte-for-byte equivalent container worker) with the environment schema in
+  `ops/external-identity-monitor.env.example`. The pre-start check must pass
+  before the continuously running process is considered healthy.
+- Copy `ops/external-identity-monitor-deployment.example.json` into the
+  effective-release evidence directory and fill every field from the deployed
+  service. Hash the exact deployed service definition plus its redacted
+  configuration; never archive RPC credentials or signer secrets.
 - Back the guardian with a dedicated HSM/KMS key whose only Daski authority is
   `pauseExternalDependency()`. The adapter command must sign, submit, wait for
   confirmation, and print the transaction hash.
@@ -33,6 +41,16 @@ The monitor invokes the configured guardian adapter with:
   --calldata <pauseExternalDependency selector> \
   --rpc-url <Base RPC> \
   --effective-release-hash <bytes32>
+```
+
+After it has attempted the pause sequence, the monitor invokes the configured
+alert adapter with:
+
+```text
+<alert-command> <alert-args> \
+  --evidence-dir <alert-evidence-directory> \
+  --effective-release-hash <bytes32> \
+  --manifest-hash <bytes32>
 ```
 
 ## Automated response

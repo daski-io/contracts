@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import verify_release_build as build_verifier
 import release_revision as revision_verifier
+import verify_gateway_descriptor as gateway_verifier
 from release_build import (
     ReleaseError,
     build_release_targets,
@@ -25,6 +27,35 @@ from release_build import (
     runtime_environment,
     validate_ambient_environment,
 )
+
+
+def canonical_evidence(value: dict) -> bytes:
+    return build_verifier.canonical_json(value) + b"\n"
+
+
+def verify_run_inputs(
+    repo: Path,
+    manifest: dict,
+    manifest_path: Path,
+    manifest_bytes: bytes,
+    pinned_manifest: Path,
+    revision_evidence: revision_verifier.RevisionEvidence,
+    revision_evidence_path: Path,
+    revision_evidence_bytes: bytes,
+    marker_path: Path,
+    marker_bytes: bytes,
+    release_ref: str,
+    cast: str,
+) -> None:
+    check_checkout(repo, manifest, release_ref)
+    require(manifest_path.read_bytes() == manifest_bytes, "release manifest changed during run")
+    require(pinned_manifest.read_bytes() == manifest_bytes, "pinned release manifest changed during run")
+    revision_verifier.verify_inputs_unchanged(revision_evidence, cast)
+    require(
+        revision_evidence_path.read_bytes() == revision_evidence_bytes,
+        "canonical revision evidence changed during run",
+    )
+    require(marker_path.read_bytes() == marker_bytes, "release provenance marker changed during run")
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--active", action="store_true", help="verify the operational rather than dark state")
     parser.add_argument("--emit-only", action="store_true", help="emit a reviewed Safe payload without broadcasting")
     parser.add_argument("--revision", action="append", default=[], type=Path)
+    parser.add_argument("--gateway-url")
     return parser.parse_args()
 
 
@@ -50,6 +82,10 @@ def main() -> None:
     require(not (args.mode not in governance_modes and args.emit_only), "--emit-only requires a governance mode")
     require(not (args.mode != "verify" and args.active), "--active is only valid with verify")
     require(args.mode != "revision-payload" or args.revision, "revision-payload requires --revision")
+    require(
+        args.mode not in ("activate", "unpause") or args.gateway_url,
+        "--gateway-url is required before enabling traffic",
+    )
     forge = shutil.which("forge")
     cast = shutil.which("cast")
     require(forge is not None and cast is not None, "forge and cast must be on PATH")
@@ -94,7 +130,13 @@ def main() -> None:
             temporary_root / "build.log",
         )
         local_evidence = build_verifier.verify(
-            pinned_manifest, output_dir, forge, cast, repo, foundry_config_hash
+            pinned_manifest,
+            output_dir,
+            forge,
+            cast,
+            repo=repo,
+            build_info=build_info_dir,
+            foundry_config_hash=foundry_config_hash,
         )
         check_checkout(repo, manifest, args.release_ref)
         revision_evidence = revision_verifier.process(
@@ -107,6 +149,36 @@ def main() -> None:
             cast,
             args.mode == "revision-payload",
         )
+        revision_evidence_path = temporary_root / "revision-evidence.json"
+        revision_evidence_bytes = canonical_evidence(
+            {
+                "baseManifestHash": local_evidence["manifestHash"],
+                "effectiveReleaseHash": revision_evidence.effective_release_hash,
+                "effectiveFacilitators": revision_evidence.effective_facilitators,
+                "revisionHashes": [
+                    revision["revisionHash"] for revision in revision_evidence.finalized
+                ],
+                "revisions": revision_evidence.finalized,
+            }
+        )
+        revision_evidence_path.write_bytes(revision_evidence_bytes)
+        revision_evidence_hash = build_verifier.keccak(revision_evidence_bytes, cast)
+        run_id_bytes = secrets.token_bytes(32)
+        require(any(run_id_bytes), "release run ID must be nonzero")
+        run_id = "0x" + run_id_bytes.hex()
+        marker = {
+            "schema": "daski-release-provenance/v2",
+            "runId": run_id,
+            "manifestHash": local_evidence["manifestHash"],
+            "revisionEvidenceHash": revision_evidence_hash,
+            "effectiveReleaseHash": revision_evidence.effective_release_hash,
+            "sourceClosureHash": local_evidence["sourceProvenance"]["sourceClosureHash"],
+            "compilerInputHash": local_evidence["sourceProvenance"]["compilerInputHash"],
+            "foundryConfigHash": foundry_config_hash,
+        }
+        marker_bytes = canonical_evidence(marker)
+        provenance_path = temporary_root / "provenance.json"
+        provenance_path.write_bytes(marker_bytes)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         action = f"{args.mode}-{'payload' if args.emit_only else 'execution'}"
         if args.mode == "verify":
@@ -122,6 +194,8 @@ def main() -> None:
         shutil.copyfile(temporary_root / "build.log", evidence_dir / "build.log")
         shutil.copytree(build_info_dir, evidence_dir / "build-info")
         shutil.copytree(temporary_root / "revisions", evidence_dir / "revisions")
+        shutil.copyfile(revision_evidence_path, evidence_dir / "revision-evidence.json")
+        shutil.copyfile(provenance_path, evidence_dir / "provenance.json")
         (evidence_dir / "foundry-config.json").write_text(
             json.dumps(foundry_config, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -131,115 +205,104 @@ def main() -> None:
         )
 
         release_env = runtime_environment()
-        release_env["RELEASE_MANIFEST_PATH"] = str(evidence_dir / "release-manifest.json")
-        provenance_path = evidence_dir / "provenance.json"
-        provenance_path.write_text(
-            json.dumps(
-                {
-                    "manifestHash": local_evidence["manifestHash"],
-                    "sourceClosureHash": local_evidence["sourceProvenance"]["sourceClosureHash"],
-                    "compilerInputHash": local_evidence["sourceProvenance"]["compilerInputHash"],
-                    "foundryConfigHash": foundry_config_hash,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        release_env["RELEASE_MANIFEST_PATH"] = str(pinned_manifest)
         release_env["RELEASE_PROVENANCE_PATH"] = str(provenance_path)
+        release_env["RELEASE_RUN_ID"] = run_id
         release_env["EFFECTIVE_RELEASE_HASH"] = revision_evidence.effective_release_hash
-        revision_evidence_path = evidence_dir / "revision-evidence.json"
-        revision_evidence_path.write_text(
-            json.dumps(
-                {
-                    "baseManifestHash": local_evidence["manifestHash"],
-                    "effectiveReleaseHash": revision_evidence.effective_release_hash,
-                    "effectiveFacilitators": revision_evidence.effective_facilitators,
-                    "revisions": revision_evidence.finalized,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
         release_env["RELEASE_REVISION_EVIDENCE_PATH"] = str(revision_evidence_path)
 
-        if args.mode == "revision-payload":
-            release_env["DEPLOYMENT_ACTIVE"] = "true"
-            release_env["EXTERNAL_DEPENDENCY_PAUSED"] = "false"
+        def invoke_forge(script: str, log_name: str, broadcast: bool = False) -> None:
+            verify_run_inputs(
+                repo,
+                manifest,
+                manifest_path,
+                manifest_bytes,
+                pinned_manifest,
+                revision_evidence,
+                revision_evidence_path,
+                revision_evidence_bytes,
+                provenance_path,
+                marker_bytes,
+                args.release_ref,
+                cast,
+            )
             forge_script(
                 repo,
                 forge,
-                "script/VerifyDeployment.s.sol",
+                script,
                 args.rpc_url,
                 output_dir,
                 cache_dir,
                 release_env,
-                evidence_dir / "pre-proposal-verification.log",
+                evidence_dir / log_name,
+                broadcast=broadcast,
             )
+            verify_run_inputs(
+                repo,
+                manifest,
+                manifest_path,
+                manifest_bytes,
+                pinned_manifest,
+                revision_evidence,
+                revision_evidence_path,
+                revision_evidence_bytes,
+                provenance_path,
+                marker_bytes,
+                args.release_ref,
+                cast,
+            )
+
+        def verify_gateway() -> None:
+            descriptor = gateway_verifier.load_url(args.gateway_url)
+            gateway_verifier.verify(manifest, descriptor)
+
+        if args.mode == "revision-payload":
+            release_env["DEPLOYMENT_ACTIVE"] = "true"
+            release_env["EXTERNAL_DEPENDENCY_PAUSED"] = "false"
+            invoke_forge("script/VerifyDeployment.s.sol", "pre-proposal-verification.log")
             (evidence_dir / "revision-payload.json").write_text(
                 json.dumps(revision_evidence.proposal, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
         elif args.mode == "verify":
             release_env["DEPLOYMENT_ACTIVE"] = str(args.active).lower()
-            forge_script(
-                repo,
-                forge,
-                "script/VerifyDeployment.s.sol",
-                args.rpc_url,
-                output_dir,
-                cache_dir,
-                release_env,
-                evidence_dir / "verification.log",
-            )
+            invoke_forge("script/VerifyDeployment.s.sol", "verification.log")
         else:
             if args.mode in ("activate", "unpause"):
+                verify_gateway()
                 release_env["DEPLOYMENT_ACTIVE"] = str(args.mode == "unpause").lower()
                 release_env["EXTERNAL_DEPENDENCY_PAUSED"] = str(args.mode == "unpause").lower()
-                forge_script(
-                    repo,
-                    forge,
-                    "script/VerifyDeployment.s.sol",
-                    args.rpc_url,
-                    output_dir,
-                    cache_dir,
-                    release_env,
-                    evidence_dir / "pre-activation.log",
-                )
+                invoke_forge("script/VerifyDeployment.s.sol", "pre-activation.log")
             release_env["GOVERNANCE_BATCH"] = args.mode
             release_env["EMIT_ONLY"] = str(args.emit_only).lower()
             if args.emit_only:
                 require("GOVERNANCE_SENDER" in release_env, "GOVERNANCE_SENDER is required with --emit-only")
-            forge_script(
-                repo,
-                forge,
+            if args.mode in ("activate", "unpause"):
+                verify_gateway()
+            invoke_forge(
                 "script/ExecuteGovernanceBatches.s.sol",
-                args.rpc_url,
-                output_dir,
-                cache_dir,
-                release_env,
-                evidence_dir / f"{args.mode}-batch.log",
+                f"{args.mode}-batch.log",
                 broadcast=not args.emit_only,
             )
             if not args.emit_only and args.mode != "guardian":
                 release_env["DEPLOYMENT_ACTIVE"] = str(args.mode in ("activate", "pause", "unpause")).lower()
                 release_env["EXTERNAL_DEPENDENCY_PAUSED"] = str(args.mode == "pause").lower()
-                forge_script(
-                    repo,
-                    forge,
-                    "script/VerifyDeployment.s.sol",
-                    args.rpc_url,
-                    output_dir,
-                    cache_dir,
-                    release_env,
-                    evidence_dir / "post-execution.log",
-                )
+                invoke_forge("script/VerifyDeployment.s.sol", "post-execution.log")
 
-        revision_verifier.verify_inputs_unchanged(revision_evidence, cast)
-        check_checkout(repo, manifest, args.release_ref)
+        verify_run_inputs(
+            repo,
+            manifest,
+            manifest_path,
+            manifest_bytes,
+            pinned_manifest,
+            revision_evidence,
+            revision_evidence_path,
+            revision_evidence_bytes,
+            provenance_path,
+            marker_bytes,
+            args.release_ref,
+            cast,
+        )
         summary = {
             "mode": args.mode,
             "emitOnly": args.emit_only,
@@ -253,6 +316,8 @@ def main() -> None:
             "sourceClosureHash": local_evidence["sourceProvenance"]["sourceClosureHash"],
             "compilerInputHash": local_evidence["sourceProvenance"]["compilerInputHash"],
             "foundryConfigHash": foundry_config_hash,
+            "runId": run_id,
+            "revisionEvidenceHash": revision_evidence_hash,
             "effectiveReleaseHash": revision_evidence.effective_release_hash,
             "effectiveFacilitators": revision_evidence.effective_facilitators,
             "revisions": revision_evidence.finalized,

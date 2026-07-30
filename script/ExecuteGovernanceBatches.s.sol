@@ -35,7 +35,7 @@ contract ExecuteGovernanceBatches is ReleaseManifest {
     function run() external {
         RunContext memory context = _runContext();
         Manifest memory manifest = _loadManifest();
-        SafeDeployment.validateCanonicalDeployment();
+        _validateCanonicalSafeDeployment();
         (address[] memory targets, bytes[] memory calls) = _governanceCalls(context, manifest);
 
         _logBatch(context.batch, targets, calls);
@@ -47,10 +47,21 @@ contract ExecuteGovernanceBatches is ReleaseManifest {
             return;
         }
 
-        vm.startBroadcast(context.deployerKey);
-        SafeDeployment.execMultiSendBatch(manifest.admin, context.sender, targets, calls);
-        vm.stopBroadcast();
+        _executeBatch(context, manifest.admin, targets, calls);
         _validateExecutedBatch(context.batchId, manifest);
+    }
+
+    function _validateCanonicalSafeDeployment() internal view virtual {
+        SafeDeployment.validateCanonicalDeployment();
+    }
+
+    function _executeBatch(RunContext memory context, address safe, address[] memory targets, bytes[] memory calls)
+        internal
+        virtual
+    {
+        vm.startBroadcast(context.deployerKey);
+        SafeDeployment.execMultiSendBatch(safe, context.sender, targets, calls);
+        vm.stopBroadcast();
     }
 
     function _runContext() private view returns (RunContext memory context) {
@@ -84,12 +95,16 @@ contract ExecuteGovernanceBatches is ReleaseManifest {
         if (context.batchId == keccak256("accept")) {
             DeploymentValidation.validateDarkState(deployment);
             DeploymentValidation.validatePendingAdmins(
-                DeploymentValidation.adminContracts(deployment), context.sender, manifest.admin, manifest.governance
+                DeploymentValidation.adminContracts(deployment),
+                context.sender,
+                manifest.admin,
+                manifest.governance,
+                manifest.localFixture
             );
             return GovernanceBatches.adminAcceptance(deployment);
         }
         DeploymentValidation.validateAcceptedAdmins(
-            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance
+            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance, manifest.localFixture
         );
         if (context.batchId == keccak256("guardian")) {
             return GovernanceBatches.pauseGuardianConfiguration(deployment, manifest.pauseGuardian);
@@ -111,7 +126,10 @@ contract ExecuteGovernanceBatches is ReleaseManifest {
         DeploymentValidation.Stack memory deployment = manifest.stack;
         if (batchId == keccak256("accept")) {
             DeploymentValidation.validateAcceptedAdmins(
-                DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance
+                DeploymentValidation.adminContracts(deployment),
+                manifest.admin,
+                manifest.governance,
+                manifest.localFixture
             );
             console.log("Batch 1 executed: all nine admin roles accepted by", manifest.admin);
         } else if (batchId == keccak256("guardian")) {

@@ -177,7 +177,18 @@ contract IntegrationTest is Test {
             address(usdc), buyerAddr, amount, 0, validBefore, ref, providerAgentId, svcId, nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, buyerKey, address(usdc), buyerAddr, address(adapter), amount, 0, validBefore, nonce
+            vm,
+            buyerKey,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyerAddr,
+            address(adapter),
+            amount,
+            0,
+            validBefore,
+            nonce
         );
         vm.prank(relayer);
         paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth, nonceSalt);

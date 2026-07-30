@@ -26,7 +26,7 @@ contract VerifyDeployment is ReleaseManifest {
         }
 
         DeploymentValidation.validateAcceptedAdmins(
-            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance
+            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance, manifest.localFixture
         );
         // Direct token transfers cannot be prevented. These observations are
         // archived but are not activation failures; settlement preserves them.

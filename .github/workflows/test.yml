@@ -36,11 +36,18 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Check upgradeable storage layouts
+        run: python3 script/check_storage_layout.py
+
       - name: Run Forge tests
-        run: forge test -vvv
+        run: forge test --no-match-path 'test/fork/*' -vvv
 
       - name: Run Forge coverage
-        run: forge coverage --ir-minimum --exclude-tests --no-match-coverage 'script/' --report summary
+        run: >-
+          forge coverage --ir-minimum --exclude-tests
+          --no-match-path 'test/fork/*'
+          --no-match-coverage 'script/'
+          --report summary
 
   security:
     name: Slither analysis

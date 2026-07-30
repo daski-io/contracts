@@ -21,6 +21,11 @@ import {ReputationSchemas} from "../src/reputation/ReputationSchemas.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
 
+interface IUsdcDomain {
+    function version() external view returns (string memory);
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+}
+
 /// @notice Shared deployment invariants used during deployment and by the
 ///         read-only post-deployment verifier.
 library DeploymentValidation {
@@ -114,6 +119,11 @@ library DeploymentValidation {
         require(IERC165(identity).supportsInterface(type(IERC165).interfaceId), "identity lacks ERC165");
         require(IERC165(identity).supportsInterface(type(IERC721).interfaceId), "identity lacks ERC721");
         require(IERC20Metadata(usdc).decimals() == 6, "USDC must have 6 decimals");
+        if (block.chainid == BASE_MAINNET) {
+            _requireUsdcDomain(usdc, "USD Coin", "2");
+        } else if (block.chainid == BASE_SEPOLIA) {
+            _requireUsdcDomain(usdc, "USDC", "2");
+        }
         require(address(IEAS(eas).getSchemaRegistry()) == schemaRegistry, "wrong EAS schema registry");
     }
 
@@ -245,7 +255,17 @@ library DeploymentValidation {
         address pendingAdmin,
         SafeDeployment.Profile memory governance
     ) internal view {
-        SafeDeployment.validateSafeProfile(pendingAdmin, governance);
+        validatePendingAdmins(contracts_, currentAdmin, pendingAdmin, governance, false);
+    }
+
+    function validatePendingAdmins(
+        address[9] memory contracts_,
+        address currentAdmin,
+        address pendingAdmin,
+        SafeDeployment.Profile memory governance,
+        bool localFixture
+    ) internal view {
+        _validateSafe(pendingAdmin, governance, localFixture);
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == currentAdmin, "unexpected current admin");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == pendingAdmin, "wrong pending admin");
@@ -257,10 +277,27 @@ library DeploymentValidation {
         address expectedAdmin,
         SafeDeployment.Profile memory governance
     ) internal view {
-        SafeDeployment.validateSafeProfile(expectedAdmin, governance);
+        validateAcceptedAdmins(contracts_, expectedAdmin, governance, false);
+    }
+
+    function validateAcceptedAdmins(
+        address[9] memory contracts_,
+        address expectedAdmin,
+        SafeDeployment.Profile memory governance,
+        bool localFixture
+    ) internal view {
+        _validateSafe(expectedAdmin, governance, localFixture);
         for (uint256 i = 0; i < contracts_.length; i++) {
             require(Admin2StepUpgradeable(contracts_[i]).admin() == expectedAdmin, "admin not accepted");
             require(Admin2StepUpgradeable(contracts_[i]).pendingAdmin() == address(0), "pending admin remains");
+        }
+    }
+
+    function _validateSafe(address safe, SafeDeployment.Profile memory governance, bool localFixture) private view {
+        if (localFixture) {
+            SafeDeployment.validateLocalFixtureSafeProfile(safe, governance);
+        } else {
+            SafeDeployment.validateSafeProfile(safe, governance);
         }
     }
 
@@ -324,5 +361,25 @@ library DeploymentValidation {
     function _requireBaseEas(address eas, address schemaRegistry) private pure {
         require(eas == BASE_EAS, "wrong Base EAS");
         require(schemaRegistry == BASE_SCHEMA_REGISTRY, "wrong Base schema registry");
+    }
+
+    function _requireUsdcDomain(address usdc, string memory expectedName, string memory expectedVersion) private view {
+        require(
+            keccak256(bytes(IERC20Metadata(usdc).name())) == keccak256(bytes(expectedName)), "wrong USDC domain name"
+        );
+        require(
+            keccak256(bytes(IUsdcDomain(usdc).version())) == keccak256(bytes(expectedVersion)),
+            "wrong USDC domain version"
+        );
+        bytes32 expected = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes(expectedName)),
+                keccak256(bytes(expectedVersion)),
+                block.chainid,
+                usdc
+            )
+        );
+        require(IUsdcDomain(usdc).DOMAIN_SEPARATOR() == expected, "wrong USDC domain separator");
     }
 }

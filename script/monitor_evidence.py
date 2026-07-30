@@ -14,6 +14,7 @@ def write_alert(
     actual: dict[str, str],
     differences: dict[str, dict[str, str]],
     transactions: list[dict[str, str]],
+    alert: dict[str, str] | None,
 ) -> None:
     observed_at = datetime.now(timezone.utc).isoformat()
     (directory / "observation.json").write_text(
@@ -25,6 +26,7 @@ def write_alert(
                 "identity": actual,
                 "mismatches": differences,
                 "pauseTransactions": transactions,
+                "alert": alert,
             },
             indent=2,
             sort_keys=True,
@@ -41,11 +43,20 @@ def archive_alert(
     actual: dict[str, str],
     differences: dict[str, dict[str, str]],
     transactions: list[dict[str, str]],
+    alert: dict[str, str] | None = None,
 ) -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     directory = evidence_root / effective_release_hash.removeprefix("0x") / f"{timestamp}-identity-alert"
     if directory.exists():
         raise FileExistsError(f"monitor evidence already exists: {directory}")
     directory.mkdir(parents=True)
-    write_alert(directory, manifest_hash, effective_release_hash, actual, differences, transactions)
+    write_alert(
+        directory,
+        manifest_hash,
+        effective_release_hash,
+        actual,
+        differences,
+        transactions,
+        alert,
+    )
     return directory

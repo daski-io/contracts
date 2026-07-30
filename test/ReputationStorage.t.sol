@@ -194,7 +194,18 @@ contract ReputationStorageTest is Test {
             address(usdc), buyer, amount, 0, validBefore, serviceRef, providerAgentId, svcId, nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, BUYER_KEY, address(usdc), buyer, address(adapter), amount, 0, validBefore, nonce
+            vm,
+            BUYER_KEY,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer,
+            address(adapter),
+            amount,
+            0,
+            validBefore,
+            nonce
         );
         vm.prank(relayer);
         return adapter.settle(address(usdc), amount, serviceRef, providerAgentId, svcId, auth, nonceSalt);
@@ -246,7 +257,18 @@ contract ReputationStorageTest is Test {
             address(usdc), buyer2, 100e6, 0, validBefore, serviceRef, provider2AgentId, secondServiceId, nonceSalt
         );
         IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
-            vm, secondBuyerKey, address(usdc), buyer2, address(adapter), 100e6, 0, validBefore, nonce
+            vm,
+            secondBuyerKey,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyer2,
+            address(adapter),
+            100e6,
+            0,
+            validBefore,
+            nonce
         );
         vm.prank(relayer);
         return adapter.settle(address(usdc), 100e6, serviceRef, provider2AgentId, secondServiceId, auth, nonceSalt);

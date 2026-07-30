@@ -138,6 +138,38 @@ def pause_stack(
         transaction["confirmed"] = "true"
 
 
+def notify(
+    alert_command: Path,
+    alert_args: list[str],
+    evidence_dir: Path,
+    effective_release_hash: str,
+    manifest_hash: str,
+) -> dict[str, str]:
+    result = subprocess.run(
+        [
+            str(alert_command),
+            *alert_args,
+            "--evidence-dir",
+            str(evidence_dir),
+            "--effective-release-hash",
+            effective_release_hash,
+            "--manifest-hash",
+            manifest_hash,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    evidence = {
+        "command": str(alert_command),
+        "output": result.stdout.strip(),
+        "error": result.stderr.strip(),
+        "submitted": str(result.returncode == 0).lower(),
+    }
+    require(result.returncode == 0, result.stderr.strip() or "alert command failed")
+    return evidence
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, type=Path)
@@ -149,6 +181,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--guardian-command", type=Path)
     parser.add_argument("--guardian-arg", action="append", default=[])
+    parser.add_argument("--alert-command", type=Path)
+    parser.add_argument("--alert-arg", action="append", default=[])
     return parser.parse_args()
 
 
@@ -156,6 +190,7 @@ def main() -> None:
     args = parse_args()
     require(args.interval_seconds > 0 and args.interval_seconds <= 60, "poll interval must be 1-60 seconds")
     require(args.check_only or args.guardian_command is not None, "guardian command is required")
+    require(args.check_only or args.alert_command is not None, "alert command is required")
     cast = shutil.which("cast")
     require(cast is not None, "cast must be on PATH")
     cast = str(Path(cast).resolve())
@@ -183,6 +218,7 @@ def main() -> None:
         differences = mismatches(expected, actual)
         if differences:
             transactions: list[dict[str, str]] = []
+            alert: dict[str, str] | None = None
             directory = archive_alert(
                 args.evidence_dir.resolve(),
                 effective_release_hash,
@@ -205,14 +241,26 @@ def main() -> None:
                         transactions,
                     )
                 finally:
-                    write_alert(
-                        directory,
-                        manifest_hash,
-                        effective_release_hash,
-                        actual,
-                        differences,
-                        transactions,
-                    )
+                    alert_command = args.alert_command.resolve()
+                    require(alert_command.is_file(), "alert command does not exist")
+                    try:
+                        alert = notify(
+                            alert_command,
+                            args.alert_arg,
+                            directory,
+                            effective_release_hash,
+                            manifest_hash,
+                        )
+                    finally:
+                        write_alert(
+                            directory,
+                            manifest_hash,
+                            effective_release_hash,
+                            actual,
+                            differences,
+                            transactions,
+                            alert,
+                        )
             raise MonitorError(f"external identity mismatch; evidence: {directory}")
         if args.once:
             return

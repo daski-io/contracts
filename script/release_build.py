@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import verify_release_build as build_verifier
 
 DANGEROUS_BUILD_PREFIXES = ("FOUNDRY_", "DAPP_", "SOLC_")
+FORBIDDEN_RELEASE_ENVIRONMENT = {"RELEASE_E2E_LOCAL_FIXTURE"}
 REMAPPING_LOCK = Path("script/release-remappings.lock")
+SOLC_CAPTURE = Path("script/solc_capture.py")
+SOLC_VERSION = "0.8.24"
 
 
 class ReleaseError(RuntimeError):
@@ -29,7 +33,11 @@ def output(command: list[str], cwd: Path) -> str:
 
 
 def validate_ambient_environment(environment: dict[str, str]) -> None:
-    unsafe = sorted(name for name in environment if name.startswith(DANGEROUS_BUILD_PREFIXES))
+    unsafe = sorted(
+        name
+        for name in environment
+        if name.startswith(DANGEROUS_BUILD_PREFIXES) or name in FORBIDDEN_RELEASE_ENVIRONMENT
+    )
     require(not unsafe, f"unsafe build environment variables: {', '.join(unsafe)}")
 
 
@@ -123,6 +131,11 @@ def build_release_targets(
     environment: dict[str, str],
     log_path: Path,
 ) -> None:
+    compiler = _resolve_solc()
+    capture_dir = build_info_dir / "compiler-inputs"
+    capture_environment = dict(environment)
+    capture_environment["DASKI_REAL_COMPILER"] = str(compiler)
+    capture_environment["DASKI_COMPILER_INPUT_DIR"] = str(capture_dir)
     run_logged(
         [
             forge,
@@ -131,6 +144,8 @@ def build_release_targets(
             "script/Deploy.s.sol",
             "script/VerifyDeployment.s.sol",
             "script/ExecuteGovernanceBatches.s.sol",
+            "--use",
+            str(repo / SOLC_CAPTURE),
             "--force",
             "--out",
             str(output_dir),
@@ -145,9 +160,27 @@ def build_release_targets(
             str(repo / "foundry.toml"),
         ],
         repo,
-        environment,
+        capture_environment,
         log_path,
     )
+    require(any(capture_dir.glob("*.json")), "solc compiler input capture is empty")
+
+
+def _resolve_solc() -> Path:
+    candidate = Path.home() / ".svm" / SOLC_VERSION / f"solc-{SOLC_VERSION}"
+    require(candidate.is_file(), f"pinned solc is missing: {candidate}")
+    result = subprocess.run(
+        [candidate, "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    require(result.returncode == 0, result.stderr.strip() or "solc version check failed")
+    require(
+        re.search(r"Version: 0\.8\.24\+commit\.e11b9ed9", result.stdout) is not None,
+        "wrong pinned solc version",
+    )
+    return candidate.resolve()
 
 
 def check_checkout(repo: Path, manifest: dict, release_ref: str) -> str:

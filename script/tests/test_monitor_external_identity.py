@@ -48,6 +48,24 @@ class ExternalIdentityMonitorTest(unittest.TestCase):
         self.assertEqual(transactions[0]["target"], proxies[monitor.PAYMENT_ROUTER_INDEX])
         self.assertTrue(all(entry["confirmed"] == "true" for entry in transactions))
 
+    def test_alert_receives_bound_evidence_identity(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, stdout="alert-id\n", stderr="")
+        with patch.object(monitor.subprocess, "run", return_value=completed) as run:
+            evidence = monitor.notify(
+                Path("/alert"),
+                ["--destination", "security"],
+                Path("/evidence/run"),
+                "0x" + "11" * 32,
+                "0x" + "22" * 32,
+            )
+
+        self.assertEqual(evidence["submitted"], "true")
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[:3], ["/alert", "--destination", "security"])
+        self.assertIn("/evidence/run", arguments)
+        self.assertIn("0x" + "11" * 32, arguments)
+        self.assertIn("0x" + "22" * 32, arguments)
+
 
 if __name__ == "__main__":
     unittest.main()

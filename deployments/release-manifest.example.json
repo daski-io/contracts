@@ -81,7 +81,13 @@
       "upgradeAuthority": "0x0000000000000000000000000000000000000000",
       "version": "2.0.0"
     },
-    "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "usdc": {
+      "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "decimals": 6,
+      "name": "USDC",
+      "version": "2",
+      "domainSeparator": "0x71f17a3b2ff373b803d70a5a07c046c1a2bc8e89c09ef722fcb047abe94c9818"
+    },
     "eas": "0x4200000000000000000000000000000000000021",
     "schemaRegistry": "0x4200000000000000000000000000000000000020",
     "sanctionsOracle": "0x0000000000000000000000000000000000000000"

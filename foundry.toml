@@ -11,6 +11,11 @@ via_ir = true
 optimizer = true
 optimizer_runs = 200
 extra_output = ["ir"]
+fs_permissions = [
+    { access = "read", path = "./test/vectors" },
+    { access = "read", path = "/tmp" },
+    { access = "read-write", path = "/tmp/daski-release-e2e" },
+]
 
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",

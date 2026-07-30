@@ -29,6 +29,41 @@ OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome"
 CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation"
 UUPS_SOURCE = "lib/openzeppelin-contracts/contracts/proxy/utils/UUPSUpgradeable.sol"
 HASH_FIELDS = ("sourceClosureHash", "compilerInputHash", "foundryConfigHash")
+SOLC_INPUT_DOMAIN = b"DASKI_SOLC_INPUT_V1"
+SOLC_INPUT_SET_DOMAIN = b"DASKI_COMPILER_INPUT_SET_V1"
+SOURCE_CLOSURE_DOMAIN = b"DASKI_SOURCE_CLOSURE_V1"
+REQUIRED_TARGETS = {
+    **{contract: (f"src/{contract}.sol", contract) for contract in CONTRACTS if contract not in {"X402Adapter", "PermitAdapter", "ApprovalAdapter"}},
+    "X402Adapter": ("src/adapters/X402Adapter.sol", "X402Adapter"),
+    "PermitAdapter": ("src/adapters/PermitAdapter.sol", "PermitAdapter"),
+    "ApprovalAdapter": ("src/adapters/ApprovalAdapter.sol", "ApprovalAdapter"),
+    "ERC1967Proxy": (
+        "lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol",
+        "ERC1967Proxy",
+    ),
+    "Deploy": ("script/Deploy.s.sol", "Deploy"),
+    "VerifyDeployment": ("script/VerifyDeployment.s.sol", "VerifyDeployment"),
+    "ExecuteGovernanceBatches": (
+        "script/ExecuteGovernanceBatches.s.sol",
+        "ExecuteGovernanceBatches",
+    ),
+}
+USDC_DOMAINS = {
+    8453: {
+        "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "decimals": 6,
+        "name": "USD Coin",
+        "version": "2",
+        "domainSeparator": "0x02fa7265e7c5d81118673727957699e4d68f74cd74b7db77da710fe8a2c7834f",
+    },
+    84532: {
+        "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        "decimals": 6,
+        "name": "USDC",
+        "version": "2",
+        "domainSeparator": "0x71f17a3b2ff373b803d70a5a07c046c1a2bc8e89c09ef722fcb047abe94c9818",
+    },
+}
 
 
 class VerificationError(RuntimeError):
@@ -47,7 +82,17 @@ def command_output(command: list[str]) -> str:
 
 
 def keccak(data: bytes, cast: str) -> str:
-    value = command_output([cast, "keccak", "0x" + data.hex()]).lower()
+    result = subprocess.run(
+        [cast, "keccak"],
+        input=b"0x" + data.hex().encode("ascii"),
+        check=False,
+        capture_output=True,
+    )
+    require(
+        result.returncode == 0,
+        result.stderr.decode(errors="replace").strip() or "cast keccak failed",
+    )
+    value = result.stdout.decode().strip().lower()
     require(re.fullmatch(r"0x[0-9a-f]{64}", value) is not None, "cast returned an invalid hash")
     return value
 
@@ -94,6 +139,16 @@ def validate_manifest(manifest: dict[str, Any], forge_output: str) -> None:
         for codehash in contracts[field]:
             require(re.fullmatch(r"0x[0-9a-fA-F]{64}", codehash) is not None, f"invalid {field} hash")
             require(int(codehash, 16) != 0, f"zero {field} hash")
+    chain_id = manifest.get("chainId")
+    require(chain_id in USDC_DOMAINS, "unsupported manifest chain")
+    usdc = manifest.get("external", {}).get("usdc")
+    require(isinstance(usdc, dict), "external.usdc must be an object")
+    normalized_usdc = dict(usdc)
+    if isinstance(normalized_usdc.get("address"), str):
+        normalized_usdc["address"] = normalized_usdc["address"].lower()
+    if isinstance(normalized_usdc.get("domainSeparator"), str):
+        normalized_usdc["domainSeparator"] = normalized_usdc["domainSeparator"].lower()
+    require(normalized_usdc == USDC_DOMAINS[chain_id], "wrong reviewed USDC domain")
 
 
 def validate_metadata(artifact: dict[str, Any]) -> None:
@@ -165,33 +220,119 @@ def _source_git_bytes(
     return f"root@{source_commit}", _git_bytes(repo, "show", f"{source_commit}:{normalized}")
 
 
+def _length_prefixed(values: list[bytes]) -> bytes:
+    encoded = len(values).to_bytes(8, "big")
+    for value in values:
+        encoded += len(value).to_bytes(8, "big") + value
+    return encoded
+
+
+def _artifact_for_target(output: Path, source: str, contract: str) -> dict[str, Any]:
+    path = output / Path(source).name / f"{contract}.json"
+    require(path.is_file(), f"missing required target artifact: {source}:{contract}")
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    target = artifact.get("metadata", {}).get("settings", {}).get("compilationTarget")
+    require(target == {source: contract}, f"wrong artifact compilation target: {source}:{contract}")
+    return artifact
+
+
+def _selects_target(settings: dict[str, Any], source: str, contract: str) -> bool:
+    selection = settings.get("outputSelection")
+    if not isinstance(selection, dict):
+        return False
+    for source_key in (source, "*"):
+        contracts = selection.get(source_key)
+        if not isinstance(contracts, dict):
+            continue
+        for contract_key in (contract, "*"):
+            outputs = contracts.get(contract_key)
+            if isinstance(outputs, list) and outputs:
+                return True
+    return False
+
+
+def _canonical_remappings(value: Any) -> list[str]:
+    require(isinstance(value, list), "compiler remappings must be a list")
+    identities: set[str] = set()
+    remappings: list[str] = []
+    for remapping in value:
+        require(isinstance(remapping, str), "compiler remapping must be a string")
+        identity, separator, target = remapping.partition("=")
+        require(separator == "=" and identity and target, f"invalid compiler remapping: {remapping}")
+        require(identity not in identities, f"duplicate compiler remapping identity: {identity}")
+        identities.add(identity)
+        remappings.append(remapping)
+    return sorted(remappings)
+
+
+def _validate_metadata_against_unit(
+    artifact: dict[str, Any],
+    unit: dict[str, Any],
+    source_hashes: dict[str, str],
+) -> None:
+    metadata = artifact.get("metadata")
+    require(isinstance(metadata, dict), "artifact metadata is missing")
+    require(metadata.get("compiler") == unit["compiler"], "build-info and artifact compiler mismatch")
+    metadata_settings = metadata.get("settings", {})
+    unit_settings = unit["settings"]
+    for field in ("optimizer", "viaIR", "evmVersion", "libraries"):
+        require(
+            metadata_settings.get(field) == unit_settings.get(field),
+            f"build-info and artifact {field} mismatch",
+        )
+    require(
+        _canonical_remappings(metadata_settings.get("remappings"))
+        == _canonical_remappings(unit_settings.get("remappings")),
+        "build-info and artifact remappings mismatch",
+    )
+    for path, source in metadata.get("sources", {}).items():
+        require(path in source_hashes, f"artifact source missing from selected compiler input: {path}")
+        require(
+            source.get("keccak256", "").lower() == source_hashes[path],
+            f"build-info and artifact source mismatch: {path}",
+        )
+
+
 def calculate_source_closure(
-    repo: Path, output: Path, source_commit: str, cast: str
+    repo: Path,
+    output: Path,
+    build_info: Path,
+    source_commit: str,
+    cast: str,
 ) -> dict[str, Any]:
     submodules = _submodule_identities(repo)
     sources: dict[str, tuple[str, str]] = {}
     compiler_units: dict[str, dict[str, Any]] = {}
+    capture_paths = sorted((build_info / "compiler-inputs").glob("*.json"))
+    require(capture_paths, "captured compiler input is empty")
 
-    for artifact_path in sorted(output.glob("**/*.json")):
-        if "build-info" in artifact_path.parts:
-            continue
-        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        raw = artifact.get("rawMetadata")
-        if not raw:
-            continue
-        metadata = json.loads(raw)
-        metadata_sources = metadata.get("sources", {})
-        if not metadata_sources:
-            continue
+    for capture_path in capture_paths:
+        capture = json.loads(capture_path.read_text(encoding="utf-8"))
+        require(capture.get("schema") == "daski-solc-input/v1", "unsupported compiler input capture")
+        require(capture_path.stem == capture.get("inputSha256"), "compiler input capture filename mismatch")
+        compiler = capture.get("compiler")
+        compiler_input = capture.get("input")
+        require(compiler == {"version": SOLC_VERSION}, "wrong captured compiler identity")
+        require(isinstance(compiler_input, dict), "malformed captured compiler input")
+        require(compiler_input.get("language") == "Solidity", "unsupported compiler input language")
+        settings = compiler_input.get("settings")
+        input_sources = compiler_input.get("sources")
+        require(isinstance(settings, dict), "compiler input settings are missing")
+        require(isinstance(input_sources, dict) and input_sources, "compiler input sources are empty")
         normalized_sources: dict[str, str] = {}
-        for logical_path, source_data in metadata_sources.items():
-            expected_hash = source_data.get("keccak256", "").lower()
-            require(re.fullmatch(r"0x[0-9a-f]{64}", expected_hash) is not None, "invalid metadata source hash")
+        for logical_path, source_data in input_sources.items():
+            require(
+                isinstance(source_data, dict) and isinstance(source_data.get("content"), str),
+                f"compiler input source content is missing: {logical_path}",
+            )
             repository_identity, git_content = _source_git_bytes(
                 repo, source_commit, logical_path, submodules
             )
+            require(
+                source_data["content"].encode() == git_content,
+                f"compiler input differs from Git object: {logical_path}",
+            )
             actual_hash = keccak(git_content, cast)
-            require(actual_hash == expected_hash, f"source differs from Git object: {logical_path}")
             prior = sources.get(logical_path)
             current = (repository_identity, actual_hash)
             require(prior is None or prior == current, f"conflicting source identity: {logical_path}")
@@ -199,34 +340,64 @@ def calculate_source_closure(
             normalized_sources[logical_path] = actual_hash
 
         unit = {
-            "compiler": metadata.get("compiler"),
-            "language": metadata.get("language"),
-            "settings": metadata.get("settings"),
+            "compiler": compiler,
+            "language": compiler_input["language"],
+            "settings": settings,
             "sources": dict(sorted(normalized_sources.items())),
         }
-        compiler_units[keccak(canonical_json(unit), cast)] = unit
+        unit_hash = keccak(SOLC_INPUT_DOMAIN + canonical_json(unit), cast)
+        require(unit_hash not in compiler_units, "duplicate captured compiler input")
+        compiler_units[unit_hash] = unit
 
     require(sources, "compiler source closure is empty")
+    selected_units: dict[str, str] = {}
+    used_units: set[str] = set()
+    for target, (source, contract) in REQUIRED_TARGETS.items():
+        artifact = _artifact_for_target(output, source, contract)
+        candidates = [
+            unit_hash
+            for unit_hash, unit in compiler_units.items()
+            if source in unit["sources"] and _selects_target(unit["settings"], source, contract)
+        ]
+        require(len(candidates) == 1, f"required target must select exactly one compiler input: {target}")
+        unit_hash = candidates[0]
+        _validate_metadata_against_unit(artifact, compiler_units[unit_hash], compiler_units[unit_hash]["sources"])
+        selected_units[target] = unit_hash
+        used_units.add(unit_hash)
+    require(used_units == set(compiler_units), "selected compiler input is not used by a required target")
+
     closure = [
         {"logicalPath": path, "repositoryIdentity": identity, "sourceContentHash": source_hash}
         for path, (identity, source_hash) in sorted(sources.items())
     ]
     compiler_input = [compiler_units[key] for key in sorted(compiler_units)]
-    source_closure_hash = keccak(canonical_json(closure), cast)
-    compiler_input_hash = keccak(canonical_json(compiler_input), cast)
+    unit_hash_bytes = [bytes.fromhex(value.removeprefix("0x")) for value in sorted(compiler_units)]
+    source_closure_hash = keccak(SOURCE_CLOSURE_DOMAIN + canonical_json(closure), cast)
+    compiler_input_hash = keccak(
+        SOLC_INPUT_SET_DOMAIN + _length_prefixed(unit_hash_bytes),
+        cast,
+    )
     return {
         "sourceClosureHash": source_closure_hash,
         "compilerInputHash": compiler_input_hash,
         "sources": closure,
         "compilerUnitHashes": sorted(compiler_units),
         "compilerInputs": compiler_input,
+        "selectedUnitMapping": dict(sorted(selected_units.items())),
+        "capturedCompilerInputs": [path.name for path in capture_paths],
     }
 
 
 def verify_source_closure(
-    repo: Path, output: Path, manifest: dict[str, Any], cast: str
+    repo: Path, output: Path, build_info: Path, manifest: dict[str, Any], cast: str
 ) -> dict[str, Any]:
-    evidence = calculate_source_closure(repo, output, manifest["build"]["sourceCommit"], cast)
+    evidence = calculate_source_closure(
+        repo,
+        output,
+        build_info,
+        manifest["build"]["sourceCommit"],
+        cast,
+    )
     require(
         evidence["sourceClosureHash"] == manifest["build"]["sourceClosureHash"],
         "source closure hash mismatch",
@@ -282,6 +453,7 @@ def verify(
     forge: str,
     cast: str,
     repo: Path | None = None,
+    build_info: Path | None = None,
     foundry_config_hash: str | None = None,
 ) -> dict[str, Any]:
     raw_manifest = manifest_path.read_bytes()
@@ -323,9 +495,13 @@ def verify(
         "build": manifest["build"],
         "proxyRuntimeCodehash": proxy_hash,
         "implementationRuntimeCodehashes": implementation_hashes,
+        "usdc": manifest["external"]["usdc"],
     }
     if repo is not None:
-        evidence["sourceProvenance"] = verify_source_closure(repo, output, manifest, cast)
+        require(build_info is not None, "build-info directory is required")
+        evidence["sourceProvenance"] = verify_source_closure(
+            repo, output, build_info, manifest, cast
+        )
     return evidence
 
 
@@ -335,10 +511,17 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--forge", default="forge")
     parser.add_argument("--cast", default="cast")
+    parser.add_argument("--build-info", type=Path)
     parser.add_argument("--evidence", type=Path)
     args = parser.parse_args()
     try:
-        evidence = verify(args.manifest.resolve(), args.out.resolve(), args.forge, args.cast)
+        evidence = verify(
+            args.manifest.resolve(),
+            args.out.resolve(),
+            args.forge,
+            args.cast,
+            build_info=args.build_info.resolve() if args.build_info else None,
+        )
         rendered = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
         if args.evidence:
             args.evidence.write_text(rendered, encoding="utf-8")

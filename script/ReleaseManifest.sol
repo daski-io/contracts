@@ -2,10 +2,16 @@
 pragma solidity ^0.8.24;
 
 import {IERC1822Proxiable} from "@openzeppelin/contracts/interfaces/draft-IERC1822.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
 import {ExternalIdentityValidation} from "./ExternalIdentityValidation.sol";
 import {ReleaseBuildProfile} from "./ReleaseBuildProfile.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
+
+interface IReleaseUsdcDomain {
+    function version() external view returns (string memory);
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+}
 
 /// @notice Loads the reviewed release identity used by verification and
 ///         activation. Expected hashes never come from independent env vars.
@@ -27,6 +33,11 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
         bytes32[9] implementationCodehashes;
         bytes32 outcomeSchemaUid;
         bytes32 confirmationSchemaUid;
+        bool localFixture;
+        uint8 usdcDecimals;
+        string usdcName;
+        string usdcVersion;
+        bytes32 usdcDomainSeparator;
     }
 
     struct RevisionState {
@@ -42,12 +53,44 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
         bool releaseCandidate = _loadBuildIdentity(source);
         _loadContracts(manifest, source);
         _loadConfiguration(manifest, source, releaseCandidate);
-        _requireProvenance(manifest.hash, source);
+        RevisionState memory revision = _revisionState(manifest);
+        _requireProvenance(manifest.hash, source, revision);
     }
 
-    function _requireProvenance(bytes32 manifestHash, string memory source) private view {
+    function _requireProvenance(bytes32 manifestHash, string memory source, RevisionState memory revision)
+        private
+        view
+    {
         string memory provenance = vm.readFile(vm.envString("RELEASE_PROVENANCE_PATH"));
+        string memory revisionEvidence = vm.readFile(vm.envString("RELEASE_REVISION_EVIDENCE_PATH"));
+        _validateProvenance(
+            provenance, revisionEvidence, manifestHash, source, revision.effectiveHash, vm.envBytes32("RELEASE_RUN_ID")
+        );
+    }
+
+    function _validateProvenance(
+        string memory provenance,
+        string memory revisionEvidence,
+        bytes32 manifestHash,
+        string memory source,
+        bytes32 effectiveReleaseHash,
+        bytes32 expectedRunId
+    ) internal view {
+        require(
+            keccak256(bytes(vm.parseJsonString(provenance, ".schema"))) == keccak256("daski-release-provenance/v2"),
+            "wrong provenance schema"
+        );
+        bytes32 runId = vm.parseJsonBytes32(provenance, ".runId");
+        require(runId != bytes32(0) && runId == expectedRunId, "wrong provenance run");
         require(vm.parseJsonBytes32(provenance, ".manifestHash") == manifestHash, "wrong provenance manifest");
+        require(
+            vm.parseJsonBytes32(provenance, ".revisionEvidenceHash") == keccak256(bytes(revisionEvidence)),
+            "wrong provenance revision evidence"
+        );
+        require(
+            vm.parseJsonBytes32(provenance, ".effectiveReleaseHash") == effectiveReleaseHash,
+            "wrong provenance effective release"
+        );
         require(
             vm.parseJsonBytes32(provenance, ".sourceClosureHash")
                 == vm.parseJsonBytes32(source, ".build.sourceClosureHash"),
@@ -113,6 +156,7 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
     }
 
     function _loadConfiguration(Manifest memory manifest, string memory source, bool releaseCandidate) private view {
+        manifest.localFixture = _localFixtureEnabled();
         manifest.stack = _stack(source, manifest.proxies);
         manifest.eas = vm.parseJsonAddress(source, ".external.eas");
         manifest.schemaRegistry = vm.parseJsonAddress(source, ".external.schemaRegistry");
@@ -120,6 +164,18 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
         manifest.pauseGuardian = vm.parseJsonAddress(source, ".governance.pauseGuardian");
         if (releaseCandidate) require(manifest.pauseGuardian != address(0), "release guardian required");
         manifest.governance = _loadGovernance(source, releaseCandidate);
+        manifest.usdcDecimals = uint8(vm.parseJsonUint(source, ".external.usdc.decimals"));
+        manifest.usdcName = vm.parseJsonString(source, ".external.usdc.name");
+        manifest.usdcVersion = vm.parseJsonString(source, ".external.usdc.version");
+        manifest.usdcDomainSeparator = vm.parseJsonBytes32(source, ".external.usdc.domainSeparator");
+        require(manifest.usdcDecimals == 6, "wrong manifest USDC decimals");
+        require(bytes(manifest.usdcName).length > 0, "empty manifest USDC name");
+        require(bytes(manifest.usdcVersion).length > 0, "empty manifest USDC version");
+        require(
+            manifest.usdcDomainSeparator
+                == _computeUsdcDomain(manifest.stack.usdc, manifest.usdcName, manifest.usdcVersion, block.chainid),
+            "wrong manifest USDC domain separator"
+        );
         require(
             keccak256(bytes(vm.parseJsonString(source, ".governance.profile"))) == keccak256("safe-l2-v1.4.1"),
             "unsupported governance profile"
@@ -157,10 +213,28 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
     function _revisionState(Manifest memory manifest) private view returns (RevisionState memory state) {
         string memory evidence = vm.readFile(vm.envString("RELEASE_REVISION_EVIDENCE_PATH"));
         require(vm.parseJsonBytes32(evidence, ".baseManifestHash") == manifest.hash, "wrong revision base manifest");
-        state.effectiveHash = vm.parseJsonBytes32(evidence, ".effectiveReleaseHash");
+        bytes32[] memory revisionHashes = vm.parseJsonBytes32Array(evidence, ".revisionHashes");
+        state.effectiveHash = _deriveEffectiveReleaseHash(block.chainid, manifest.hash, revisionHashes);
+        require(
+            state.effectiveHash == vm.parseJsonBytes32(evidence, ".effectiveReleaseHash"),
+            "derived effective release mismatch"
+        );
         require(state.effectiveHash == vm.envBytes32("EFFECTIVE_RELEASE_HASH"), "wrong effective release hash");
         state.facilitators = vm.parseJsonAddressArray(evidence, ".effectiveFacilitators");
         require(state.facilitators.length > 0, "effective facilitator set is empty");
+    }
+
+    function _deriveEffectiveReleaseHash(uint256 chainId, bytes32 manifestHash, bytes32[] memory revisionHashes)
+        internal
+        pure
+        returns (bytes32)
+    {
+        bytes memory encoded = abi.encodePacked(bytes("DASKI_RELEASE_EVIDENCE_V1"), chainId, manifestHash);
+        for (uint256 i = 0; i < revisionHashes.length; i++) {
+            require(revisionHashes[i] != bytes32(0), "zero revision hash");
+            encoded = abi.encodePacked(encoded, revisionHashes[i]);
+        }
+        return keccak256(encoded);
     }
 
     function _validateRuntimeIdentities(Manifest memory manifest) internal view {
@@ -196,9 +270,10 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
             manifest.eas,
             manifest.schemaRegistry,
             deployment.sanctionsOracle,
-            false,
-            block.chainid == DeploymentValidation.BASE_SEPOLIA
+            manifest.localFixture,
+            manifest.localFixture || block.chainid == DeploymentValidation.BASE_SEPOLIA
         );
+        _validateUsdcManifest(manifest);
     }
 
     function _validatePausedManifestCore(Manifest memory manifest, bool expectedPaused) internal view {
@@ -213,9 +288,10 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
             manifest.eas,
             manifest.schemaRegistry,
             manifest.stack.sanctionsOracle,
-            false,
-            block.chainid == DeploymentValidation.BASE_SEPOLIA
+            manifest.localFixture,
+            manifest.localFixture || block.chainid == DeploymentValidation.BASE_SEPOLIA
         );
+        _validateUsdcManifest(manifest);
         _validateDaskiCore(manifest, true, true);
     }
 
@@ -252,7 +328,7 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
     {
         stack = DeploymentValidation.Stack({
             identity: vm.parseJsonAddress(json, ".external.identityRegistry.proxy"),
-            usdc: vm.parseJsonAddress(json, ".external.usdc"),
+            usdc: vm.parseJsonAddress(json, ".external.usdc.address"),
             providerTreasury: vm.parseJsonAddress(json, ".economics.providerTreasury"),
             paymentTreasury: vm.parseJsonAddress(json, ".economics.paymentTreasury"),
             sanctionsOracle: vm.parseJsonAddress(json, ".external.sanctionsOracle"),
@@ -282,5 +358,43 @@ abstract contract ReleaseManifest is ReleaseBuildProfile, ExternalIdentityValida
             "unsupported deployment phase"
         );
         return phaseHash == keccak256("release-candidate");
+    }
+
+    function _localFixtureEnabled() private view returns (bool enabled) {
+        enabled = vm.envOr("RELEASE_E2E_LOCAL_FIXTURE", false);
+        require(!enabled || block.chainid == 31337, "local release fixture only allowed on chain 31337");
+    }
+
+    function _validateUsdcManifest(Manifest memory manifest) private view {
+        address token = manifest.stack.usdc;
+        require(IERC20Metadata(token).decimals() == manifest.usdcDecimals, "manifest USDC decimals mismatch");
+        require(
+            keccak256(bytes(IERC20Metadata(token).name())) == keccak256(bytes(manifest.usdcName)),
+            "manifest USDC name mismatch"
+        );
+        require(
+            keccak256(bytes(IReleaseUsdcDomain(token).version())) == keccak256(bytes(manifest.usdcVersion)),
+            "manifest USDC version mismatch"
+        );
+        require(
+            IReleaseUsdcDomain(token).DOMAIN_SEPARATOR() == manifest.usdcDomainSeparator,
+            "manifest USDC domain mismatch"
+        );
+    }
+
+    function _computeUsdcDomain(address token, string memory name, string memory version, uint256 chainId)
+        private
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes(name)),
+                keccak256(bytes(version)),
+                chainId,
+                token
+            )
+        );
     }
 }

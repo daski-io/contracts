@@ -1,0 +1,16 @@
+{
+  "schema": "daski-external-identity-monitor-deployment/v1",
+  "serviceIdentity": "",
+  "deploymentIdentity": "",
+  "sourceCommit": "",
+  "configurationHash": "",
+  "manifestHash": "",
+  "effectiveReleaseHash": "",
+  "healthCheck": {
+    "observedAt": "",
+    "status": ""
+  },
+  "alertDestination": "",
+  "guardianIdentity": "",
+  "evidenceStorageLocation": ""
+}

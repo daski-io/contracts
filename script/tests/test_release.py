@@ -31,6 +31,26 @@ class ReleaseCheckoutTest(unittest.TestCase):
         git(self.repo, "commit", "-m", "initial")
         self.head = git(self.repo, "rev-parse", "HEAD")
         self.manifest = {"build": {"sourceCommit": self.head}}
+        self.inputs = self.repo / ".git" / "release-inputs"
+        self.inputs.mkdir()
+        self.manifest_path = self.inputs / "manifest.json"
+        self.pinned_manifest = self.inputs / "pinned-manifest.json"
+        self.manifest_bytes = b'{"release":"test"}\n'
+        self.manifest_path.write_bytes(self.manifest_bytes)
+        self.pinned_manifest.write_bytes(self.manifest_bytes)
+        self.revision_path = self.inputs / "revision-evidence.json"
+        self.revision_bytes = b'{"revision":"test"}\n'
+        self.revision_path.write_bytes(self.revision_bytes)
+        self.marker_path = self.inputs / "provenance.json"
+        self.marker_bytes = b'{"schema":"daski-release-provenance/v2"}\n'
+        self.marker_path.write_bytes(self.marker_bytes)
+        self.revision = release_tool.revision_verifier.RevisionEvidence(
+            effective_release_hash="0x" + "11" * 32,
+            effective_facilitators=["0x" + "22" * 20],
+            finalized=[],
+            proposal=None,
+            input_snapshots=[],
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -69,13 +89,54 @@ class ReleaseCheckoutTest(unittest.TestCase):
             release_tool.check_checkout(self.repo, self.manifest, "develop")
 
     def test_rejects_ambient_build_overrides(self) -> None:
-        for variable in ("FOUNDRY_REMAPPINGS", "DAPP_LIBRARIES", "SOLC_PATH"):
+        for variable in (
+            "FOUNDRY_REMAPPINGS",
+            "DAPP_LIBRARIES",
+            "SOLC_PATH",
+            "RELEASE_E2E_LOCAL_FIXTURE",
+        ):
             with self.subTest(variable=variable):
                 with self.assertRaisesRegex(release_tool.ReleaseError, "unsafe build environment"):
                     release_tool.validate_ambient_environment({"PATH": "/bin", variable: "malicious"})
 
     def test_accepts_environment_without_build_overrides(self) -> None:
         release_tool.validate_ambient_environment({"PATH": "/bin", "RPC_URL": "https://example.invalid"})
+
+    def test_accepts_unchanged_run_inputs(self) -> None:
+        release_tool.verify_run_inputs(
+            self.repo,
+            self.manifest,
+            self.manifest_path,
+            self.manifest_bytes,
+            self.pinned_manifest,
+            self.revision,
+            self.revision_path,
+            self.revision_bytes,
+            self.marker_path,
+            self.marker_bytes,
+            "develop",
+            "cast",
+        )
+
+    def test_rejects_changed_manifest_before_forge(self) -> None:
+        self.manifest_path.write_bytes(b"changed\n")
+        with self.assertRaisesRegex(release_tool.ReleaseError, "manifest changed"):
+            self.test_accepts_unchanged_run_inputs()
+
+    def test_rejects_changed_revision_evidence_before_forge(self) -> None:
+        self.revision_path.write_bytes(b"changed\n")
+        with self.assertRaisesRegex(release_tool.ReleaseError, "revision evidence changed"):
+            self.test_accepts_unchanged_run_inputs()
+
+    def test_rejects_changed_marker_before_forge(self) -> None:
+        self.marker_path.write_bytes(b"changed\n")
+        with self.assertRaisesRegex(release_tool.ReleaseError, "marker changed"):
+            self.test_accepts_unchanged_run_inputs()
+
+    def test_rejects_changed_pinned_manifest_before_forge(self) -> None:
+        self.pinned_manifest.write_bytes(b"changed\n")
+        with self.assertRaisesRegex(release_tool.ReleaseError, "pinned release manifest changed"):
+            self.test_accepts_unchanged_run_inputs()
 
 
 if __name__ == "__main__":
