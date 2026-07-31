@@ -91,12 +91,14 @@ unavailable. Integrators should decode `SanctionedAddress(address)` and
 
 ## Deployments
 
-### Base Sepolia (chain id `84532`) — retired 2026-07-29
+### Base Sepolia (chain id `84532`) — release candidate, deployed 2026-07-31
 
-This address set is retained only as a historical record. It implements the
-superseded generic Exact-EVM/random-nonce profile and is explicitly marked
-retired in the machine-readable deployment file. Do not configure a gateway
-or buyer against it.
+The `daski-exact/1` receive-authorization stack, deployed at block
+`44881793` under the release-candidate ceremony. Reviewed release manifest
+hash
+`0x43bff3909fb13f6ca334e578fc9bc14dbae4d50d8ccda9de0dbe55757943197d`;
+effective release hash
+`0x708bdd4c394ba0b3c738d78d382cbbc7cf20e46a1552b0c89f8cf0d41830408a`.
 
 Canonical ERC-8004 singletons (external, never Daski-deployed):
 IdentityRegistry `0x8004A818BFB912233c491871b3d84c89A494BD9e`,
@@ -104,30 +106,30 @@ ReputationRegistry `0x8004B663056A597Dffe9eCcC1965A193B7388713`.
 
 | Contract              | Address                                      |
 |-----------------------|----------------------------------------------|
-| Governance Safe (admin, 1-of-1 testnet) | `0xe6724f9317E872a0a7fa59B93614cc73C7529DDc` |
+| Governance Safe (admin, 2-of-2 RC) | `0xA8d8c478C366B80B1A122A2EA72348EB7E6B0695` |
+| Pause guardian        | `0xEe040016AbcF2EF1BcaE87FEbb452c763D34342d` |
 | Authorized x402 V2 facilitator | `0x08004fDdB4e7b64977D341Ad9d6B98B4d10D6ed2` |
 | USDC (Circle)         | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
 | SanctionsOracle (MockSanctionsList) | `0xa94d2168820f349aafBa585c12E69aA387dCB815` |
-| AgentIndex            | `0xdc47641AE39B304E37e41CA7915b93CCd19c05A5` |
-| DaskiValidationRegistry | `0x28BcDdeD434289eE3bCeB60d11075AC8b4191194` |
-| ProviderRegistry      | `0xDeb0A3692F988f72130a792A6Ac7146321871A2A` |
-| ServiceRegistry       | `0x48D67BD6F514b461f729D6970aebF6f228942e26` |
-| PaymentRouter         | `0x7E2D6cD01ecb6656BaBC78DcACE896978d55F48D` |
-| ReputationStorage     | `0x50590Fc2b4B7736ff2D30Cc581932EeB504A8250` |
-| X402Adapter           | `0x7778cF4B6bb2Dd84CBce941246d4D4Db34a8E035` |
-| PermitAdapter         | `0x90c2ab7a608Ccb5379A166a66Ea7e3b10E022440` |
-| ApprovalAdapter       | `0x4a92b6c4D949337499a75A1812939EB2bCF01aD5` |
+| AgentIndex            | `0xA9b7ff6158E51581F253a8234EAC79411FB0e1cf` |
+| DaskiValidationRegistry | `0xC3EA96dAaF863707573a342138394d51e336FBBC` |
+| ProviderRegistry      | `0xba7d08a4851975b3e80550b9aa4aA6092dCBC909` |
+| ServiceRegistry       | `0x79114da4DA6FbEcF1897950BB051b55c8d839840` |
+| PaymentRouter         | `0xC6Ab3cB38D3AFc30aDB78849F2B02133e805d860` |
+| ReputationStorage     | `0x2CA0B71a5D6C0499ec14838A8bD809351E535815` |
+| X402Adapter           | `0xB83633e2A6A36bd5EaF23e8C8f8d33767EaD3d7D` |
+| PermitAdapter         | `0x1Baa964376F49D256766525d5D63606757118e79` |
+| ApprovalAdapter       | `0x836233ac94aEb205825A3EC1Eee60827A86582e1` |
 | EAS                   | `0x4200000000000000000000000000000000000021` |
 | Schema Registry       | `0x4200000000000000000000000000000000000020` |
 
 EAS schema UIDs (resolver = ReputationStorage):
-- Outcome: `0xa52916b901f5c8366127d280f04b7426405b56f90e06ab18a685818e3e0fb4b6`
-- Confirmation: `0x36429e8cf20bcdb761c0103be7ae384cae2d7f5d14c0d30de7d6f210861329f5`
+- Outcome: `0x1d5af8287b2d94fdc0d48957fb160c1d1f320bb685ace612f6999f9b59edbe28`
+- Confirmation: `0xfa6d275ba3757bc258757bf197262b44c5358ab5a1e8ddff285c523e18db0858`
 
-The 2026-07-22 and 2026-07-12 proxy sets are also retired. A new Base Sepolia
-release-candidate rehearsal must deploy fresh proxies and implementations,
-then publish a completed release manifest before any dependent service cuts
-over.
+The 2026-07-28 generic Exact-EVM set and the 2026-07-22 and 2026-07-12
+proxy sets are retired (history in the machine-readable deployment file).
+Do not configure a gateway or buyer against a retired set.
 
 Machine-readable copy: [`deployments/base-sepolia.json`](deployments/base-sepolia.json)
 
