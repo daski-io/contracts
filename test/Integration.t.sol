@@ -171,12 +171,28 @@ contract IntegrationTest is Test {
         uint256 providerAgentId,
         bytes32 svcId
     ) internal returns (uint256 paymentId) {
-        bytes32 nonce = keccak256(abi.encode("integration-x402-v2", ref));
-        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signTransfer(
-            vm, buyerKey, address(usdc), buyerAddr, address(router), amount, 0, block.timestamp + 1 hours, nonce
+        bytes32 nonceSalt = keccak256(abi.encode("integration-x402-v2", ref));
+        uint256 validBefore = block.timestamp + 1 hours;
+        (,,,, address expectedPayee) = services.resolveSettlement(svcId);
+        bytes32 nonce = adapter.authNonceFor(
+            address(usdc), buyerAddr, amount, 0, validBefore, ref, providerAgentId, svcId, expectedPayee, nonceSalt
+        );
+        IX402Adapter.EIP3009Auth memory auth = EIP3009Signer.signReceive(
+            vm,
+            buyerKey,
+            address(usdc),
+            "USDC",
+            "2",
+            block.chainid,
+            buyerAddr,
+            address(adapter),
+            amount,
+            0,
+            validBefore,
+            nonce
         );
         vm.prank(relayer);
-        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, auth);
+        paymentId = adapter.settle(address(usdc), amount, ref, providerAgentId, svcId, expectedPayee, auth, nonceSalt);
     }
 
     function _outcomeReq(uint256 pid, ReputationStorageBase.TransactionOutcome o)
@@ -214,6 +230,51 @@ contract IntegrationTest is Test {
     function _providerRecipient(uint256 pid) internal view returns (address) {
         pid;
         return provider;
+    }
+
+    function test_externalDependencyPauseBlocksEveryIdentityDependentWrite() public {
+        agentIndex.setPauseGuardian(address(this));
+        validationRegistry.setPauseGuardian(address(this));
+        registry.setPauseGuardian(address(this));
+        services.setPauseGuardian(address(this));
+        router.setPauseGuardian(address(this));
+
+        agentIndex.pauseExternalDependency();
+        validationRegistry.pauseExternalDependency();
+        registry.pauseExternalDependency();
+        services.pauseExternalDependency();
+        router.pauseExternalDependency();
+
+        vm.expectRevert("external dependency paused");
+        agentIndex.registerWithSig("", address(0), 0, "");
+        vm.expectRevert("external dependency paused");
+        agentIndex.claim(0);
+        vm.expectRevert("external dependency paused");
+        agentIndex.unbind();
+        vm.expectRevert("external dependency paused");
+        validationRegistry.validationRequest(address(1), 0, "request", bytes32(uint256(1)));
+        vm.expectRevert("external dependency paused");
+        registry.register(0);
+        vm.expectRevert("external dependency paused");
+        registry.setActive(0, false);
+        vm.expectRevert("external dependency paused");
+        services.registerService(0, "service", "1", "uri", address(0));
+        vm.expectRevert("external dependency paused");
+        services.updateServiceURI(bytes32(0), "uri");
+        vm.expectRevert("external dependency paused");
+        services.setServiceWallet(bytes32(0), address(1));
+        vm.expectRevert("external dependency paused");
+        services.setActive(bytes32(0), false);
+        vm.expectRevert("external dependency paused");
+        vm.prank(address(adapter));
+        router.settle(address(usdc), 1, bytes32(0), 0, address(1), 0, bytes32(0), address(1));
+        vm.expectRevert("external dependency paused");
+        router.refund(0, 1);
+
+        vm.expectRevert("no such request");
+        validationRegistry.validationResponse(bytes32(0), 1, "", bytes32(0), "");
+        vm.expectRevert("payment not found");
+        router.syncReputation(0);
     }
 
     function test_fullProtocolFlow() public {

@@ -30,11 +30,31 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
         keccak256("AgentWalletSet(uint256 agentId,address newWallet,address owner,uint256 deadline)");
 
     uint256 private _nextAgentId;
+    address private _registryOwner;
+    string private _version = "2.0.0";
 
     mapping(uint256 => mapping(string => bytes)) private _metadata;
     mapping(uint256 => address) private _agentWallet;
 
-    constructor() ERC721("AgentIdentity", "AGENT") EIP712("ERC8004IdentityRegistry", "1") {}
+    constructor() ERC721("AgentIdentity", "AGENT") EIP712("ERC8004IdentityRegistry", "1") {
+        _registryOwner = msg.sender;
+    }
+
+    function owner() external view returns (address) {
+        return _registryOwner;
+    }
+
+    function getVersion() external view returns (string memory) {
+        return _version;
+    }
+
+    function forceSetRegistryOwner(address newOwner) external {
+        _registryOwner = newOwner;
+    }
+
+    function forceSetVersion(string calldata newVersion) external {
+        _version = newVersion;
+    }
 
     // ------------------------------------------------------------------
     // Registration
@@ -64,15 +84,15 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
         agentId = _register(msg.sender, "");
     }
 
-    function _register(address owner, string memory agentURI) internal returns (uint256 agentId) {
+    function _register(address agentOwner, string memory agentURI) internal returns (uint256 agentId) {
         agentId = _nextAgentId++;
-        _agentWallet[agentId] = owner;
-        _safeMint(owner, agentId);
+        _agentWallet[agentId] = agentOwner;
+        _safeMint(agentOwner, agentId);
         if (bytes(agentURI).length > 0) {
             _setTokenURI(agentId, agentURI);
         }
-        emit MetadataSet(agentId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, abi.encodePacked(owner));
-        emit Registered(agentId, agentURI, owner);
+        emit MetadataSet(agentId, AGENT_WALLET_KEY, AGENT_WALLET_KEY, abi.encodePacked(agentOwner));
+        emit Registered(agentId, agentURI, agentOwner);
     }
 
     // ------------------------------------------------------------------
@@ -117,8 +137,8 @@ contract MockCanonicalIdentityRegistry is ERC721URIStorage, EIP712, IIdentityReg
         require(deadline <= block.timestamp + MAX_DEADLINE_DELAY, "deadline too far");
         require(newWallet != address(0), "zero wallet");
 
-        address owner = ownerOf(agentId);
-        bytes32 structHash = keccak256(abi.encode(SET_AGENT_WALLET_TYPEHASH, agentId, newWallet, owner, deadline));
+        address agentOwner = ownerOf(agentId);
+        bytes32 structHash = keccak256(abi.encode(SET_AGENT_WALLET_TYPEHASH, agentId, newWallet, agentOwner, deadline));
         require(
             SignatureChecker.isValidSignatureNow(newWallet, _hashTypedDataV4(structHash), signature),
             "invalid wallet signature"

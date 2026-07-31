@@ -1,30 +1,31 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC3009} from "../interfaces/IERC3009.sol";
 import {IX402Adapter} from "../interfaces/IX402Adapter.sol";
 import {AdapterBaseUpgradeable} from "./AdapterBaseUpgradeable.sol";
 
-/// @notice Adapter that settles x402 (EIP-3009 TransferWithAuthorization)
-///         payments. Funds flow DIRECTLY from buyer → router via the token's
-///         `transferWithAuthorization`; this adapter never holds funds.
+/// @notice Adapter that settles Daski's x402 V2 EIP-3009 receive profile.
+///         Funds move buyer → adapter → router atomically, and both contracts
+///         return to their exact pre-settlement balances after distribution.
 ///
-/// The signed EIP-3009 authorization must have `to = router` so USDC
-/// transfers directly into the router. After the transfer succeeds, this
-/// adapter calls `router.settle(...)`.
-///
-/// TRUST BOUNDARY:
-///   The buyer's EIP-3009 signature commits only to (from, to, value,
-///   validAfter, validBefore, nonce). It does NOT cover `serviceRef`,
-///   `providerAgentId`, or `serviceId`, which are passed as separate
-///   adapter call args. Only an administrator-authorized Daski facilitator
-///   may select those routing fields. The facilitator resolves them from
-///   its persisted payment challenge before calling this adapter.
-contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
-    mapping(address facilitator => bool authorized) public authorizedFacilitators;
+/// The receive-authorization nonce is a commitment to the complete Daski
+/// route plus a client-generated random salt. The facilitator sponsors gas
+/// but cannot redirect a signed payment.
+contract X402Adapter is AdapterBaseUpgradeable, ReentrancyGuard, IX402Adapter {
+    using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    bytes32 public constant DASKI_X402_RECEIVE_DOMAIN = keccak256("DASKI_X402_RECEIVE_V1");
+
+    EnumerableSet.AddressSet private _authorizedFacilitators;
 
     modifier onlyAuthorizedFacilitator() {
-        require(authorizedFacilitators[msg.sender], "facilitator not authorized");
+        require(_authorizedFacilitators.contains(msg.sender), "facilitator not authorized");
         _;
     }
 
@@ -47,20 +48,14 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
-        EIP3009Auth calldata auth
-    ) external onlyAuthorizedFacilitator returns (uint256 paymentId) {
-        // Pre-flight: reject unknown tokens before burning gas on the
-        // EIP-3009 transfer. The router will also re-check at settle.
-        require(router.isAcceptedToken(token), "token not accepted");
-        _requireNotSanctioned(auth.from);
+        address expectedPayee,
+        EIP3009Auth calldata auth,
+        bytes32 nonceSalt
+    ) external onlyAuthorizedFacilitator nonReentrant returns (uint256 paymentId) {
+        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, nonceSalt);
 
-        // Resolve the buyer's agentId from the signer. AgentIndex re-verifies
-        // the binding against the canonical ERC-8004 registry — if the signer
-        // transferred the agent away or rotated out between signing and
-        // submission, this returns found=false and the call reverts.
         uint256 buyerAgentId = _resolveBuyer(auth.from);
-
-        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
+        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, buyerAgentId);
     }
 
     /// @notice Atomic registration + settle. If the buyer (auth.from) has no
@@ -80,13 +75,14 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
+        bytes32 nonceSalt,
         string calldata agentURI,
         uint256 registrationDeadline,
         bytes calldata registrationSignature
-    ) external onlyAuthorizedFacilitator returns (uint256 buyerAgentId, uint256 paymentId) {
-        require(router.isAcceptedToken(token), "token not accepted");
-        _requireNotSanctioned(auth.from);
+    ) external onlyAuthorizedFacilitator nonReentrant returns (uint256 buyerAgentId, uint256 paymentId) {
+        _validatePreflight(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, nonceSalt);
 
         bool found;
         (buyerAgentId, found) = _tryResolveBuyer(auth.from);
@@ -94,48 +90,122 @@ contract X402Adapter is AdapterBaseUpgradeable, IX402Adapter {
             buyerAgentId = agentIndex.registerWithSig(agentURI, auth.from, registrationDeadline, registrationSignature);
         }
 
-        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, auth, buyerAgentId);
+        paymentId = _doSettle(token, amount, serviceRef, providerAgentId, serviceId, expectedPayee, auth, buyerAgentId);
     }
 
+    // Both callers hold the nonReentrant guard for the complete registration,
+    // receive, routing, and balance-invariant sequence.
+    // slither-disable-start reentrancy-balance
     function _doSettle(
         address token,
         uint256 amount,
         bytes32 serviceRef,
         uint256 providerAgentId,
         bytes32 serviceId,
+        address expectedPayee,
         EIP3009Auth calldata auth,
         uint256 buyerAgentId
     ) internal returns (uint256 paymentId) {
-        // Pull funds: buyer -> router via EIP-3009. Token signature binds
-        // the signer to exactly this `to=router` value.
-        uint256 balanceBefore = _routerBalance(token);
+        uint256 adapterBalanceBefore = IERC20(token).balanceOf(address(this));
+        uint256 routerBalanceBefore = _routerBalance(token);
         IERC3009(token)
-            .transferWithAuthorization(
-                auth.from,
-                address(router),
-                amount,
-                auth.validAfter,
-                auth.validBefore,
-                auth.nonce,
-                auth.v,
-                auth.r,
-                auth.s
+            .receiveWithAuthorization(
+                auth.from, address(this), amount, auth.validAfter, auth.validBefore, auth.nonce, auth.signature
             );
-        _requireExactFunding(token, balanceBefore, amount);
+        _requireExactBalanceIncrease(token, address(this), adapterBalanceBefore, amount);
 
-        // Router holds the funds now; delegate the split and bookkeeping.
-        // auth.from is the payer wallet — cached by the router as the refund
-        // fallback destination.
-        paymentId = router.settle(token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId);
+        IERC20(token).safeTransfer(address(router), amount);
+        _requireExactFunding(token, routerBalanceBefore, amount);
+        paymentId = router.settle(
+            token, amount, serviceRef, buyerAgentId, auth.from, providerAgentId, serviceId, expectedPayee
+        );
+
+        require(IERC20(token).balanceOf(address(this)) == adapterBalanceBefore, "adapter balance changed");
+        require(_routerBalance(token) == routerBalanceBefore, "router balance changed");
+    }
+    // slither-disable-end reentrancy-balance
+
+    function _validatePreflight(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        address expectedPayee,
+        EIP3009Auth calldata auth,
+        bytes32 nonceSalt
+    ) internal view {
+        require(router.isAcceptedToken(token), "token not accepted");
+        _requireNotSanctioned(auth.from);
+        require(nonceSalt != bytes32(0), "zero nonce salt");
+        require(
+            auth.nonce
+                == authNonceFor(
+                    token,
+                    auth.from,
+                    amount,
+                    auth.validAfter,
+                    auth.validBefore,
+                    serviceRef,
+                    providerAgentId,
+                    serviceId,
+                    expectedPayee,
+                    nonceSalt
+                ),
+            "auth not bound to call"
+        );
     }
 
-    /// @notice Add or revoke a facilitator allowed to submit Daski routing
-    ///         fields alongside standard x402 EIP-3009 authorizations.
+    function authNonceFor(
+        address token,
+        address payer,
+        uint256 amount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 serviceRef,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        address expectedPayee,
+        bytes32 nonceSalt
+    ) public view returns (bytes32) {
+        // All fields are ABI-static, so concatenating these encoded segments
+        // preserves the canonical payload while bounding compiler stack use.
+        bytes memory paymentContext =
+            abi.encode(DASKI_X402_RECEIVE_DOMAIN, block.chainid, address(this), address(router), token, payer, amount);
+        bytes memory routeContext =
+            abi.encode(validAfter, validBefore, providerAgentId, serviceId, expectedPayee, serviceRef, nonceSalt);
+        return keccak256(bytes.concat(paymentContext, routeContext));
+    }
+
     function setFacilitatorAuthorization(address facilitator, bool authorized) external onlyAdmin {
         require(facilitator != address(0), "zero facilitator");
-        authorizedFacilitators[facilitator] = authorized;
+        if (authorized) {
+            _authorizedFacilitators.add(facilitator);
+        } else {
+            _authorizedFacilitators.remove(facilitator);
+        }
         emit FacilitatorAuthorizationSet(facilitator, authorized);
     }
 
-    uint256[49] private __gap;
+    function authorizedFacilitators(address facilitator) external view returns (bool) {
+        return _authorizedFacilitators.contains(facilitator);
+    }
+
+    function getFacilitatorCount() external view returns (uint256) {
+        return _authorizedFacilitators.length();
+    }
+
+    function getFacilitatorAt(uint256 index) external view returns (address) {
+        return _authorizedFacilitators.at(index);
+    }
+
+    function _requireExactBalanceIncrease(address token, address account, uint256 balanceBefore, uint256 amount)
+        private
+        view
+    {
+        uint256 balanceAfter = IERC20(token).balanceOf(account);
+        require(balanceAfter >= balanceBefore && balanceAfter - balanceBefore == amount, "unexpected token amount");
+    }
+
+    uint256[48] private __gap;
 }

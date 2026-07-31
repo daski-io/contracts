@@ -1,0 +1,80 @@
+name: Clean-clone release ceremony
+
+permissions: {}
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  release-ceremony:
+    name: Local Anvil release ceremony
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - name: Prewarm pinned compiler
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
+
+      - name: Create isolated recursive checkout
+        run: |
+          git clone --no-local --no-checkout "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-e2e-checkout"
+          git -C "$RUNNER_TEMP/release-e2e-checkout" checkout --detach "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/release-e2e-checkout" submodule update --init --recursive
+          test ! -e "$RUNNER_TEMP/release-e2e-checkout/out"
+          test ! -e "$RUNNER_TEMP/release-e2e-checkout/cache"
+          test -z "$(git -C "$RUNNER_TEMP/release-e2e-checkout" status --porcelain=v1 --untracked-files=all)"
+
+      - name: Start fresh local Anvil chain
+        run: |
+          anvil --silent --host 127.0.0.1 --port 8545 --chain-id 31337 > "$RUNNER_TEMP/anvil.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/anvil.pid"
+          for attempt in {1..30}; do
+            if cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Run hermetic build and full ceremony
+        working-directory: ${{ runner.temp }}/release-e2e-checkout
+        run: >-
+          python3 script/run_release_e2e.py
+          --rpc-url http://127.0.0.1:8545
+          --evidence-dir /tmp/daski-release-e2e
+          --anvil-log "$RUNNER_TEMP/anvil.log"
+
+      - name: Stop Anvil
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/anvil.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/anvil.pid")" || true
+          fi
+
+      - name: Archive effective-release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ceremony-${{ github.sha }}
+          path: /tmp/daski-release-e2e/
+          if-no-files-found: error
+          retention-days: 90

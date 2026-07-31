@@ -2,231 +2,132 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {SafeDeployment, ISafe} from "../script/SafeDeployment.sol";
+import {ISafe, SafeDeployment} from "../script/SafeDeployment.sol";
 
-contract SafeDeploymentHarness {
-    function setupInitializer(address[] memory owners, uint256 threshold) external pure returns (bytes memory) {
-        return SafeDeployment.setupInitializer(owners, threshold);
+contract SafeValidationHarness {
+    function validate(address safe, SafeDeployment.Profile calldata profile) external view {
+        SafeDeployment.validateSafeProfile(safe, profile);
     }
 
-    function packMultiSend(address[] memory targets, bytes[] memory calls) external pure returns (bytes memory) {
-        return SafeDeployment.packMultiSend(targets, calls);
-    }
-
-    function execMultiSendBatch(address safe, address sender, address[] memory targets, bytes[] memory calls) external {
-        SafeDeployment.execMultiSendBatch(safe, sender, targets, calls);
-    }
-}
-
-contract MockSafe {
-    address public owner;
-    uint256 public threshold;
-    bool public execResult = true;
-
-    address public lastTo;
-    uint256 public lastValue;
-    bytes public lastData;
-    uint8 public lastOperation;
-    bytes public lastSignatures;
-    uint256 public execCalls;
-
-    constructor(address owner_, uint256 threshold_) {
-        owner = owner_;
-        threshold = threshold_;
-    }
-
-    function setExecResult(bool value) external {
-        execResult = value;
-    }
-
-    function isOwner(address candidate) external view returns (bool) {
-        return candidate == owner;
-    }
-
-    function getThreshold() external view returns (uint256) {
-        return threshold;
-    }
-
-    function execTransaction(
-        address to,
-        uint256 value,
-        bytes calldata data,
-        uint8 operation,
-        uint256,
-        uint256,
-        uint256,
-        address,
-        address payable,
-        bytes memory signatures
-    ) external payable returns (bool) {
-        lastTo = to;
-        lastValue = value;
-        lastData = data;
-        lastOperation = operation;
-        lastSignatures = signatures;
-        execCalls++;
-        return execResult;
+    function validateLocalFixture(address safe, SafeDeployment.Profile calldata profile) external view {
+        SafeDeployment.validateLocalFixtureSafeProfile(safe, profile);
     }
 }
 
 contract SafeDeploymentTest is Test {
-    SafeDeploymentHarness internal harness = new SafeDeploymentHarness();
+    bytes internal constant SAFE_PROXY_RUNTIME =
+        hex"608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033";
 
-    address internal constant OWNER = address(0xA11CE);
+    SafeValidationHarness internal harness;
+    address internal safe = makeAddr("safe");
+    address internal owner = makeAddr("owner");
 
-    function _owners(uint256 count) private pure returns (address[] memory owners) {
-        owners = new address[](count);
-        for (uint256 i = 0; i < count; i++) {
-            owners[i] = address(uint160(0x1000 + i));
-        }
+    function setUp() public {
+        harness = new SafeValidationHarness();
+        vm.etch(safe, SAFE_PROXY_RUNTIME);
+        vm.mockCall(safe, abi.encodeCall(ISafe.masterCopy, ()), abi.encode(SafeDeployment.SAFE_L2_SINGLETON));
     }
 
-    // ── setupInitializer ─────────────────────────────────────────────
+    function test_rejectsCorrectProxyWithWrongOwners() public {
+        _mockOwners(new address[](0));
 
-    function test_setupInitializerEncodesCanonicalSetup() public view {
-        address[] memory owners = _owners(2);
-        bytes memory initializer = harness.setupInitializer(owners, 2);
+        vm.expectRevert("wrong Safe owner count");
+        harness.validate(safe, _profile(1, new address[](0), address(0)));
+    }
 
-        assertEq(bytes4(initializer), ISafe.setup.selector);
-        (
-            address[] memory decodedOwners,
-            uint256 decodedThreshold,
-            address to,
-            bytes memory data,
-            address fallbackHandler,
-            address paymentToken,
-            uint256 payment,
-            address paymentReceiver
-        ) = abi.decode(
-            _stripSelector(initializer), (address[], uint256, address, bytes, address, address, uint256, address)
+    function test_rejectsCorrectProxyWithWrongThreshold() public {
+        _mockOwners(_singleAddress(owner));
+        vm.mockCall(safe, abi.encodeCall(ISafe.getThreshold, ()), abi.encode(uint256(2)));
+
+        vm.expectRevert("wrong Safe threshold");
+        harness.validate(safe, _profile(1, new address[](0), address(0)));
+    }
+
+    function test_rejectsCorrectProxyWithUnexpectedModule() public {
+        _mockOwners(_singleAddress(owner));
+        vm.mockCall(safe, abi.encodeCall(ISafe.getThreshold, ()), abi.encode(uint256(1)));
+        address[] memory liveModules = _singleAddress(makeAddr("module"));
+        vm.mockCall(
+            safe, abi.encodeCall(ISafe.getModulesPaginated, (address(0x1), 1)), abi.encode(liveModules, address(0x1))
         );
-        assertEq(decodedOwners.length, 2);
-        assertEq(decodedOwners[0], owners[0]);
-        assertEq(decodedOwners[1], owners[1]);
-        assertEq(decodedThreshold, 2);
-        assertEq(to, address(0));
-        assertEq(data.length, 0);
-        assertEq(fallbackHandler, SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER);
-        assertEq(paymentToken, address(0));
-        assertEq(payment, 0);
-        assertEq(paymentReceiver, address(0));
+
+        vm.expectRevert("wrong Safe module count");
+        harness.validate(safe, _profile(1, new address[](0), address(0)));
     }
 
-    function test_setupInitializerRejectsBadInput() public {
-        vm.expectRevert(bytes("owners required"));
-        harness.setupInitializer(new address[](0), 1);
+    function test_rejectsCorrectProxyWithUnexpectedGuard() public {
+        _mockBaseProfile();
+        _mockStorage(uint256(keccak256("guard_manager.guard.address")), makeAddr("guard"));
 
-        address[] memory owners = _owners(2);
-        vm.expectRevert(bytes("invalid threshold"));
-        harness.setupInitializer(owners, 0);
-        vm.expectRevert(bytes("invalid threshold"));
-        harness.setupInitializer(owners, 3);
-
-        owners[1] = owners[0];
-        vm.expectRevert(bytes("duplicate owner"));
-        harness.setupInitializer(owners, 1);
-
-        owners[1] = address(0);
-        vm.expectRevert(bytes("zero owner"));
-        harness.setupInitializer(owners, 1);
+        vm.expectRevert("wrong Safe guard");
+        harness.validate(safe, _profile(1, new address[](0), address(0)));
     }
 
-    // ── prevalidatedSignature ────────────────────────────────────────
+    function test_rejectsCorrectProxyWithWrongFallbackHandler() public {
+        _mockBaseProfile();
+        _mockStorage(uint256(keccak256("guard_manager.guard.address")), address(0));
+        _mockStorage(uint256(keccak256("fallback_manager.handler.address")), makeAddr("fallback"));
 
-    function test_prevalidatedSignatureLayout() public pure {
-        bytes memory signature = SafeDeployment.prevalidatedSignature(OWNER);
-        assertEq(signature.length, 65);
-
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            r := mload(add(signature, 0x20))
-            s := mload(add(signature, 0x40))
-            v := byte(0, mload(add(signature, 0x60)))
-        }
-        assertEq(address(uint160(uint256(r))), OWNER);
-        assertEq(s, bytes32(0));
-        assertEq(v, 1);
+        vm.expectRevert("wrong Safe fallback handler");
+        harness.validate(safe, _profile(1, new address[](0), address(0)));
     }
 
-    // ── packMultiSend ────────────────────────────────────────────────
-
-    function test_packMultiSendLayout() public view {
-        address[] memory targets = new address[](2);
-        targets[0] = address(0xBEEF);
-        targets[1] = address(0xCAFE);
-        bytes[] memory calls = new bytes[](2);
-        calls[0] = abi.encodeWithSignature("acceptAdmin()");
-        calls[1] = hex"01020304";
-
-        bytes memory packed = harness.packMultiSend(targets, calls);
-        bytes memory expected = abi.encodePacked(
-            uint8(0),
-            targets[0],
-            uint256(0),
-            uint256(calls[0].length),
-            calls[0],
-            uint8(0),
-            targets[1],
-            uint256(0),
-            uint256(calls[1].length),
-            calls[1]
+    function test_rejectsOneOfOneReleaseCandidate() public {
+        _mockBaseProfile();
+        _mockStorage(uint256(keccak256("guard_manager.guard.address")), address(0));
+        _mockStorage(
+            uint256(keccak256("fallback_manager.handler.address")), SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER
         );
-        assertEq(packed, expected);
+        SafeDeployment.Profile memory profile = _profile(1, new address[](0), address(0));
+        profile.releaseCandidate = true;
+
+        vm.expectRevert("release governance requires >=2 owners and threshold >=2");
+        harness.validate(safe, profile);
     }
 
-    function test_packMultiSendRejectsBadInput() public {
-        vm.expectRevert(bytes("empty batch"));
-        harness.packMultiSend(new address[](0), new bytes[](0));
-
-        vm.expectRevert(bytes("length mismatch"));
-        harness.packMultiSend(new address[](1), new bytes[](2));
+    function test_localFixtureValidationIsChainBound() public {
+        vm.chainId(8453);
+        vm.expectRevert("local Safe fixture only allowed on chain 31337");
+        harness.validateLocalFixture(safe, _profile(1, new address[](0), address(0)));
     }
 
-    // ── execMultiSendBatch ───────────────────────────────────────────
-
-    function test_execMultiSendBatchBuildsSafeTransaction() public {
-        MockSafe safe = new MockSafe(OWNER, 1);
-        address[] memory targets = new address[](1);
-        targets[0] = address(0xBEEF);
-        bytes[] memory calls = new bytes[](1);
-        calls[0] = abi.encodeWithSignature("acceptAdmin()");
-
-        harness.execMultiSendBatch(address(safe), OWNER, targets, calls);
-
-        assertEq(safe.execCalls(), 1);
-        assertEq(safe.lastTo(), SafeDeployment.MULTI_SEND_CALL_ONLY);
-        assertEq(safe.lastValue(), 0);
-        assertEq(safe.lastOperation(), SafeDeployment.OPERATION_DELEGATECALL);
-        assertEq(safe.lastData(), abi.encodeWithSignature("multiSend(bytes)", harness.packMultiSend(targets, calls)));
-        assertEq(safe.lastSignatures(), SafeDeployment.prevalidatedSignature(OWNER));
+    function _mockBaseProfile() internal {
+        _mockOwners(_singleAddress(owner));
+        vm.mockCall(safe, abi.encodeCall(ISafe.getThreshold, ()), abi.encode(uint256(1)));
+        vm.mockCall(
+            safe,
+            abi.encodeCall(ISafe.getModulesPaginated, (address(0x1), 1)),
+            abi.encode(new address[](0), address(0x1))
+        );
     }
 
-    function test_execMultiSendBatchGuards() public {
-        address[] memory targets = new address[](1);
-        targets[0] = address(0xBEEF);
-        bytes[] memory calls = new bytes[](1);
-        calls[0] = hex"01";
-
-        MockSafe nonOwnerSafe = new MockSafe(address(0xD00D), 1);
-        vm.expectRevert(bytes("sender is not a Safe owner"));
-        harness.execMultiSendBatch(address(nonOwnerSafe), OWNER, targets, calls);
-
-        MockSafe multisig = new MockSafe(OWNER, 2);
-        vm.expectRevert(bytes("threshold > 1: execute the logged batch via the Safe app"));
-        harness.execMultiSendBatch(address(multisig), OWNER, targets, calls);
-
-        MockSafe failing = new MockSafe(OWNER, 1);
-        failing.setExecResult(false);
-        vm.expectRevert(bytes("Safe batch execution failed"));
-        harness.execMultiSendBatch(address(failing), OWNER, targets, calls);
+    function _mockOwners(address[] memory liveOwners) internal {
+        vm.mockCall(safe, abi.encodeCall(ISafe.getOwners, ()), abi.encode(liveOwners));
+        vm.mockCall(safe, abi.encodeCall(ISafe.isOwner, (owner)), abi.encode(liveOwners.length == 1));
     }
 
-    function _stripSelector(bytes memory data) private pure returns (bytes memory out) {
-        out = new bytes(data.length - 4);
-        for (uint256 i = 0; i < out.length; i++) {
-            out[i] = data[i + 4];
-        }
+    function _mockStorage(uint256 slot, address value) internal {
+        bytes memory stored = abi.encode(bytes32(uint256(uint160(value))));
+        vm.mockCall(safe, abi.encodeCall(ISafe.getStorageAt, (slot, 1)), abi.encode(stored));
+    }
+
+    function _profile(uint256 threshold, address[] memory modules, address guard)
+        internal
+        view
+        returns (SafeDeployment.Profile memory)
+    {
+        return SafeDeployment.Profile({
+            owners: _singleAddress(owner),
+            threshold: threshold,
+            modules: modules,
+            guard: guard,
+            fallbackHandler: SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER,
+            releaseCandidate: false
+        });
+    }
+
+    function _singleAddress(address value) internal pure returns (address[] memory values) {
+        values = new address[](1);
+        values[0] = value;
     }
 }

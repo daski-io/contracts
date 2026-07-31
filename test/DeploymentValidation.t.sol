@@ -18,6 +18,7 @@ import {X402Adapter} from "../src/adapters/X402Adapter.sol";
 import {PermitAdapter} from "../src/adapters/PermitAdapter.sol";
 import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
+import {IExternalDependencyGuard} from "../src/interfaces/IExternalDependencyGuard.sol";
 import {DeploymentValidation} from "../script/DeploymentValidation.sol";
 import {GovernanceBatches, IPaymentRouterGovernance} from "../script/GovernanceBatches.sol";
 
@@ -245,7 +246,7 @@ contract DeploymentValidationTest is Test {
         validationHarness.validateCoreWiring(stack);
     }
 
-    function test_incompleteAdminHandoffReverts() public {
+    function test_incompleteAdminHandoffLeavesOneContractWithTheDeployer() public {
         GovernanceAdminStub governance = new GovernanceAdminStub();
         address[9] memory contracts_ = DeploymentValidation.adminContracts(stack);
         for (uint256 i = 0; i < contracts_.length; i++) {
@@ -253,8 +254,32 @@ contract DeploymentValidationTest is Test {
             if (i + 1 < contracts_.length) governance.accept(contracts_[i]);
         }
 
-        vm.expectRevert("admin not accepted");
-        validationHarness.validateAcceptedAdmins(contracts_, address(governance));
+        for (uint256 i = 0; i + 1 < contracts_.length; i++) {
+            assertEq(Admin2StepUpgradeable(contracts_[i]).admin(), address(governance));
+        }
+        assertEq(Admin2StepUpgradeable(contracts_[8]).admin(), address(this));
+        assertEq(Admin2StepUpgradeable(contracts_[8]).pendingAdmin(), address(governance));
+    }
+
+    function test_completeFacilitatorSetIsRequired() public {
+        address first = makeAddr("facilitator-1");
+        address second = makeAddr("facilitator-2");
+        x402.setFacilitatorAuthorization(first, true);
+        x402.setFacilitatorAuthorization(second, true);
+
+        address[] memory expected = new address[](2);
+        expected[0] = first;
+        expected[1] = second;
+        validationHarness.validateFacilitators(address(x402), expected);
+
+        address[] memory incomplete = new address[](1);
+        incomplete[0] = first;
+        vm.expectRevert("wrong facilitator count");
+        validationHarness.validateFacilitators(address(x402), incomplete);
+
+        expected[1] = makeAddr("unexpected");
+        vm.expectRevert("expected facilitator missing");
+        validationHarness.validateFacilitators(address(x402), expected);
     }
 
     function test_governanceBatchShapes() public view {
@@ -269,5 +294,22 @@ contract DeploymentValidationTest is Test {
         assertEq(bytes4(activateCalls[0]), IPaymentRouterGovernance.setAcceptedToken.selector);
         assertEq(bytes4(activateCalls[1]), IPaymentRouterGovernance.setTokenReputationConfig.selector);
         assertEq(bytes4(activateCalls[2]), IPaymentRouterGovernance.setAdapter.selector);
+
+        (address[] memory pauseTargets, bytes[] memory pauseCalls) = GovernanceBatches.externalDependencyPause(stack);
+        assertEq(pauseTargets.length, 9);
+        assertEq(pauseCalls.length, 9);
+        assertEq(bytes4(pauseCalls[0]), IExternalDependencyGuard.pauseExternalDependency.selector);
+
+        (address[] memory guardianTargets, bytes[] memory guardianCalls) =
+            GovernanceBatches.pauseGuardianConfiguration(stack, address(0xBEEF));
+        assertEq(guardianTargets.length, 9);
+        assertEq(guardianCalls.length, 9);
+        assertEq(bytes4(guardianCalls[0]), IExternalDependencyGuard.setPauseGuardian.selector);
+
+        (address[] memory unpauseTargets, bytes[] memory unpauseCalls) =
+            GovernanceBatches.externalDependencyUnpause(stack);
+        assertEq(unpauseTargets.length, 9);
+        assertEq(unpauseCalls.length, 9);
+        assertEq(bytes4(unpauseCalls[0]), IExternalDependencyGuard.unpauseExternalDependency.selector);
     }
 }

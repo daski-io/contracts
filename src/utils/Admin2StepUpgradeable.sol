@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {SanctionsGuardUpgradeable} from "./SanctionsGuardUpgradeable.sol";
+import {IExternalDependencyGuard} from "../interfaces/IExternalDependencyGuard.sol";
 
 /// @notice Shared 2-step admin transfer + UUPS upgrade gate for every Daski
 ///         contract. Each derived contract called `transferAdmin` /
@@ -12,9 +13,16 @@ import {SanctionsGuardUpgradeable} from "./SanctionsGuardUpgradeable.sol";
 ///         of duplication and keeps the transfer semantics impossible to
 ///         diverge across the stack.
 ///
-abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable, SanctionsGuardUpgradeable {
+abstract contract Admin2StepUpgradeable is
+    Initializable,
+    UUPSUpgradeable,
+    SanctionsGuardUpgradeable,
+    IExternalDependencyGuard
+{
     address public admin;
     address public pendingAdmin;
+    address public pauseGuardian;
+    bool public externalDependencyPaused;
 
     event AdminTransferStarted(address indexed previousAdmin, address indexed newAdmin);
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
@@ -22,6 +30,15 @@ abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable, Sanct
     modifier onlyAdmin() {
         require(msg.sender == admin, "not admin");
         _;
+    }
+
+    modifier whenExternalDependencyOperational() {
+        _requireExternalDependencyOperational();
+        _;
+    }
+
+    function _requireExternalDependencyOperational() private view {
+        require(!externalDependencyPaused, "external dependency paused");
     }
 
     /// @dev Initialize the admin field. Call once from the derived contract's
@@ -51,8 +68,31 @@ abstract contract Admin2StepUpgradeable is Initializable, UUPSUpgradeable, Sanct
         emit AdminTransferred(oldAdmin, admin);
     }
 
+    function setPauseGuardian(address newGuardian) external onlyAdmin {
+        require(newGuardian != address(0) || externalDependencyPaused, "zero guardian while operational");
+        address oldGuardian = pauseGuardian;
+        pauseGuardian = newGuardian;
+        emit PauseGuardianUpdated(oldGuardian, newGuardian);
+    }
+
+    function pauseExternalDependency() external {
+        require(msg.sender == admin || msg.sender == pauseGuardian, "not admin or guardian");
+        if (!externalDependencyPaused) {
+            externalDependencyPaused = true;
+            emit ExternalDependencyPauseUpdated(true);
+        }
+    }
+
+    function unpauseExternalDependency() external onlyAdmin {
+        require(pauseGuardian != address(0), "zero guardian");
+        if (externalDependencyPaused) {
+            externalDependencyPaused = false;
+            emit ExternalDependencyPauseUpdated(false);
+        }
+    }
+
     /// @dev UUPS upgrade authorization — admin only.
     function _authorizeUpgrade(address) internal override onlyAdmin {}
 
-    uint256[48] private __gap;
+    uint256[47] private __gap;
 }

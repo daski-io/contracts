@@ -1,0 +1,15 @@
+{
+  "build": {
+    "sourceCommit": "0123456789abcdef0123456789abcdef01234567",
+    "sourceClosureHash": "0x0101010101010101010101010101010101010101010101010101010101010101",
+    "compilerInputHash": "0x0202020202020202020202020202020202020202020202020202020202020202",
+    "foundryConfigHash": "0x0303030303030303030303030303030303030303030303030303030303030303",
+    "solcVersion": "0.8.24+commit.e11b9ed9",
+    "optimizer": true,
+    "optimizerRuns": 200,
+    "viaIr": true,
+    "evmVersion": "cancun",
+    "foundryVersion": "1.5.1-stable",
+    "foundryCommit": "b0a9dd9ceda36f63e2326ce530c10e6916f4b8a2"
+  }
+}

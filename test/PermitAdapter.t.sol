@@ -150,7 +150,8 @@ contract PermitAdapterTest is Test {
             vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, block.timestamp + 1 hours
         );
         vm.prank(buyer);
-        uint256 paymentId = adapter.settle(address(usdc), 100e6, keccak256("p-ref"), providerAgentId, serviceId, p);
+        uint256 paymentId =
+            adapter.settle(address(usdc), 100e6, keccak256("p-ref"), providerAgentId, serviceId, provider, p);
 
         assertEq(usdc.balanceOf(provider), 95e6);
         assertEq(usdc.balanceOf(address(adapter)), 0);
@@ -168,7 +169,7 @@ contract PermitAdapterTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert(abi.encodeWithSelector(ISanctionsGuard.SanctionedAddress.selector, buyer));
-        adapter.settle(address(usdc), 100e6, keccak256("sanctioned-permit"), providerAgentId, serviceId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("sanctioned-permit"), providerAgentId, serviceId, provider, p);
 
         assertEq(usdc.nonces(buyer), 0);
         assertEq(usdc.balanceOf(buyer), 1000e6);
@@ -186,7 +187,7 @@ contract PermitAdapterTest is Test {
 
         vm.prank(buyer);
         vm.expectRevert(); // SafeERC20 wraps; OZ ERC20 reverts on insufficient allowance
-        adapter.settle(address(usdc), 100e6, keccak256("p-bad"), providerAgentId, serviceId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-bad"), providerAgentId, serviceId, provider, p);
     }
 
     function test_settleExpiredDeadlineWithoutAllowanceReverts() public {
@@ -196,7 +197,7 @@ contract PermitAdapterTest is Test {
         // then reverts because allowance was never granted.
         vm.prank(buyer);
         vm.expectRevert();
-        adapter.settle(address(usdc), 100e6, keccak256("p-exp"), providerAgentId, serviceId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-exp"), providerAgentId, serviceId, provider, p);
     }
 
     function test_settleWithPreExistingAllowanceSkipsPermit() public {
@@ -208,7 +209,7 @@ contract PermitAdapterTest is Test {
         IPermitAdapter.PermitData memory p =
             PermitSigner.signPermit(vm, BUYER_KEY, address(usdc), buyer, address(adapter), 100e6, block.timestamp - 1);
         vm.prank(buyer);
-        adapter.settle(address(usdc), 100e6, keccak256("p-pre"), providerAgentId, serviceId, p);
+        adapter.settle(address(usdc), 100e6, keccak256("p-pre"), providerAgentId, serviceId, provider, p);
         assertEq(usdc.balanceOf(provider), 95e6);
     }
 
@@ -219,7 +220,7 @@ contract PermitAdapterTest is Test {
         );
         vm.prank(buyer);
         vm.expectRevert("token not accepted");
-        adapter.settle(address(other), 100e6, keccak256("p-unk"), providerAgentId, serviceId, p);
+        adapter.settle(address(other), 100e6, keccak256("p-unk"), providerAgentId, serviceId, provider, p);
     }
 
     function test_settleFeeOnTransferTokenRevertsAtomicallyWithAllowance() public {
@@ -235,7 +236,9 @@ contract PermitAdapterTest is Test {
         });
         vm.prank(buyer);
         vm.expectRevert("unexpected token amount");
-        adapter.settle(address(feeToken), 100e6, keccak256("p-fee"), providerAgentId, serviceId, unsupportedPermit);
+        adapter.settle(
+            address(feeToken), 100e6, keccak256("p-fee"), providerAgentId, serviceId, provider, unsupportedPermit
+        );
 
         assertEq(feeToken.balanceOf(buyer), 100e6);
         assertEq(feeToken.balanceOf(address(router)), 0);

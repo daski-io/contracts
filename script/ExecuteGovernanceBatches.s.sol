@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {SafeDeployment} from "./SafeDeployment.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
 import {GovernanceBatches} from "./GovernanceBatches.sol";
+import {ReleaseManifest} from "./ReleaseManifest.sol";
 
 /// @notice Drives the two staged-deployment governance batches through the
 ///         Safe configured as ADMIN_ADDRESS, one Safe transaction per batch
@@ -20,62 +21,130 @@ import {GovernanceBatches} from "./GovernanceBatches.sol";
 ///         Execution is testnet automation: the broadcasting EOA must be an
 ///         owner of a 1-of-1 Safe. With a higher threshold the script logs
 ///         every call plus the packed MultiSend payload and reverts — feed
-///         those into the Safe app instead. Stack addresses come from the
-///         same env names VerifyDeployment.s.sol reads.
-contract ExecuteGovernanceBatches is Script {
+///         those into the Safe app instead. Stack identity comes from the
+///         same reviewed release manifest VerifyDeployment.s.sol reads.
+contract ExecuteGovernanceBatches is ReleaseManifest {
+    struct RunContext {
+        bool emitOnly;
+        uint256 deployerKey;
+        address sender;
+        string batch;
+        bytes32 batchId;
+    }
+
     function run() external {
-        uint256 deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        address sender = vm.addr(deployerKey);
-        address safe = vm.envAddress("ADMIN_ADDRESS");
-        string memory batch = vm.envString("GOVERNANCE_BATCH");
+        RunContext memory context = _runContext();
+        Manifest memory manifest = _loadManifest();
+        _validateCanonicalSafeDeployment();
+        (address[] memory targets, bytes[] memory calls) = _governanceCalls(context, manifest);
 
-        SafeDeployment.validateCanonicalDeployment();
-        DeploymentValidation.Stack memory deployment = DeploymentValidation.Stack({
-            identity: vm.envAddress("IDENTITY_REGISTRY_ADDRESS"),
-            usdc: vm.envAddress("USDC_ADDRESS"),
-            providerTreasury: vm.envAddress("PROVIDER_TREASURY_ADDRESS"),
-            paymentTreasury: vm.envAddress("PAYMENT_TREASURY_ADDRESS"),
-            sanctionsOracle: vm.envAddress("SANCTIONS_ORACLE_ADDRESS"),
-            agentIndex: vm.envAddress("AGENT_INDEX_ADDRESS"),
-            daskiValidationRegistry: vm.envAddress("DASKI_VALIDATION_REGISTRY_ADDRESS"),
-            providerRegistry: vm.envAddress("PROVIDER_REGISTRY_ADDRESS"),
-            serviceRegistry: vm.envAddress("SERVICE_REGISTRY_ADDRESS"),
-            router: vm.envAddress("PAYMENT_ROUTER_ADDRESS"),
-            reputation: vm.envAddress("REPUTATION_STORAGE_ADDRESS"),
-            x402Adapter: vm.envAddress("X402_ADAPTER_ADDRESS"),
-            permitAdapter: vm.envAddress("PERMIT_ADAPTER_ADDRESS"),
-            approvalAdapter: vm.envAddress("APPROVAL_ADAPTER_ADDRESS"),
-            listingFee: vm.envOr("LISTING_FEE", uint256(1_000_000)),
-            commissionBps: vm.envOr("COMMISSION_BPS", uint256(500)),
-            reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
-        });
-
-        address[] memory targets;
-        bytes[] memory calls;
-        bytes32 batchId = keccak256(bytes(batch));
-        if (batchId == keccak256("accept")) {
-            DeploymentValidation.validatePendingAdmins(DeploymentValidation.adminContracts(deployment), sender, safe);
-            (targets, calls) = GovernanceBatches.adminAcceptance(deployment);
-        } else if (batchId == keccak256("activate")) {
-            DeploymentValidation.validateAcceptedAdmins(DeploymentValidation.adminContracts(deployment), safe);
-            DeploymentValidation.validateDarkState(deployment);
-            (targets, calls) = GovernanceBatches.paymentActivation(deployment);
-        } else {
-            revert("GOVERNANCE_BATCH must be accept or activate");
+        _logBatch(context.batch, targets, calls);
+        if (context.emitOnly) {
+            console.log("Payload emitted without execution for manifest:");
+            console.logBytes32(manifest.hash);
+            console.log("Effective release hash:");
+            console.logBytes32(_effectiveReleaseHash(manifest));
+            return;
         }
 
-        _logBatch(batch, targets, calls);
+        _executeBatch(context, manifest.admin, targets, calls);
+        _validateExecutedBatch(context.batchId, manifest);
+    }
 
-        vm.startBroadcast(deployerKey);
-        SafeDeployment.execMultiSendBatch(safe, sender, targets, calls);
+    function _validateCanonicalSafeDeployment() internal view virtual {
+        SafeDeployment.validateCanonicalDeployment();
+    }
+
+    function _executeBatch(RunContext memory context, address safe, address[] memory targets, bytes[] memory calls)
+        internal
+        virtual
+    {
+        vm.startBroadcast(context.deployerKey);
+        SafeDeployment.execMultiSendBatch(safe, context.sender, targets, calls);
         vm.stopBroadcast();
+    }
 
-        if (batchId == keccak256("accept")) {
-            DeploymentValidation.validateAcceptedAdmins(DeploymentValidation.adminContracts(deployment), safe);
-            console.log("Batch 1 executed: all nine admin roles accepted by", safe);
+    function _runContext() private view returns (RunContext memory context) {
+        context.emitOnly = vm.envOr("EMIT_ONLY", false);
+        if (context.emitOnly) {
+            context.sender = vm.envAddress("GOVERNANCE_SENDER");
         } else {
+            context.deployerKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+            context.sender = vm.addr(context.deployerKey);
+        }
+        context.batch = vm.envString("GOVERNANCE_BATCH");
+        context.batchId = keccak256(bytes(context.batch));
+    }
+
+    function _governanceCalls(RunContext memory context, Manifest memory manifest)
+        private
+        view
+        returns (address[] memory targets, bytes[] memory calls)
+    {
+        DeploymentValidation.Stack memory deployment = manifest.stack;
+        if (context.batchId == keccak256("guardian")) {
+            _validateGuardianConfigurationCore(manifest);
+        } else if (context.batchId == keccak256("pause")) {
+            _validatePausedManifestCore(manifest, false);
+        } else if (context.batchId == keccak256("unpause")) {
+            _validateUnpauseManifestCore(manifest);
+        } else {
+            _validateManifestCore(manifest);
+        }
+
+        if (context.batchId == keccak256("accept")) {
+            DeploymentValidation.validateDarkState(deployment);
+            DeploymentValidation.validatePendingAdmins(
+                DeploymentValidation.adminContracts(deployment),
+                context.sender,
+                manifest.admin,
+                manifest.governance,
+                manifest.localFixture
+            );
+            return GovernanceBatches.adminAcceptance(deployment);
+        }
+        DeploymentValidation.validateAcceptedAdmins(
+            DeploymentValidation.adminContracts(deployment), manifest.admin, manifest.governance, manifest.localFixture
+        );
+        if (context.batchId == keccak256("guardian")) {
+            return GovernanceBatches.pauseGuardianConfiguration(deployment, manifest.pauseGuardian);
+        }
+        if (context.batchId == keccak256("activate")) {
+            DeploymentValidation.validateDarkState(deployment);
+            return GovernanceBatches.paymentActivation(deployment);
+        }
+        if (context.batchId == keccak256("pause")) {
+            return GovernanceBatches.externalDependencyPause(deployment);
+        }
+        if (context.batchId == keccak256("unpause")) {
+            return GovernanceBatches.externalDependencyUnpause(deployment);
+        }
+        revert("unsupported governance batch");
+    }
+
+    function _validateExecutedBatch(bytes32 batchId, Manifest memory manifest) private view {
+        DeploymentValidation.Stack memory deployment = manifest.stack;
+        if (batchId == keccak256("accept")) {
+            DeploymentValidation.validateAcceptedAdmins(
+                DeploymentValidation.adminContracts(deployment),
+                manifest.admin,
+                manifest.governance,
+                manifest.localFixture
+            );
+            console.log("Batch 1 executed: all nine admin roles accepted by", manifest.admin);
+        } else if (batchId == keccak256("guardian")) {
+            _validateManifestCore(manifest);
+            console.log("Pause guardian configuration executed");
+        } else if (batchId == keccak256("activate")) {
             DeploymentValidation.validateOperationalState(deployment);
             console.log("Batch 2 executed: token + adapters active; deployment operational");
+        } else if (batchId == keccak256("pause")) {
+            _validatePausedManifestCore(manifest, true);
+            console.log("External dependency pause executed");
+        } else {
+            _validateManifestCore(manifest);
+            DeploymentValidation.validateOperationalState(deployment);
+            console.log("External dependency unpause executed");
         }
     }
 

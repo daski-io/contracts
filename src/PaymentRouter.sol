@@ -29,6 +29,7 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         address buyerWallet;
         uint256 providerAgentId;
         bytes32 serviceId;
+        address expectedPayee;
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -68,8 +69,9 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         uint256 buyerAgentId,
         address buyerWallet,
         uint256 providerAgentId,
-        bytes32 serviceId
-    ) external onlyAdapter nonReentrant returns (uint256 paymentId) {
+        bytes32 serviceId,
+        address expectedPayee
+    ) external onlyAdapter nonReentrant whenExternalDependencyOperational returns (uint256 paymentId) {
         Settlement memory request = Settlement({
             token: token,
             amount: amount,
@@ -77,7 +79,8 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
             buyerAgentId: buyerAgentId,
             buyerWallet: buyerWallet,
             providerAgentId: providerAgentId,
-            serviceId: serviceId
+            serviceId: serviceId,
+            expectedPayee: expectedPayee
         });
         paymentId = _settle(request);
     }
@@ -160,12 +163,14 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         providerWallet = wallet;
         payee = resolvedPayee;
         require(payee != address(0), "no payee wallet");
+        require(request.expectedPayee != address(0), "zero expected payee");
+        require(payee == request.expectedPayee, "payee changed");
     }
 
     /// @inheritdoc IPaymentRouter
     /// @dev The authorized caller funds the refund. Historical refunds always
     ///      return to the wallet that made the original payment.
-    function refund(uint256 paymentId, uint256 amountToBuyer) external nonReentrant {
+    function refund(uint256 paymentId, uint256 amountToBuyer) external nonReentrant whenExternalDependencyOperational {
         require(amountToBuyer > 0, "zero refund");
         PaymentRecord memory record = _payments[paymentId];
         require(record.amount > 0, "payment not found");
@@ -205,11 +210,15 @@ contract PaymentRouter is PaymentRouterAdmin, PaymentRouterViews, PaymentRouterS
         if (!config.enabled || request.amount < config.minimumAmount) return false;
         if (commission == 0) return false;
         if (request.buyerAgentId == request.providerAgentId) return false;
-        address[3] memory buyerAddresses = [request.buyerWallet, buyerOwner, buyerAgentWallet];
-        address[3] memory providerAddresses = [providerOwner, providerWallet, payee];
-        return !LibReputationEligibility.hasProvableControlOverlap(
-            identity, request.providerAgentId, buyerAddresses, providerAddresses
-        );
+        LibReputationEligibility.Party memory buyer = LibReputationEligibility.Party({
+            agentId: request.buyerAgentId,
+            owner: buyerOwner,
+            participants: [request.buyerWallet, buyerOwner, buyerAgentWallet]
+        });
+        LibReputationEligibility.Party memory provider = LibReputationEligibility.Party({
+            agentId: request.providerAgentId, owner: providerOwner, participants: [providerOwner, providerWallet, payee]
+        });
+        return !LibReputationEligibility.hasProvableControlOverlap(identity, buyer, provider);
     }
 
     function _attemptReputationSync(uint256 paymentId) private {

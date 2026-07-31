@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IERC3009} from "../../src/interfaces/IERC3009.sol";
 
 /// @notice Test-only USDC with both EIP-3009 (`transferWithAuthorization`) and
@@ -21,6 +21,9 @@ import {IERC3009} from "../../src/interfaces/IERC3009.sol";
 contract MockUSDC is ERC20, ERC20Permit, IERC3009 {
     bytes32 public constant TRANSFER_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "TransferWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    bytes32 public constant RECEIVE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "ReceiveWithAuthorization(address from,address to,uint256 value,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
 
     mapping(address => mapping(bytes32 => bool)) private _authorizationStates;
@@ -77,16 +80,68 @@ contract MockUSDC is ERC20, ERC20Permit, IERC3009 {
         uint8 v,
         bytes32 r,
         bytes32 s
+    ) external {
+        _transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, abi.encodePacked(r, s, v));
+    }
+
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes calldata signature
+    ) external {
+        _transferWithAuthorization(from, to, value, validAfter, validBefore, nonce, signature);
+    }
+
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes calldata signature
     ) external override {
+        require(to == msg.sender, "caller must be payee");
+        _useAuthorization(
+            RECEIVE_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce, signature
+        );
+    }
+
+    function _transferWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    ) private {
+        _useAuthorization(
+            TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce, signature
+        );
+    }
+
+    function _useAuthorization(
+        bytes32 typeHash,
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    ) private {
         require(block.timestamp > validAfter, "auth not yet valid");
         require(block.timestamp < validBefore, "auth expired");
         require(!_authorizationStates[from][nonce], "auth already used");
 
-        bytes32 structHash = keccak256(
-            abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce)
-        );
+        bytes32 structHash = keccak256(abi.encode(typeHash, from, to, value, validAfter, validBefore, nonce));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _TRANSFER_DOMAIN_SEPARATOR, structHash));
-        require(ECDSA.recover(digest, v, r, s) == from, "invalid signature");
+        require(SignatureChecker.isValidSignatureNow(from, digest, signature), "invalid signature");
 
         _authorizationStates[from][nonce] = true;
         emit AuthorizationUsed(from, nonce);

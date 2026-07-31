@@ -1,0 +1,148 @@
+name: Independent release reproduction
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Committed release manifest path
+        required: true
+        type: string
+      revision_directory:
+        description: Committed finalized-revision directory, if any
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      manifest_path:
+        required: true
+        type: string
+      revision_directory:
+        required: false
+        type: string
+    secrets:
+      RELEASE_RPC_URL:
+        required: true
+
+jobs:
+  reproduce-a:
+    name: Reproduce A
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_RPC_URL: ${{ secrets.RELEASE_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - name: Prewarm pinned compiler without a shared cache
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
+
+      - name: Reproduce release in isolated temporary directories
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          REVISION_DIRECTORY: ${{ inputs.revision_directory }}
+        run: |
+          args=(--manifest "$MANIFEST_PATH" --evidence-dir "$RUNNER_TEMP/reproduction-a" --release-ref HEAD --rpc-url "$RELEASE_RPC_URL")
+          if [[ -n "$REVISION_DIRECTORY" ]]; then
+            while IFS= read -r -d '' revision; do
+              args+=(--revision "$revision")
+            done < <(find "$REVISION_DIRECTORY" -maxdepth 1 -type f -name '*.json' -print0 | sort -z)
+          fi
+          python3 script/reproduce_release.py "${args[@]}"
+
+      - name: Archive complete reproduction A
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-reproduction-a-${{ github.sha }}
+          path: ${{ runner.temp }}/reproduction-a/
+          if-no-files-found: error
+          retention-days: 90
+
+  reproduce-b:
+    name: Reproduce B
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_RPC_URL: ${{ secrets.RELEASE_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      - name: Prewarm pinned compiler without a shared cache
+        run: >-
+          forge build
+          src/interfaces/IERC20Permit.sol
+          --use 0.8.24
+          --out "$RUNNER_TEMP/solc-prewarm-out"
+          --cache-path "$RUNNER_TEMP/solc-prewarm-cache"
+
+      - name: Reproduce release in isolated temporary directories
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          REVISION_DIRECTORY: ${{ inputs.revision_directory }}
+        run: |
+          args=(--manifest "$MANIFEST_PATH" --evidence-dir "$RUNNER_TEMP/reproduction-b" --release-ref HEAD --rpc-url "$RELEASE_RPC_URL")
+          if [[ -n "$REVISION_DIRECTORY" ]]; then
+            while IFS= read -r -d '' revision; do
+              args+=(--revision "$revision")
+            done < <(find "$REVISION_DIRECTORY" -maxdepth 1 -type f -name '*.json' -print0 | sort -z)
+          fi
+          python3 script/reproduce_release.py "${args[@]}"
+
+      - name: Archive complete reproduction B
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-reproduction-b-${{ github.sha }}
+          path: ${{ runner.temp }}/reproduction-b/
+          if-no-files-found: error
+          retention-days: 90
+
+  compare:
+    name: Compare independent reproductions
+    needs: [reproduce-a, reproduce-b]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-reproduction-a-${{ github.sha }}
+          path: ${{ runner.temp }}/reproduction-a
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-reproduction-b-${{ github.sha }}
+          path: ${{ runner.temp }}/reproduction-b
+
+      - name: Require exact reproduction equality
+        run: >-
+          python3 script/compare_release_reproductions.py
+          "$RUNNER_TEMP/reproduction-a/reproduction.json"
+          "$RUNNER_TEMP/reproduction-b/reproduction.json"

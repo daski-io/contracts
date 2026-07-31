@@ -30,6 +30,12 @@ interface ISafe {
     function getThreshold() external view returns (uint256);
     function isOwner(address owner) external view returns (bool);
     function nonce() external view returns (uint256);
+    function masterCopy() external view returns (address);
+    function getModulesPaginated(address start, uint256 pageSize)
+        external
+        view
+        returns (address[] memory array, address next);
+    function getStorageAt(uint256 offset, uint256 length) external view returns (bytes memory);
 }
 
 interface ISafeProxyFactory {
@@ -48,6 +54,20 @@ interface IMultiSend {
 ///         by runtime codehash (verified identical on Base mainnet and Base
 ///         Sepolia) so a compromised RPC cannot substitute look-alikes.
 library SafeDeployment {
+    struct Profile {
+        address[] owners;
+        uint256 threshold;
+        address[] modules;
+        address guard;
+        address fallbackHandler;
+        bool releaseCandidate;
+    }
+
+    uint256 internal constant BASE_MAINNET = 8453;
+
+    /// SafeProxy v1.4.1.
+    bytes32 internal constant SAFE_PROXY_CODEHASH = 0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
+
     /// SafeProxyFactory v1.4.1.
     address internal constant SAFE_PROXY_FACTORY = 0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67;
     bytes32 internal constant SAFE_PROXY_FACTORY_CODEHASH =
@@ -71,12 +91,55 @@ library SafeDeployment {
 
     uint8 internal constant OPERATION_CALL = 0;
     uint8 internal constant OPERATION_DELEGATECALL = 1;
+    address internal constant SENTINEL_MODULES = address(0x1);
+    uint256 internal constant GUARD_STORAGE_SLOT = uint256(keccak256("guard_manager.guard.address"));
+    uint256 internal constant FALLBACK_HANDLER_STORAGE_SLOT = uint256(keccak256("fallback_manager.handler.address"));
 
     function validateCanonicalDeployment() internal view {
         _requireCodehash(SAFE_PROXY_FACTORY, SAFE_PROXY_FACTORY_CODEHASH, "SafeProxyFactory");
         _requireCodehash(SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_CODEHASH, "SafeL2 singleton");
         _requireCodehash(COMPATIBILITY_FALLBACK_HANDLER, COMPATIBILITY_FALLBACK_HANDLER_CODEHASH, "fallback handler");
         _requireCodehash(MULTI_SEND_CALL_ONLY, MULTI_SEND_CALL_ONLY_CODEHASH, "MultiSendCallOnly");
+    }
+
+    /// @notice Validate the complete governance identity and configuration.
+    function validateSafeProfile(address safe, Profile memory profile) internal view {
+        _validateSafeProfile(safe, profile, true);
+    }
+
+    /// @notice Validate the complete Safe configuration in the isolated local
+    /// release fixture, where canonical dependency code is not installed.
+    function validateLocalFixtureSafeProfile(address safe, Profile memory profile) internal view {
+        require(block.chainid == 31337, "local Safe fixture only allowed on chain 31337");
+        _validateSafeProfile(safe, profile, false);
+    }
+
+    function _validateSafeProfile(address safe, Profile memory profile, bool validateDependencyCode) private view {
+        require(safe.codehash == SAFE_PROXY_CODEHASH, "governance is not canonical SafeProxy");
+        ISafe target = ISafe(safe);
+        require(target.masterCopy() == SAFE_L2_SINGLETON, "wrong Safe singleton");
+        _validateOwners(target, profile.owners);
+        require(target.getThreshold() == profile.threshold, "wrong Safe threshold");
+        _validateModules(target, profile.modules);
+        require(_storageAddress(target, GUARD_STORAGE_SLOT) == profile.guard, "wrong Safe guard");
+        require(profile.fallbackHandler == COMPATIBILITY_FALLBACK_HANDLER, "manifest fallback handler is not canonical");
+        require(
+            _storageAddress(target, FALLBACK_HANDLER_STORAGE_SLOT) == profile.fallbackHandler,
+            "wrong Safe fallback handler"
+        );
+
+        if (block.chainid == BASE_MAINNET || profile.releaseCandidate) {
+            require(
+                profile.owners.length >= 2 && profile.threshold >= 2,
+                "release governance requires >=2 owners and threshold >=2"
+            );
+        }
+        if (validateDependencyCode) {
+            _requireCodehash(SAFE_L2_SINGLETON, SAFE_L2_SINGLETON_CODEHASH, "SafeL2 singleton");
+            _requireCodehash(
+                COMPATIBILITY_FALLBACK_HANDLER, COMPATIBILITY_FALLBACK_HANDLER_CODEHASH, "fallback handler"
+            );
+        }
     }
 
     /// @notice Safe.setup calldata for a fresh Safe: no module setup call, no
@@ -141,5 +204,39 @@ library SafeDeployment {
     function _requireCodehash(address target, bytes32 expected, string memory name) private view {
         require(target.code.length > 0, string.concat(name, " has no code on this chain"));
         require(target.codehash == expected, string.concat(name, " codehash mismatch"));
+    }
+
+    function _validateOwners(ISafe safe, address[] memory expected) private view {
+        address[] memory live = safe.getOwners();
+        require(live.length == expected.length, "wrong Safe owner count");
+        for (uint256 i = 0; i < expected.length; i++) {
+            require(expected[i] != address(0), "zero expected Safe owner");
+            require(safe.isOwner(expected[i]), "expected Safe owner missing");
+            for (uint256 j = i + 1; j < expected.length; j++) {
+                require(expected[i] != expected[j], "duplicate expected Safe owner");
+            }
+        }
+    }
+
+    function _validateModules(ISafe safe, address[] memory expected) private view {
+        (address[] memory live, address next) = safe.getModulesPaginated(SENTINEL_MODULES, expected.length + 1);
+        require(next == SENTINEL_MODULES, "unexpected additional Safe modules");
+        require(live.length == expected.length, "wrong Safe module count");
+        for (uint256 i = 0; i < expected.length; i++) {
+            require(expected[i] != address(0) && expected[i] != SENTINEL_MODULES, "invalid expected Safe module");
+            bool found;
+            for (uint256 j = 0; j < live.length; j++) {
+                if (live[j] == expected[i]) found = true;
+            }
+            require(found, "expected Safe module missing");
+        }
+    }
+
+    function _storageAddress(ISafe safe, uint256 slot) private view returns (address value) {
+        bytes memory stored = safe.getStorageAt(slot, 1);
+        require(stored.length == 32, "invalid Safe storage response");
+        assembly ("memory-safe") {
+            value := mload(add(stored, 0x20))
+        }
     }
 }

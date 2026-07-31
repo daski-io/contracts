@@ -36,8 +36,9 @@ interface IPaymentRouter {
     ///         stores the PaymentRecord, emits PaymentSettled, returns the
     ///         new paymentId.
     /// @dev    `serviceId` MUST belong to `providerAgentId` and the service
-    ///         MUST be active. ServiceRegistry is authoritative for resolving
-    ///         the current payee.
+    ///         MUST be active. The current ServiceRegistry payee MUST equal
+    ///         `expectedPayee`, converting later registry changes into a
+    ///         revert instead of redirecting the payment.
     ///         `buyerWallet` is the payer wallet; the router verifies it
     ///         currently controls `buyerAgentId` (verified agentWallet or
     ///         ERC-721 owner) and caches it as the refund fallback.
@@ -48,7 +49,8 @@ interface IPaymentRouter {
         uint256 buyerAgentId,
         address buyerWallet,
         uint256 providerAgentId,
-        bytes32 serviceId
+        bytes32 serviceId,
+        address expectedPayee
     ) external returns (uint256 paymentId);
 
     /// @notice Provider-initiated refund. Authorized callers are: NFT owner,

@@ -79,6 +79,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     function registerWithSig(string calldata agentURI, address wallet, uint256 deadline, bytes calldata signature)
         external
         nonReentrant
+        whenExternalDependencyOperational
         returns (uint256 agentId)
     {
         require(block.timestamp <= deadline, "signature expired");
@@ -121,7 +122,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     // ------------------------------------------------------------------
 
     /// @inheritdoc IAgentIndex
-    function claim(uint256 agentId) external nonReentrant {
+    function claim(uint256 agentId) external nonReentrant whenExternalDependencyOperational {
         require(_controlsAgent(agentId, msg.sender), "not agent owner or wallet");
         _requireAgentParticipantsAllowed(agentId, msg.sender);
         _agentIdOf[msg.sender] = agentId;
@@ -130,7 +131,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     }
 
     /// @inheritdoc IAgentIndex
-    function unbind() external nonReentrant {
+    function unbind() external nonReentrant whenExternalDependencyOperational {
         require(_hasBinding[msg.sender], "nothing bound");
         uint256 agentId = _agentIdOf[msg.sender];
         _requireAgentParticipantsAllowed(agentId, msg.sender);

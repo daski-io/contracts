@@ -16,6 +16,7 @@ import {ApprovalAdapter} from "../src/adapters/ApprovalAdapter.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {Admin2StepUpgradeable} from "../src/utils/Admin2StepUpgradeable.sol";
 import {DeploymentValidation} from "./DeploymentValidation.sol";
+import {SafeDeployment} from "./SafeDeployment.sol";
 
 /// @notice Deploy the Daski stack against the CANONICAL ERC-8004
 ///         IdentityRegistry — Daski deploys no identity registry (and no
@@ -73,11 +74,12 @@ contract Deploy is Script {
         );
 
         address deployer = vm.addr(deployerKey);
-        // Final admin for every proxy. It must be an already-deployed
-        // governance contract (multisig or timelock); an EOA deployer is
-        // deliberately never accepted as the long-term control plane.
+        // Final admin for every proxy. It must match the exact canonical Safe
+        // profile supplied for this deployment; an EOA or arbitrary contract
+        // is never accepted as the long-term control plane.
         address finalAdmin = vm.envOr("ADMIN_ADDRESS", address(0));
-        DeploymentValidation.validateFinalAdmin(finalAdmin, deployer);
+        SafeDeployment.Profile memory governance = _governanceProfile(deployer);
+        DeploymentValidation.validateFinalAdmin(finalAdmin, deployer, governance);
 
         vm.startBroadcast(deployerKey);
 
@@ -230,6 +232,7 @@ contract Deploy is Script {
             commissionBps: commissionBps,
             reputationMinimum: vm.envOr("USDC_REPUTATION_MINIMUM", uint256(250_000))
         });
+        _configurePauseGuardians(deployment, governance.releaseCandidate);
         DeploymentValidation.validateCoreWiring(deployment);
         DeploymentValidation.validateDarkState(deployment);
 
@@ -241,7 +244,7 @@ contract Deploy is Script {
         for (uint256 i = 0; i < adminContracts.length; i++) {
             Admin2StepUpgradeable(adminContracts[i]).transferAdmin(finalAdmin);
         }
-        DeploymentValidation.validatePendingAdmins(adminContracts, deployer, finalAdmin);
+        DeploymentValidation.validatePendingAdmins(adminContracts, deployer, finalAdmin, governance);
         console.log("Admin transfer started to:", finalAdmin);
         console.log("  governance MUST call acceptAdmin() on each proxy");
 
@@ -285,5 +288,31 @@ contract Deploy is Script {
         console.log(string.concat("  ", name, " implementation:"), implementation);
         console.log("    codehash:");
         console.logBytes32(implementation.codehash);
+    }
+
+    function _configurePauseGuardians(DeploymentValidation.Stack memory deployment, bool releaseCandidate) private {
+        address pauseGuardian = vm.envOr("PAUSE_GUARDIAN_ADDRESS", address(0));
+        require(!releaseCandidate || pauseGuardian != address(0), "release guardian required");
+        address[9] memory contracts_ = DeploymentValidation.adminContracts(deployment);
+        if (pauseGuardian != address(0)) {
+            for (uint256 i = 0; i < contracts_.length; i++) {
+                Admin2StepUpgradeable(contracts_[i]).setPauseGuardian(pauseGuardian);
+            }
+        }
+        DeploymentValidation.validateExternalDependencyGuards(contracts_, pauseGuardian, false);
+    }
+
+    function _governanceProfile(address deployer) private view returns (SafeDeployment.Profile memory profile) {
+        address[] memory defaultOwners = new address[](1);
+        defaultOwners[0] = deployer;
+        address[] memory noModules = new address[](0);
+        profile = SafeDeployment.Profile({
+            owners: vm.envOr("SAFE_OWNERS", ",", defaultOwners),
+            threshold: vm.envOr("SAFE_THRESHOLD", uint256(1)),
+            modules: vm.envOr("SAFE_MODULES", ",", noModules),
+            guard: vm.envOr("SAFE_GUARD", address(0)),
+            fallbackHandler: SafeDeployment.COMPATIBILITY_FALLBACK_HANDLER,
+            releaseCandidate: vm.envOr("RELEASE_CANDIDATE", false)
+        });
     }
 }
