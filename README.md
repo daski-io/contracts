@@ -383,8 +383,7 @@ pauses `PaymentRouter` first and then the other proxies; the Safe batch is the
 manual fallback. Only the Safe may unpause, after the wrapper verifies either
 the unchanged reviewed identity pins or a newly reviewed base manifest.
 Deploy `script/monitor_external_identity.py` through the release-operations
-environment using
-[`EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md`](EXTERNAL_IDENTITY_INCIDENT_RUNBOOK.md).
+environment, following the private incident runbook for that environment.
 Scripted execution remains limited to a 1-of-1 development Safe;
 release-candidate and Mainnet signers review the archived
 `MultiSendCallOnly` payload in the Safe app. Run the protected independent

@@ -12,8 +12,33 @@ docs/
 # Dotenv file
 .env
 
-# Local agent config
+# Local agent config and the private home for internal docs
+# (specs, plans, audit workpapers, incident runbooks, ops templates).
+# This repo is PUBLIC — anything internal lives under .claude/, never at the
+# repo root. See deploy-testnet scripts/hygiene-check.sh for the release gate.
 .claude/
+
+# Backstop for the same class at the repo root: internal docs have historically
+# been written here by name shape (…_SPEC.md, …_RUNBOOK.md, …_AUDIT_*.md).
+# Public root docs are the explicit un-ignores below.
+/*_SPEC.md
+/*_SPECIFICATION.md
+/*_RUNBOOK.md
+/*_PLAN.md
+/*_NOTES.md
+/*_AUDIT*.md
+/*AUDIT_*.md
+/*_INCIDENT*.md
+/*_REMEDIATION*.md
+/*_CLOSEOUT*.md
+/*_POSTMORTEM.md
+/*_POST_MORTEM.md
+/*_HANDOFF.md
+/*_WIP.md
+/INTERNAL*.md
+/TODO.md
+/SCRATCH.md
+/SCRATCHPAD.md
 
 # Local helper scripts (created on the fly to work around WSL bash -c quoting)
 .run-*.sh
