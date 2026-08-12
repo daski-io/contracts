@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+/// @notice Historical PaymentRouter ABI retained so the independently deployed
+///         ReputationStorage can read pre-standard-rail records. The standard
+///         rail does not deploy, call, or authorize a PaymentRouter.
+interface IPaymentRouter {
+    struct PaymentRecord {
+        uint256 buyerAgentId;
+        uint256 providerAgentId;
+        bytes32 serviceId; // ServiceRegistry serviceId this payment was for
+        address token; // token used for this payment
+        uint256 amount; // original gross amount
+        // Payer wallet captured at settle (adapter-supplied, router-verified
+        // against the buyer agent). Refunds always return to this wallet so
+        // later agent ownership or wallet changes cannot redirect them.
+        address cachedBuyerWallet;
+        // Provider controllers captured at settlement. Historical reputation
+        // attestations remain bound to the parties that accepted the payment.
+        address cachedProviderOwner;
+        address cachedProviderWallet;
+        bytes32 serviceRef; // adapter-supplied reference, single-use
+        // Block timestamp at settlement. Used by ReputationStorage to derive
+        // the outcome attestation delay.
+        uint256 paidAt;
+        // Only qualified payments may affect Daski reputation or be mirrored
+        // into the canonical ERC-8004 ReputationRegistry.
+        bool reputationEligible;
+    }
+
+    /// @notice Adapter-facing settlement entry point. The adapter MUST have
+    ///         transferred `amount` of `token` into this contract (router)
+    ///         before calling. Router validates the (provider, service) pair
+    ///         against ServiceRegistry, splits funds (provider/treasury),
+    ///         stores the PaymentRecord, emits PaymentSettled, returns the
+    ///         new paymentId.
+    /// @dev    `serviceId` MUST belong to `providerAgentId` and the service
+    ///         MUST be active. The current ServiceRegistry payee MUST equal
+    ///         `expectedPayee`, converting later registry changes into a
+    ///         revert instead of redirecting the payment.
+    ///         `buyerWallet` is the payer wallet; the router verifies it
+    ///         currently controls `buyerAgentId` (verified agentWallet or
+    ///         ERC-721 owner) and caches it as the refund fallback.
+    function settle(
+        address token,
+        uint256 amount,
+        bytes32 serviceRef,
+        uint256 buyerAgentId,
+        address buyerWallet,
+        uint256 providerAgentId,
+        bytes32 serviceId,
+        address expectedPayee
+    ) external returns (uint256 paymentId);
+
+    /// @notice Provider-initiated refund. Authorized callers are: NFT owner,
+    ///         ERC-721 operator (isApprovedForAll), per-token approved
+    ///         spender (getApproved), or the provider's current agentWallet.
+    ///         Source of funds is `msg.sender` — the caller must have
+    ///         approved the router for at least `amountToBuyer` of the
+    ///         original payment token. Cumulative refunds are capped at the
+    ///         original payment amount.
+    function refund(uint256 paymentId, uint256 amountToBuyer) external;
+
+    /// @notice Retry payment/refund synchronization with ReputationStorage.
+    ///         Anyone may call this after a transient sink failure.
+    function syncReputation(uint256 paymentId) external;
+
+    // ── Views ────────────────────────────────────────────────────────
+    function getPayment(uint256 paymentId) external view returns (PaymentRecord memory);
+    function refundedAmount(uint256 paymentId) external view returns (uint256);
+    function reputationSyncState(uint256 paymentId) external view returns (bool paymentSynced, uint256 refundSynced);
+    /// @notice Returns the replay-protection key for one buyer/provider/service
+    ///         namespace and its gateway-supplied reference.
+    function computePaymentKey(uint256 buyerAgentId, uint256 providerAgentId, bytes32 serviceId, bytes32 serviceRef)
+        external
+        pure
+        returns (bytes32);
+    function paymentKeyUsed(bytes32 paymentKey) external view returns (bool);
+    function isAdapter(address adapter) external view returns (bool);
+    function getAdapterCount() external view returns (uint256);
+    function getAdapterAt(uint256 index) external view returns (address);
+    function isAcceptedToken(address token) external view returns (bool);
+    function getAcceptedTokenCount() external view returns (uint256);
+    function getAcceptedTokenAt(uint256 index) external view returns (address);
+    function getTokenReputationConfig(address token)
+        external
+        view
+        returns (bool reputationEnabled, uint256 minimumReputationAmount);
+    function quoteCommission(uint256 amount) external view returns (uint256 commission, uint256 providerAmount);
+}

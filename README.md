@@ -1,9 +1,9 @@
 # Daski Standard-Rail Contracts
 
-This repository contains the on-chain contracts used by Daski's standard
-Exact-EVM payment rail.
+This repository contains Daski's marketplace identity, catalog, validation,
+historical reputation, and standard Exact-EVM payment contracts.
 
-## Active contracts
+## Standard-rail payment contracts
 
 - `OutcomeSplitter` is an immutable payment destination for one listed outcome
   epoch. It holds the canonical token and permissionlessly releases its entire
@@ -14,10 +14,26 @@ There is no custom x402 scheme, settlement router, payment adapter, or mutable
 financial route in the active contract set. Buyers sign ordinary EIP-3009
 USDC authorizations whose `to` address is the outcome splitter.
 
+## Marketplace contracts
+
+- `AgentIndex` adds verified wallet-to-agent lookup and delegated registration
+  around the canonical ERC-8004 Identity Registry.
+- `ProviderRegistry` records Daski marketplace providers.
+- `ServiceRegistry` records versioned provider catalog entries.
+- `DaskiValidationRegistry` records agent-scoped validation requests and
+  responses.
+- `ReputationStorage` preserves the existing EAS-backed reputation history.
+  It remains readable for historical native-payment records; standard-rail
+  orders do not write it or receive native reputation credit.
+
+These contracts are independent of the standard payment route. Restoring them
+does not restore `PaymentRouter`, `X402Adapter`, `PermitAdapter`, or
+`ApprovalAdapter`.
+
 The repository retains `RetireStack.s.sol` only as a kill-switch for already
-deployed legacy routers. It cannot deploy or activate the retired stack.
-`deployments/base-sepolia.json` is historical evidence and is explicitly
-marked retired; no runtime should consume it as current configuration.
+deployed legacy routers. It cannot deploy or activate the retired payment
+stack. `deployments/base-sepolia.json` distinguishes the retained marketplace
+contracts from retired payment contracts.
 
 ## Build and test
 

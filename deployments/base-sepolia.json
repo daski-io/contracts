@@ -1,8 +1,8 @@
 {
   "chainId": 84532,
   "name": "base-sepolia",
-  "status": "retired",
-  "usage": "historical-only-not-admitted-by-standard-rail",
+  "status": "mixed-active-and-retired",
+  "usage": "marketplace-identity-catalog-validation-and-historical-reputation-remain-active; custom-payment-contracts-are-retired",
   "deployedAt": "2026-07-31",
   "canonical": {
     "IdentityRegistry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
@@ -18,20 +18,22 @@
     "safeThreshold": 2,
     "pauseGuardian": "0xEe040016AbcF2EF1BcaE87FEbb452c763D34342d"
   },
-  "retiredContracts": {
+  "contracts": {
     "USDC": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "SanctionsOracle": "0xa94d2168820f349aafBa585c12E69aA387dCB815",
     "AgentIndex": "0xA9b7ff6158E51581F253a8234EAC79411FB0e1cf",
     "DaskiValidationRegistry": "0xC3EA96dAaF863707573a342138394d51e336FBBC",
     "ProviderRegistry": "0xba7d08a4851975b3e80550b9aa4aA6092dCBC909",
     "ServiceRegistry": "0x79114da4DA6FbEcF1897950BB051b55c8d839840",
-    "PaymentRouter": "0xC6Ab3cB38D3AFc30aDB78849F2B02133e805d860",
     "ReputationStorage": "0x2CA0B71a5D6C0499ec14838A8bD809351E535815",
-    "X402Adapter": "0xB83633e2A6A36bd5EaF23e8C8f8d33767EaD3d7D",
-    "PermitAdapter": "0x1Baa964376F49D256766525d5D63606757118e79",
-    "ApprovalAdapter": "0x836233ac94aEb205825A3EC1Eee60827A86582e1",
     "EAS": "0x4200000000000000000000000000000000000021",
     "SchemaRegistry": "0x4200000000000000000000000000000000000020"
+  },
+  "retiredPaymentContracts": {
+    "PaymentRouter": "0xC6Ab3cB38D3AFc30aDB78849F2B02133e805d860",
+    "X402Adapter": "0xB83633e2A6A36bd5EaF23e8C8f8d33767EaD3d7D",
+    "PermitAdapter": "0x1Baa964376F49D256766525d5D63606757118e79",
+    "ApprovalAdapter": "0x836233ac94aEb205825A3EC1Eee60827A86582e1"
   },
   "olderRetiredContracts": {
     "AgentIndex_2026-07-22": "0x3C0F12ce13DF39C82bb6A4861BE5D77BD28A695e",
