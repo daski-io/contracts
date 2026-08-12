@@ -7,6 +7,7 @@ import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {FeeOnTransferToken} from "./mocks/FeeOnTransferToken.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {ReentrantToken} from "./mocks/ReentrantToken.sol";
+import {FalseReturnToken} from "./mocks/FalseReturnToken.sol";
 
 contract OutcomeSplitterTest is Test {
     MockUSDC private token;
@@ -107,6 +108,19 @@ contract OutcomeSplitterTest is Test {
         assertEq(feeToken.balanceOf(provider), 0);
         assertEq(feeToken.balanceOf(daski), 0);
         assertEq(feeToken.balanceOf(address(splitter)), 1_000_000);
+    }
+
+    function testFalseReturnRevertsBothPayoutLegs() public {
+        FalseReturnToken falseToken = new FalseReturnToken();
+        OutcomeSplitter splitter = _deployWithToken(address(falseToken), 500);
+        falseToken.mint(address(splitter), 1_000_000);
+
+        vm.expectRevert();
+        splitter.releaseAll();
+
+        assertEq(falseToken.balanceOf(provider), 0);
+        assertEq(falseToken.balanceOf(daski), 0);
+        assertEq(falseToken.balanceOf(address(splitter)), 1_000_000);
     }
 
     function testReentrantTokenCannotEnterReleaseTwice() public {

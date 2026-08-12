@@ -4,22 +4,23 @@ pragma solidity ^0.8.24;
 import {Script} from "forge-std/Script.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 
-/// @notice Deploys the permissionless factory and one reviewed outcome splitter.
+/// @notice Deploys one reviewed outcome splitter through the shared factory.
 contract DeployOutcomeSplitter is Script {
     uint256 private constant BASE_SEPOLIA_CHAIN_ID = 84532;
     address private constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
 
-    function run() external returns (OutcomeSplitterFactory factory, address splitter) {
-        address provider = vm.envAddress("GATE1_PROVIDER_RECIPIENT");
-        address daski = vm.envAddress("GATE1_DASKI_RECIPIENT");
-        uint256 commissionBpsRaw = vm.envUint("GATE1_COMMISSION_BPS");
-        bytes32 policyHash = vm.envBytes32("GATE1_POLICY_VERSION_HASH");
-        bytes32 outcomeHash = vm.envBytes32("GATE1_OUTCOME_ID_HASH");
-        bytes32 listingHash = vm.envBytes32("GATE1_LISTING_COMMITMENT_HASH");
-        uint256 listingEpochRaw = vm.envUint("GATE1_LISTING_EPOCH");
-        bytes32 salt = vm.envBytes32("GATE1_DEPLOYMENT_SALT");
+    function run() external returns (address splitter) {
+        OutcomeSplitterFactory factory = OutcomeSplitterFactory(vm.envAddress("STANDARD_RAIL_SPLITTER_FACTORY"));
+        address provider = vm.envAddress("STANDARD_RAIL_PROVIDER_PAYEE");
+        address daski = vm.envAddress("STANDARD_RAIL_DASKI_COMMISSION_RECEIVER");
+        uint256 commissionBpsRaw = vm.envUint("STANDARD_RAIL_COMMISSION_BPS");
+        bytes32 policyHash = vm.envBytes32("STANDARD_RAIL_POLICY_VERSION_HASH");
+        bytes32 outcomeHash = vm.envBytes32("STANDARD_RAIL_OUTCOME_ID_HASH");
+        bytes32 listingHash = vm.envBytes32("STANDARD_RAIL_LISTING_COMMITMENT_HASH");
+        uint256 listingEpochRaw = vm.envUint("STANDARD_RAIL_LISTING_EPOCH");
+        bytes32 salt = vm.envBytes32("STANDARD_RAIL_DEPLOYMENT_SALT");
 
-        require(block.chainid == BASE_SEPOLIA_CHAIN_ID, "Gate 1 is Base Sepolia only");
+        require(block.chainid == BASE_SEPOLIA_CHAIN_ID, "standard Testnet rail is Base Sepolia only");
         require(commissionBpsRaw > 0 && commissionBpsRaw < 10_000, "invalid commission bps");
         require(listingEpochRaw > 0 && listingEpochRaw <= type(uint64).max, "invalid listing epoch");
         // Both values are range-checked immediately above before narrowing.
@@ -29,7 +30,6 @@ contract DeployOutcomeSplitter is Script {
         uint64 listingEpoch = uint64(listingEpochRaw);
 
         vm.startBroadcast();
-        factory = new OutcomeSplitterFactory();
         splitter = factory.deploy(
             salt,
             BASE_SEPOLIA_CHAIN_ID,
