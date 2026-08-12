@@ -69,18 +69,19 @@ contract WriteOutcomeSplitterManifest is Script {
         // forge-lint: disable-next-line(unsafe-typecast)
         uint64 listingEpoch64 = uint64(input.listingEpoch);
         require(
-            input.factory.computeAddress(
-                input.deploymentSalt,
-                block.chainid,
-                input.token,
-                input.provider,
-                input.daski,
-                commissionBps16,
-                input.policyHash,
-                input.outcomeHash,
-                input.listingHash,
-                listingEpoch64
-            ) == address(splitter),
+            input.factory
+                .computeAddress(
+                    input.deploymentSalt,
+                    block.chainid,
+                    input.token,
+                    input.provider,
+                    input.daski,
+                    commissionBps16,
+                    input.policyHash,
+                    input.outcomeHash,
+                    input.listingHash,
+                    listingEpoch64
+                ) == address(splitter),
             "factory provenance mismatch"
         );
     }
