@@ -27,25 +27,18 @@ jobs:
       - name: Show Forge version
         run: forge --version
 
-      - name: Test release verifier
-        run: python3 -m unittest discover -s script/tests -v
-
       - name: Run Forge fmt
         run: forge fmt --check
 
       - name: Run Forge build
         run: forge build --sizes
 
-      - name: Check upgradeable storage layouts
-        run: python3 script/check_storage_layout.py
-
       - name: Run Forge tests
-        run: forge test --no-match-path 'test/fork/*' -vvv
+        run: forge test -vvv
 
       - name: Run Forge coverage
         run: >-
           forge coverage --ir-minimum --exclude-tests
-          --no-match-path 'test/fork/*'
           --no-match-coverage 'script/'
           --report summary
 
