@@ -134,6 +134,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     bytes32 public outcomeSchema;
     bytes32 public confirmationSchema;
     bool internal _configured;
+    address public canonicalToken;
 
     event StandardOrderRegistered(
         bytes32 indexed orderKey,
@@ -164,7 +165,12 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         uint8 transitionCount
     );
     event BuyerConfirmationRevoked(
-        bytes32 indexed orderKey, bytes32 indexed attestationUid, address indexed payer, uint8 transitionCount
+        bytes32 indexed orderKey,
+        bytes32 indexed attestationUid,
+        uint256 indexed providerAgentId,
+        bytes32 serviceId,
+        address payer,
+        uint8 transitionCount
     );
     event ReputationRefunded(
         bytes32 indexed orderKey,
@@ -198,19 +204,26 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         address providerRegistry_,
         address serviceRegistry_,
         address sanctionsOracle_,
+        address canonicalToken_,
         address admin_
     ) internal onlyInitializing {
         require(orderSigner_ != address(0) && orderSigner_ != admin_, "invalid order signer");
         require(identityRegistry_.code.length > 0, "identity registry has no code");
         require(providerRegistry_.code.length > 0, "provider registry has no code");
         require(serviceRegistry_.code.length > 0, "service registry has no code");
+        require(canonicalToken_.code.length > 0, "canonical token has no code");
         __Admin2Step_init(admin_, sanctionsOracle_);
         __EIP712_init("Daski Reputation", "1");
         orderSigner = orderSigner_;
+        canonicalToken = canonicalToken_;
         identityRegistry = identityRegistry_;
         providerRegistry = IProviderRegistry(providerRegistry_);
         serviceRegistry = IServiceRegistry(serviceRegistry_);
     }
 
-    uint256[42] private __gap;
+    function _validateAdminTransfer(address candidate) internal view override {
+        require(candidate != orderSigner, "admin cannot be order signer");
+    }
+
+    uint256[41] private __gap;
 }

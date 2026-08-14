@@ -20,10 +20,17 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         address providerRegistry_,
         address serviceRegistry_,
         address sanctionsOracle_,
+        address canonicalToken_,
         address admin_
     ) external initializer {
         _initializeReputation(
-            orderSigner_, identityRegistry_, providerRegistry_, serviceRegistry_, sanctionsOracle_, admin_
+            orderSigner_,
+            identityRegistry_,
+            providerRegistry_,
+            serviceRegistry_,
+            sanctionsOracle_,
+            canonicalToken_,
+            admin_
         );
     }
 
@@ -35,7 +42,14 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         return "2.0.0";
     }
 
-    function attest(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
+    function attest(Attestation calldata attestation)
+        external
+        payable
+        override
+        onlyEAS
+        whenExternalDependencyOperational
+        returns (bool)
+    {
         require(msg.value == 0, "value unsupported");
         _handleAttest(attestation);
         return true;
@@ -46,6 +60,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         payable
         override
         onlyEAS
+        whenExternalDependencyOperational
         returns (bool)
     {
         require(msg.value == 0 && attestations.length == values.length, "invalid batch values");
@@ -56,7 +71,14 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         return true;
     }
 
-    function revoke(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
+    function revoke(Attestation calldata attestation)
+        external
+        payable
+        override
+        onlyEAS
+        whenExternalDependencyOperational
+        returns (bool)
+    {
         require(msg.value == 0, "value unsupported");
         _handleRevoke(attestation);
         return true;
@@ -67,6 +89,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         payable
         override
         onlyEAS
+        whenExternalDependencyOperational
         returns (bool)
     {
         require(msg.value == 0 && attestations.length == values.length, "invalid batch values");
@@ -105,7 +128,9 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         require(a.attester == record.payer, "not order payer");
         require(a.recipient == _providerRecipient(record), "wrong reputation recipient");
         _transitionConfirmation(record, BuyerConfirmation.Pending, bytes32(0));
-        emit BuyerConfirmationRevoked(orderKey, a.uid, record.payer, record.confirmationTransitions);
+        emit BuyerConfirmationRevoked(
+            orderKey, a.uid, record.providerAgentId, record.serviceId, record.payer, record.confirmationTransitions
+        );
     }
 
     function _onOutcomeAttest(Attestation calldata a) private {

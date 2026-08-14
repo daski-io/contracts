@@ -53,7 +53,7 @@ abstract contract ReputationTestBase is Test {
     address internal providerOwner = makeAddr("provider-owner");
     address internal providerWallet = makeAddr("provider-wallet");
     address internal providerPayee = makeAddr("provider-payee");
-    address internal token = makeAddr("usdc");
+    address internal token;
     bytes32 internal serviceId = keccak256("domain-management-v1");
 
     RegistryCodeStub internal identity;
@@ -70,6 +70,7 @@ abstract contract ReputationTestBase is Test {
         providers = new ProviderRegistryStub();
         services = new ServiceRegistryStub();
         sanctions = new MockSanctionsList();
+        token = address(new RegistryCodeStub());
         providers.setRegistered(PROVIDER_AGENT_ID, true);
         services.setService(serviceId, PROVIDER_AGENT_ID);
 
@@ -86,6 +87,7 @@ abstract contract ReputationTestBase is Test {
                             address(providers),
                             address(services),
                             address(sanctions),
+                            token,
                             admin
                         )
                     )

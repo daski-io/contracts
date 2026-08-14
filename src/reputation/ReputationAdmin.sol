@@ -46,7 +46,7 @@ abstract contract ReputationAdmin is ReputationStorageBase {
     }
 
     function setOrderSigner(address newSigner) external onlyAdmin {
-        require(newSigner != address(0) && newSigner != admin, "invalid order signer");
+        require(newSigner != address(0) && newSigner != admin && newSigner != pendingAdmin, "invalid order signer");
         address oldSigner = orderSigner;
         orderSigner = newSigner;
         emit OrderSignerUpdated(oldSigner, newSigner);

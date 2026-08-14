@@ -109,6 +109,7 @@ contract ReputationConfigurationTest is ReputationTestBase {
                             address(providers),
                             address(services),
                             address(sanctions),
+                            token,
                             admin
                         )
                     )

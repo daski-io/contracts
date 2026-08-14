@@ -17,6 +17,7 @@ contract DeployReputationStorage is Script {
         address providerRegistry = vm.envAddress("PROVIDER_REGISTRY_ADDRESS");
         address serviceRegistry = vm.envAddress("SERVICE_REGISTRY_ADDRESS");
         address sanctionsOracle = vm.envAddress("SANCTIONS_ORACLE_ADDRESS");
+        address canonicalToken = vm.envAddress("STANDARD_RAIL_CANONICAL_TOKEN");
         address easAddress = vm.envAddress("EAS_ADDRESS");
 
         require(orderSigner != admin, "order signer must be independent");
@@ -29,20 +30,39 @@ contract DeployReputationStorage is Script {
                     address(implementation),
                     abi.encodeCall(
                         ReputationStorage.initialize,
-                        (orderSigner, identityRegistry, providerRegistry, serviceRegistry, sanctionsOracle, admin)
+                        (
+                            orderSigner,
+                            identityRegistry,
+                            providerRegistry,
+                            serviceRegistry,
+                            sanctionsOracle,
+                            canonicalToken,
+                            admin
+                        )
                     )
                 )
             )
         );
         reputation.setEAS(easAddress);
         ISchemaRegistry schemaRegistry = IEAS(easAddress).getSchemaRegistry();
-        outcomeSchema = schemaRegistry.register(ReputationSchemas.outcomeSchema(), address(reputation), false);
-        confirmationSchema = schemaRegistry.register(ReputationSchemas.confirmationSchema(), address(reputation), true);
+        outcomeSchema = _registerOrLoad(schemaRegistry, ReputationSchemas.outcomeSchema(), address(reputation), false);
+        confirmationSchema =
+            _registerOrLoad(schemaRegistry, ReputationSchemas.confirmationSchema(), address(reputation), true);
         reputation.setOutcomeSchema(outcomeSchema);
         reputation.setConfirmationSchema(confirmationSchema);
         reputation.finalizeConfiguration();
         vm.stopBroadcast();
 
         proxyAddress = address(reputation);
+    }
+
+    function _registerOrLoad(ISchemaRegistry registry, string memory schema, address resolver, bool revocable)
+        private
+        returns (bytes32 uid)
+    {
+        uid = keccak256(abi.encodePacked(schema, resolver, revocable));
+        if (registry.getSchema(uid).uid == bytes32(0)) {
+            uid = registry.register(schema, resolver, revocable);
+        }
     }
 }
