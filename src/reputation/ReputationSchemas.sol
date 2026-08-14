@@ -3,8 +3,8 @@ pragma solidity ^0.8.24;
 
 /// @notice Canonical EAS schema definitions used by reputation contracts and deployment tooling.
 library ReputationSchemas {
-    string internal constant OUTCOME_SCHEMA = "uint256 paymentId,uint8 outcome";
-    string internal constant CONFIRMATION_SCHEMA = "uint256 paymentId,uint8 confirmation";
+    string internal constant OUTCOME_SCHEMA = "bytes32 orderKey,uint8 outcome";
+    string internal constant CONFIRMATION_SCHEMA = "bytes32 orderKey,uint8 confirmation";
 
     function outcomeSchema() internal pure returns (string memory) {
         return OUTCOME_SCHEMA;

@@ -5,7 +5,7 @@ import {IEAS, ISchemaRegistry, SchemaRecord} from "../interfaces/IEAS.sol";
 import {ReputationSchemas} from "./ReputationSchemas.sol";
 import {ReputationStorageBase} from "./ReputationStorageBase.sol";
 
-/// @notice One-time resolver configuration for the reputation ledger.
+/// @notice One-time EAS configuration and explicit order-signer governance.
 abstract contract ReputationAdmin is ReputationStorageBase {
     function isConfigured() external view returns (bool) {
         return _configured;
@@ -21,7 +21,6 @@ abstract contract ReputationAdmin is ReputationStorageBase {
 
     function setEAS(address newEAS) external onlyAdmin {
         _requireMutableConfiguration();
-        require(newEAS != address(0), "zero eas");
         require(newEAS.code.length > 0, "eas has no code");
         address oldEAS = address(eas);
         eas = IEAS(newEAS);
@@ -46,58 +45,56 @@ abstract contract ReputationAdmin is ReputationStorageBase {
         emit ConfirmationSchemaUpdated(oldSchema, newSchema);
     }
 
+    function setOrderSigner(address newSigner) external onlyAdmin {
+        require(newSigner != address(0) && newSigner != admin, "invalid order signer");
+        address oldSigner = orderSigner;
+        orderSigner = newSigner;
+        emit OrderSignerUpdated(oldSigner, newSigner);
+    }
+
     function finalizeConfiguration() external onlyAdmin {
         _requireMutableConfiguration();
-        require(address(paymentRouter).code.length > 0, "router has no code");
         require(address(eas).code.length > 0, "eas not configured");
+        require(orderSigner != address(0) && orderSigner != admin, "invalid order signer");
         require(outcomeSchema != bytes32(0), "outcome schema not configured");
         require(confirmationSchema != bytes32(0), "confirmation schema not configured");
         require(outcomeSchema != confirmationSchema, "schemas must differ");
-        ISchemaRegistry schemaRegistry = eas.getSchemaRegistry();
-        require(address(schemaRegistry).code.length > 0, "schema registry has no code");
-        _requireSchema(
-            schemaRegistry,
-            outcomeSchema,
-            ReputationSchemas.outcomeSchemaHash(),
-            false,
-            "outcome schema missing",
-            "wrong outcome resolver",
-            "wrong outcome schema",
-            "outcome schema revocable"
-        );
-        _requireSchema(
-            schemaRegistry,
-            confirmationSchema,
-            ReputationSchemas.confirmationSchemaHash(),
-            true,
-            "confirmation schema missing",
-            "wrong confirmation resolver",
-            "wrong confirmation schema",
-            "confirmation schema not revocable"
-        );
+        ISchemaRegistry registry = eas.getSchemaRegistry();
+        require(address(registry).code.length > 0, "schema registry has no code");
+        _requireSchema(registry, outcomeSchema, ReputationSchemas.outcomeSchemaHash(), false, "outcome");
+        _requireSchema(registry, confirmationSchema, ReputationSchemas.confirmationSchemaHash(), true, "confirmation");
         _configured = true;
-        emit ConfigurationFinalized(address(paymentRouter), address(eas), outcomeSchema, confirmationSchema);
+        emit ConfigurationFinalized(
+            address(eas),
+            orderSigner,
+            identityRegistry,
+            address(providerRegistry),
+            address(serviceRegistry),
+            outcomeSchema,
+            confirmationSchema
+        );
     }
 
     function _requireSchema(
-        ISchemaRegistry schemaRegistry,
+        ISchemaRegistry registry,
         bytes32 uid,
-        bytes32 expectedSchemaHash,
+        bytes32 expectedHash,
         bool expectedRevocable,
-        string memory missingError,
-        string memory resolverError,
-        string memory schemaError,
-        string memory revocableError
+        string memory kind
     ) private view {
-        SchemaRecord memory schema = schemaRegistry.getSchema(uid);
-        require(schema.uid == uid, missingError);
-        require(schema.resolver == address(this), resolverError);
-        require(keccak256(bytes(schema.schema)) == expectedSchemaHash, schemaError);
-        require(schema.revocable == expectedRevocable, revocableError);
+        SchemaRecord memory schema = registry.getSchema(uid);
+        require(schema.uid == uid, string.concat(kind, " schema missing"));
+        require(schema.resolver == address(this), string.concat("wrong ", kind, " resolver"));
+        require(keccak256(bytes(schema.schema)) == expectedHash, string.concat("wrong ", kind, " schema"));
+        if (expectedRevocable) {
+            require(schema.revocable, string.concat(kind, " schema not revocable"));
+        } else {
+            require(!schema.revocable, string.concat(kind, " schema revocable"));
+        }
     }
 
     function _requireMutableConfiguration() private view {
         require(!_configured, "configuration finalized");
-        require(recordIds.length == 0, "records exist");
+        require(recordKeys.length == 0, "records exist");
     }
 }
