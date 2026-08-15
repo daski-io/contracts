@@ -171,7 +171,11 @@ abstract contract ReputationAccounting is ReputationAdmin {
     function _validateOrder(StandardReputationOrderV1 calldata permit) private view {
         require(permit.orderKey != bytes32(0) && permit.authorizationKey != bytes32(0), "zero order identifier");
         require(permit.providerAgentId != 0 && permit.serviceId != bytes32(0), "zero provider or service");
-        require(permit.payer != address(0) && permit.providerOwner != address(0), "zero participant");
+        require(
+            permit.payer != address(0) && permit.providerOwner != address(0)
+                && permit.providerAgentWallet != address(0),
+            "zero participant"
+        );
         require(permit.providerPayee != address(0) && permit.canonicalToken == canonicalToken, "payment token mismatch");
         require(
             permit.grossAmount != 0 && permit.paidAt != 0 && permit.paidAt <= block.timestamp, "invalid payment facts"

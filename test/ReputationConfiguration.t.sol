@@ -70,6 +70,38 @@ contract ReputationConfigurationTest is ReputationTestBase {
         vm.prank(admin);
         vm.expectRevert("wrong outcome resolver");
         fresh.finalizeConfiguration();
+
+        fresh = _fresh();
+        freshEas = new MockEAS();
+        _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            address(fresh),
+            true,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            true
+        );
+        vm.prank(admin);
+        vm.expectRevert("outcome schema revocable");
+        fresh.finalizeConfiguration();
+
+        fresh = _fresh();
+        freshEas = new MockEAS();
+        _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            address(fresh),
+            false,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            false
+        );
+        vm.prank(admin);
+        vm.expectRevert("confirmation schema not revocable");
+        fresh.finalizeConfiguration();
     }
 
     function test_finalizeRejectsSchemaRegistryWithoutCode() public {
