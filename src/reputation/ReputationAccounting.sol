@@ -225,29 +225,36 @@ abstract contract ReputationAccounting is ReputationAdmin {
     }
 
     function _encodeOrder(StandardReputationOrderV1 calldata p) private pure returns (bytes memory) {
-        return abi.encode(
-            ORDER_TYPEHASH,
-            p.orderKey,
-            p.authorizationKey,
-            p.providerAgentId,
-            p.serviceId,
-            p.payer,
-            p.providerOwner,
-            p.providerAgentWallet,
-            p.providerPayee,
-            p.identityRegistry,
-            p.providerRegistry,
-            p.serviceRegistry,
-            p.blockNumber,
-            p.blockHash,
-            p.canonicalToken,
-            p.grossAmount,
-            p.paidAt,
-            p.providerIdentitySnapshotHash,
-            p.listingManifestHash,
-            p.releaseEvidenceHash,
-            p.reputationEligible,
-            p.validBefore
+        // A single 22-argument abi.encode cannot allocate its frame under
+        // --ir-minimum (the coverage build). Every argument is a static type,
+        // so two concatenated halves encode byte-identically.
+        return bytes.concat(
+            abi.encode(
+                ORDER_TYPEHASH,
+                p.orderKey,
+                p.authorizationKey,
+                p.providerAgentId,
+                p.serviceId,
+                p.payer,
+                p.providerOwner,
+                p.providerAgentWallet,
+                p.providerPayee,
+                p.identityRegistry,
+                p.providerRegistry
+            ),
+            abi.encode(
+                p.serviceRegistry,
+                p.blockNumber,
+                p.blockHash,
+                p.canonicalToken,
+                p.grossAmount,
+                p.paidAt,
+                p.providerIdentitySnapshotHash,
+                p.listingManifestHash,
+                p.releaseEvidenceHash,
+                p.reputationEligible,
+                p.validBefore
+            )
         );
     }
 }
