@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
+import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
 import {ReputationTestBase} from "./helpers/ReputationTestBase.sol";
@@ -41,7 +42,7 @@ contract ReputationConfigurationTest is ReputationTestBase {
     function test_finalizeRejectsWrongResolverTextAndRevocability() public {
         ReputationStorage fresh = _fresh();
         MockEAS freshEas = new MockEAS();
-        _setSchemas(
+        (bytes32 outcomeUid,) = _setSchemas(
             fresh,
             freshEas,
             "bytes32 orderKey,uint8 wrong",
@@ -52,12 +53,12 @@ contract ReputationConfigurationTest is ReputationTestBase {
             true
         );
         vm.prank(admin);
-        vm.expectRevert("wrong outcome schema");
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.WrongSchemaDefinition.selector, outcomeUid));
         fresh.finalizeConfiguration();
 
         fresh = _fresh();
         freshEas = new MockEAS();
-        _setSchemas(
+        (outcomeUid,) = _setSchemas(
             fresh,
             freshEas,
             "bytes32 orderKey,uint8 outcome",
@@ -68,12 +69,12 @@ contract ReputationConfigurationTest is ReputationTestBase {
             false
         );
         vm.prank(admin);
-        vm.expectRevert("wrong outcome resolver");
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.WrongSchemaResolver.selector, outcomeUid));
         fresh.finalizeConfiguration();
 
         fresh = _fresh();
         freshEas = new MockEAS();
-        _setSchemas(
+        (outcomeUid,) = _setSchemas(
             fresh,
             freshEas,
             "bytes32 orderKey,uint8 outcome",
@@ -84,12 +85,12 @@ contract ReputationConfigurationTest is ReputationTestBase {
             true
         );
         vm.prank(admin);
-        vm.expectRevert("outcome schema revocable");
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.SchemaMustBeIrrevocable.selector, outcomeUid));
         fresh.finalizeConfiguration();
 
         fresh = _fresh();
         freshEas = new MockEAS();
-        _setSchemas(
+        (, bytes32 confirmationUid) = _setSchemas(
             fresh,
             freshEas,
             "bytes32 orderKey,uint8 outcome",
@@ -100,18 +101,19 @@ contract ReputationConfigurationTest is ReputationTestBase {
             false
         );
         vm.prank(admin);
-        vm.expectRevert("confirmation schema not revocable");
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.SchemaMustBeRevocable.selector, confirmationUid));
         fresh.finalizeConfiguration();
     }
 
     function test_finalizeRejectsSchemaRegistryWithoutCode() public {
         ReputationStorage fresh = _fresh();
-        InvalidSchemaRegistryEAS badEas = new InvalidSchemaRegistryEAS(makeAddr("missing-registry"));
+        address missingRegistry = makeAddr("missing-registry");
+        InvalidSchemaRegistryEAS badEas = new InvalidSchemaRegistryEAS(missingRegistry);
         vm.startPrank(admin);
         fresh.setEAS(address(badEas));
         fresh.setOutcomeSchema(keccak256("outcome"));
         fresh.setConfirmationSchema(keccak256("confirmation"));
-        vm.expectRevert("schema registry has no code");
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.TargetHasNoCode.selector, missingRegistry));
         fresh.finalizeConfiguration();
         vm.stopPrank();
     }
@@ -123,7 +125,7 @@ contract ReputationConfigurationTest is ReputationTestBase {
         assertEq(reputation.orderSigner(), newSigner);
 
         vm.prank(admin);
-        vm.expectRevert("invalid order signer");
+        vm.expectRevert(ReputationStorageBase.InvalidOrderSigner.selector);
         reputation.setOrderSigner(admin);
     }
 
@@ -159,13 +161,13 @@ contract ReputationConfigurationTest is ReputationTestBase {
         string memory confirmationText,
         address confirmationResolver,
         bool confirmationRevocable
-    ) private {
-        bytes32 freshOutcome = freshEas.register(outcomeText, outcomeResolver, outcomeRevocable);
-        bytes32 freshConfirmation = freshEas.register(confirmationText, confirmationResolver, confirmationRevocable);
+    ) private returns (bytes32 outcomeUid, bytes32 confirmationUid) {
+        outcomeUid = freshEas.register(outcomeText, outcomeResolver, outcomeRevocable);
+        confirmationUid = freshEas.register(confirmationText, confirmationResolver, confirmationRevocable);
         vm.startPrank(admin);
         fresh.setEAS(address(freshEas));
-        fresh.setOutcomeSchema(freshOutcome);
-        fresh.setConfirmationSchema(freshConfirmation);
+        fresh.setOutcomeSchema(outcomeUid);
+        fresh.setConfirmationSchema(confirmationUid);
         vm.stopPrank();
     }
 }

@@ -193,8 +193,72 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         bytes32 confirmationSchema
     );
 
+    error NotEAS();
+    error InvalidOrderSigner();
+    error TargetHasNoCode(address target);
+    error AdminCannotBeOrderSigner();
+    error ConfigurationIsFinalized();
+    error ConfigurationNotFinalized();
+    error RecordsExist();
+    error ZeroSchema();
+    error SchemasMustDiffer();
+    error OutcomeSchemaNotConfigured();
+    error ConfirmationSchemaNotConfigured();
+    error SchemaMissing(bytes32 uid);
+    error WrongSchemaResolver(bytes32 uid);
+    error WrongSchemaDefinition(bytes32 uid);
+    error SchemaMustBeRevocable(bytes32 uid);
+    error SchemaMustBeIrrevocable(bytes32 uid);
+    error OrderPermitExpired();
+    error InvalidOrderSignature();
+    error OrderAlreadyRecorded();
+    error AuthorizationAlreadyRecorded();
+    error RefundPermitExpired();
+    error InvalidRefundSignature();
+    error ZeroRefundEvidence();
+    error OrderNotRecorded();
+    error AuthorizationMismatch();
+    error RefundNotMonotonic();
+    error RefundExceedsGross();
+    error ZeroOrderIdentifier();
+    error ZeroProviderOrService();
+    error ZeroParticipant();
+    error PaymentTokenMismatch();
+    error InvalidPaymentFacts();
+    error InvalidSnapshotBlock();
+    error ZeroSnapshotBlockHash();
+    error ZeroEvidenceHash();
+    error IdentityRegistryMismatch();
+    error ProviderRegistryMismatch();
+    error ServiceRegistryMismatch();
+    error ProviderNotRegistered();
+    error ServiceMismatch();
+    error SnapshotHashMismatch();
+    error ProviderSelfPurchase();
+    error ValueUnsupported();
+    error InvalidBatchValues();
+    error InvalidAttestationTime();
+    error UnknownSchema();
+    error OutcomeNotRevocable();
+    error InvalidRevocation();
+    error UnknownConfirmation();
+    error StaleConfirmation();
+    error NotOrderPayer();
+    error WrongReputationRecipient();
+    error InvalidOutcomeSemantics();
+    error BadOutcome();
+    error OutcomeAlreadyRecorded();
+    error NotOrderProvider();
+    error InvalidAttestationTimestamp();
+    error ConfirmationMustBeRevocable();
+    error BinaryConfirmationOnly();
+    error UnexpectedConfirmationReference();
+    error MustReferenceCurrentConfirmation();
+    error ConfirmationTransitionCap();
+    error OrderNotReputationEligible();
+
     modifier onlyEAS() {
-        require(msg.sender == address(eas), "not EAS");
+        if (msg.sender != address(eas)) revert NotEAS();
         _;
     }
 
@@ -207,11 +271,13 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         address canonicalToken_,
         address admin_
     ) internal onlyInitializing {
-        require(orderSigner_ != address(0) && orderSigner_ != admin_, "invalid order signer");
-        require(identityRegistry_.code.length > 0, "identity registry has no code");
-        require(providerRegistry_.code.length > 0, "provider registry has no code");
-        require(serviceRegistry_.code.length > 0, "service registry has no code");
-        require(canonicalToken_.code.length > 0, "canonical token has no code");
+        if (!(orderSigner_ != address(0) && orderSigner_ != admin_)) {
+            revert InvalidOrderSigner();
+        }
+        if (identityRegistry_.code.length == 0) revert TargetHasNoCode(identityRegistry_);
+        if (providerRegistry_.code.length == 0) revert TargetHasNoCode(providerRegistry_);
+        if (serviceRegistry_.code.length == 0) revert TargetHasNoCode(serviceRegistry_);
+        if (canonicalToken_.code.length == 0) revert TargetHasNoCode(canonicalToken_);
         __Admin2Step_init(admin_, sanctionsOracle_);
         __EIP712_init("Daski Reputation", "1");
         orderSigner = orderSigner_;
@@ -222,7 +288,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     }
 
     function _validateAdminTransfer(address candidate) internal view override {
-        require(candidate != orderSigner, "admin cannot be order signer");
+        if (candidate == orderSigner) revert AdminCannotBeOrderSigner();
     }
 
     uint256[41] private __gap;

@@ -26,24 +26,24 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("wrong-token"));
         permit.canonicalToken = makeAddr("other-token");
         permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
-        _expectOrderRevert(permit, "payment token mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.PaymentTokenMismatch.selector));
 
         permit = _permit(keccak256("zero-listing"));
         permit.listingManifestHash = bytes32(0);
-        _expectOrderRevert(permit, "zero evidence hash");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroEvidenceHash.selector));
     }
 
     function test_orderSignerCannotBecomeAdminThroughEitherRotationOrder() public {
         address signer = vm.addr(ORDER_SIGNER_KEY);
         vm.prank(admin);
-        vm.expectRevert("admin cannot be order signer");
+        vm.expectRevert(ReputationStorageBase.AdminCannotBeOrderSigner.selector);
         reputation.transferAdmin(signer);
 
         address candidate = makeAddr("candidate-admin");
         vm.prank(admin);
         reputation.transferAdmin(candidate);
         vm.prank(admin);
-        vm.expectRevert("invalid order signer");
+        vm.expectRevert(ReputationStorageBase.InvalidOrderSigner.selector);
         reputation.setOrderSigner(candidate);
     }
 
@@ -67,13 +67,13 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
             _attestation(keccak256("batch"), outcomeSchema, providerWallet, bytes32(uint256(1)), 0, false, bytes32(0));
         uint256[] memory values = new uint256[](0);
         vm.prank(address(eas));
-        vm.expectRevert("invalid batch values");
+        vm.expectRevert(ReputationStorageBase.InvalidBatchValues.selector);
         reputation.multiAttest(items, values);
 
         values = new uint256[](1);
         values[0] = 1;
         vm.prank(address(eas));
-        vm.expectRevert("value unsupported");
+        vm.expectRevert(ReputationStorageBase.ValueUnsupported.selector);
         reputation.multiAttest(items, values);
     }
 
@@ -110,19 +110,19 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
             keccak256("bad-attester"), outcomeSchema, makeAddr("stranger"), orderKey, 0, false, bytes32(0)
         );
         vm.prank(address(eas));
-        vm.expectRevert("not order provider");
+        vm.expectRevert(ReputationStorageBase.NotOrderProvider.selector);
         reputation.attest(item);
 
         item.attester = providerWallet;
         item.recipient = makeAddr("wrong-recipient");
         vm.prank(address(eas));
-        vm.expectRevert("wrong reputation recipient");
+        vm.expectRevert(ReputationStorageBase.WrongReputationRecipient.selector);
         reputation.attest(item);
 
         item.recipient = providerWallet;
         item.expirationTime = 1;
         vm.prank(address(eas));
-        vm.expectRevert("invalid attestation time");
+        vm.expectRevert(ReputationStorageBase.InvalidAttestationTime.selector);
         reputation.attest(item);
     }
 
@@ -137,19 +137,19 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
             keccak256("ineligible-outcome"), outcomeSchema, providerWallet, orderKey, 0, false, bytes32(0)
         );
         vm.prank(address(eas));
-        vm.expectRevert("order not reputation eligible");
+        vm.expectRevert(ReputationStorageBase.OrderNotReputationEligible.selector);
         reputation.attest(item);
     }
 
     function test_registryAndServiceChangesInvalidateUnregisteredPermit() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("registry-change"));
         providers.setRegistered(PROVIDER_AGENT_ID, false);
-        _expectOrderRevert(permit, "provider not registered");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ProviderNotRegistered.selector));
 
         providers.setRegistered(PROVIDER_AGENT_ID, true);
         permit = _permit(keccak256("service-change"));
         services.setService(serviceId, PROVIDER_AGENT_ID + 1);
-        _expectOrderRevert(permit, "service mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ServiceMismatch.selector));
     }
 
     function test_refundRejectsExpiredWrongAuthorizationZeroEvidenceAndBadSigner() public {
@@ -163,13 +163,13 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
             refundEvidenceHash: keccak256("refund"),
             validBefore: uint64(block.timestamp + 1)
         });
-        _expectRefundRevert(refund, "authorization mismatch");
+        _expectRefundRevert(refund, abi.encodeWithSelector(ReputationStorageBase.AuthorizationMismatch.selector));
         refund.authorizationKey = order.authorizationKey;
         refund.refundEvidenceHash = bytes32(0);
-        _expectRefundRevert(refund, "zero refund evidence");
+        _expectRefundRevert(refund, abi.encodeWithSelector(ReputationStorageBase.ZeroRefundEvidence.selector));
         refund.refundEvidenceHash = keccak256("refund");
         vm.warp(block.timestamp + 2);
-        _expectRefundRevert(refund, "refund permit expired");
+        _expectRefundRevert(refund, abi.encodeWithSelector(ReputationStorageBase.RefundPermitExpired.selector));
     }
 
     function test_sanctionsAreRecheckedForAttestationAndRevocation() public {
@@ -225,20 +225,21 @@ contract ReputationStorageSecurityTest is ReputationTestBase {
         assertEq(count, 1);
     }
 
-    function _expectOrderRevert(ReputationStorageBase.StandardReputationOrderV1 memory permit, string memory reason)
+    function _expectOrderRevert(ReputationStorageBase.StandardReputationOrderV1 memory permit, bytes memory revertData)
         private
     {
         bytes32 digest = reputation.orderDigest(permit);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ORDER_SIGNER_KEY, digest);
-        vm.expectRevert(bytes(reason));
+        vm.expectRevert(revertData);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
     }
 
-    function _expectRefundRevert(ReputationStorageBase.StandardReputationRefundV1 memory permit, string memory reason)
-        private
-    {
+    function _expectRefundRevert(
+        ReputationStorageBase.StandardReputationRefundV1 memory permit,
+        bytes memory revertData
+    ) private {
         bytes memory signature = _refundSignature(permit);
-        vm.expectRevert(bytes(reason));
+        vm.expectRevert(revertData);
         reputation.recordRefund(permit, signature);
     }
 }

@@ -29,7 +29,7 @@ contract ReputationStorageTest is ReputationTestBase {
 
         bytes32 digest = reputation.orderDigest(permit);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ORDER_SIGNER_KEY, digest);
-        vm.expectRevert("order already recorded");
+        vm.expectRevert(ReputationStorageBase.OrderAlreadyRecorded.selector);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
 
         permit.orderKey = keccak256("changed-order");
@@ -37,7 +37,7 @@ contract ReputationStorageTest is ReputationTestBase {
         permit.providerIdentitySnapshotHash = bytes32(uint256(1));
         digest = reputation.orderDigest(permit);
         (v, r, s) = vm.sign(ORDER_SIGNER_KEY, digest);
-        vm.expectRevert("snapshot hash mismatch");
+        vm.expectRevert(ReputationStorageBase.SnapshotHashMismatch.selector);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
     }
 
@@ -46,13 +46,13 @@ contract ReputationStorageTest is ReputationTestBase {
         permit.validBefore = uint64(block.timestamp - 1);
         bytes32 digest = reputation.orderDigest(permit);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ORDER_SIGNER_KEY, digest);
-        vm.expectRevert("order permit expired");
+        vm.expectRevert(ReputationStorageBase.OrderPermitExpired.selector);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
 
         permit = _permit(keccak256("bad-signer"));
         digest = reputation.orderDigest(permit);
         (v, r, s) = vm.sign(0xB0B, digest);
-        vm.expectRevert("invalid order signature");
+        vm.expectRevert(ReputationStorageBase.InvalidOrderSignature.selector);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
 
         permit = _permit(keccak256("sanctioned"));
@@ -76,7 +76,7 @@ contract ReputationStorageTest is ReputationTestBase {
 
         outcome.uid = keccak256("duplicate-outcome");
         vm.prank(address(eas));
-        vm.expectRevert("outcome already recorded");
+        vm.expectRevert(ReputationStorageBase.OutcomeAlreadyRecorded.selector);
         reputation.attest(outcome);
     }
 
@@ -106,7 +106,7 @@ contract ReputationStorageTest is ReputationTestBase {
         Attestation memory fourth =
             _attestation(keccak256("confirmation-four"), confirmationSchema, payer, orderKey, 1, true, bytes32(0));
         vm.prank(address(eas));
-        vm.expectRevert("confirmation transition cap");
+        vm.expectRevert(ReputationStorageBase.ConfirmationTransitionCap.selector);
         reputation.attest(fourth);
     }
 
@@ -126,12 +126,12 @@ contract ReputationStorageTest is ReputationTestBase {
         assertEq(reputation.refundedAmountByPayer(payer), 20e6);
 
         bytes memory signature = _refundSignature(refund);
-        vm.expectRevert("refund not monotonic");
+        vm.expectRevert(ReputationStorageBase.RefundNotMonotonic.selector);
         reputation.recordRefund(refund, signature);
         refund.cumulativeRefundedAmount = 101e6;
         refund.refundEvidenceHash = keccak256("refund-two");
         signature = _refundSignature(refund);
-        vm.expectRevert("refund exceeds gross");
+        vm.expectRevert(ReputationStorageBase.RefundExceedsGross.selector);
         reputation.recordRefund(refund, signature);
     }
 }

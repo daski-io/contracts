@@ -50,7 +50,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         whenExternalDependencyOperational
         returns (bool)
     {
-        require(msg.value == 0, "value unsupported");
+        if (msg.value != 0) revert ValueUnsupported();
         _handleAttest(attestation);
         return true;
     }
@@ -63,9 +63,9 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         whenExternalDependencyOperational
         returns (bool)
     {
-        require(msg.value == 0 && attestations.length == values.length, "invalid batch values");
+        if (!(msg.value == 0 && attestations.length == values.length)) revert InvalidBatchValues();
         for (uint256 i = 0; i < attestations.length; i++) {
-            require(values[i] == 0, "value unsupported");
+            if (values[i] != 0) revert ValueUnsupported();
             _handleAttest(attestations[i]);
         }
         return true;
@@ -79,7 +79,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         whenExternalDependencyOperational
         returns (bool)
     {
-        require(msg.value == 0, "value unsupported");
+        if (msg.value != 0) revert ValueUnsupported();
         _handleRevoke(attestation);
         return true;
     }
@@ -92,17 +92,17 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         whenExternalDependencyOperational
         returns (bool)
     {
-        require(msg.value == 0 && attestations.length == values.length, "invalid batch values");
+        if (!(msg.value == 0 && attestations.length == values.length)) revert InvalidBatchValues();
         for (uint256 i = 0; i < attestations.length; i++) {
-            require(values[i] == 0, "value unsupported");
+            if (values[i] != 0) revert ValueUnsupported();
             _handleRevoke(attestations[i]);
         }
         return true;
     }
 
     function _handleAttest(Attestation calldata a) private {
-        require(_configured, "configuration not finalized");
-        require(a.expirationTime == 0 && a.revocationTime == 0, "invalid attestation time");
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (!(a.expirationTime == 0 && a.revocationTime == 0)) revert InvalidAttestationTime();
         _requireNotSanctioned(a.attester);
         _requireNotSanctioned(a.recipient);
         if (a.schema == outcomeSchema) {
@@ -110,23 +110,23 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         } else if (a.schema == confirmationSchema) {
             _onConfirmationAttest(a);
         } else {
-            revert("unknown schema");
+            revert UnknownSchema();
         }
     }
 
     function _handleRevoke(Attestation calldata a) private {
-        require(_configured, "configuration not finalized");
-        require(a.schema == confirmationSchema, "outcomes are not revocable");
-        require(a.expirationTime == 0 && a.revocationTime != 0 && a.revocable, "invalid revocation");
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (a.schema != confirmationSchema) revert OutcomeNotRevocable();
+        if (!(a.expirationTime == 0 && a.revocationTime != 0 && a.revocable)) revert InvalidRevocation();
         _requireNotSanctioned(a.attester);
         _requireNotSanctioned(a.recipient);
         (bytes32 encodedOrderKey,) = abi.decode(a.data, (bytes32, uint8));
         bytes32 orderKey = orderKeyByConfirmationUid[a.uid];
-        require(orderKey != bytes32(0) && orderKey == encodedOrderKey, "unknown confirmation");
+        if (!(orderKey != bytes32(0) && orderKey == encodedOrderKey)) revert UnknownConfirmation();
         ReputationRecord storage record = _records[orderKey];
-        require(record.currentConfirmationUid == a.uid, "stale confirmation");
-        require(a.attester == record.payer, "not order payer");
-        require(a.recipient == _providerRecipient(record), "wrong reputation recipient");
+        if (record.currentConfirmationUid != a.uid) revert StaleConfirmation();
+        if (a.attester != record.payer) revert NotOrderPayer();
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
         _transitionConfirmation(record, BuyerConfirmation.Pending, bytes32(0));
         emit BuyerConfirmationRevoked(
             orderKey, a.uid, record.providerAgentId, record.serviceId, record.payer, record.confirmationTransitions
@@ -134,14 +134,16 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _onOutcomeAttest(Attestation calldata a) private {
-        require(!a.revocable && a.refUID == bytes32(0), "invalid outcome semantics");
+        if (!(!a.revocable && a.refUID == bytes32(0))) revert InvalidOutcomeSemantics();
         (bytes32 orderKey, uint8 raw) = abi.decode(a.data, (bytes32, uint8));
-        require(raw <= uint8(TransactionOutcome.Canceled), "bad outcome");
+        if (raw > uint8(TransactionOutcome.Canceled)) revert BadOutcome();
         ReputationRecord storage record = _eligibleRecord(orderKey);
-        require(!record.outcomeRecorded, "outcome already recorded");
-        require(a.attester == record.providerOwner || a.attester == record.providerAgentWallet, "not order provider");
-        require(a.recipient == _providerRecipient(record), "wrong reputation recipient");
-        require(a.time >= record.paidAt && a.time <= block.timestamp, "invalid attestation timestamp");
+        if (record.outcomeRecorded) revert OutcomeAlreadyRecorded();
+        if (!(a.attester == record.providerOwner || a.attester == record.providerAgentWallet)) {
+            revert NotOrderProvider();
+        }
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
+        if (!(a.time >= record.paidAt && a.time <= block.timestamp)) revert InvalidAttestationTimestamp();
 
         TransactionOutcome outcome = TransactionOutcome(raw);
         uint64 delay = a.time - record.paidAt;
@@ -164,20 +166,19 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _onConfirmationAttest(Attestation calldata a) private {
-        require(a.revocable, "confirmation must be revocable");
+        if (!a.revocable) revert ConfirmationMustBeRevocable();
         (bytes32 orderKey, uint8 raw) = abi.decode(a.data, (bytes32, uint8));
-        require(
-            raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed),
-            "binary confirmation only"
-        );
+        if (!(raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed))) {
+            revert BinaryConfirmationOnly();
+        }
         ReputationRecord storage record = _eligibleRecord(orderKey);
-        require(a.attester == record.payer, "not order payer");
-        require(a.recipient == _providerRecipient(record), "wrong reputation recipient");
+        if (a.attester != record.payer) revert NotOrderPayer();
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
         bytes32 currentUid = record.currentConfirmationUid;
         if (currentUid == bytes32(0)) {
-            require(a.refUID == bytes32(0), "unexpected confirmation reference");
+            if (a.refUID != bytes32(0)) revert UnexpectedConfirmationReference();
         } else {
-            require(a.refUID == currentUid && a.refUID != a.uid, "must ref current confirmation");
+            if (!(a.refUID == currentUid && a.refUID != a.uid)) revert MustReferenceCurrentConfirmation();
         }
         BuyerConfirmation confirmation = BuyerConfirmation(raw);
         _transitionConfirmation(record, confirmation, a.uid);
@@ -194,7 +195,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function _transitionConfirmation(ReputationRecord storage record, BuyerConfirmation next, bytes32 nextUid) private {
-        require(record.confirmationTransitions < MAX_CONFIRMATION_TRANSITIONS, "confirmation transition cap");
+        if (record.confirmationTransitions >= MAX_CONFIRMATION_TRANSITIONS) revert ConfirmationTransitionCap();
         bytes32 previousUid = record.currentConfirmationUid;
         if (previousUid != bytes32(0)) {
             _decrementConfirmation(record, confirmationByUid[previousUid]);
@@ -248,8 +249,8 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
 
     function _eligibleRecord(bytes32 orderKey) private view returns (ReputationRecord storage record) {
         record = _records[orderKey];
-        require(record.orderKey != bytes32(0), "order not recorded");
-        require(record.reputationEligible, "order not reputation eligible");
+        if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
+        if (!record.reputationEligible) revert OrderNotReputationEligible();
     }
 
     function _providerRecipient(ReputationRecord storage record) private view returns (address) {

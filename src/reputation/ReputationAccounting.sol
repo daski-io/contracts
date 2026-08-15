@@ -13,14 +13,14 @@ abstract contract ReputationAccounting is ReputationAdmin {
         external
         whenExternalDependencyOperational
     {
-        require(_configured, "configuration not finalized");
-        require(block.timestamp <= permit.validBefore, "order permit expired");
-        require(
-            SignatureChecker.isValidSignatureNow(orderSigner, orderDigest(permit), signature), "invalid order signature"
-        );
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (block.timestamp > permit.validBefore) revert OrderPermitExpired();
+        if (!SignatureChecker.isValidSignatureNow(orderSigner, orderDigest(permit), signature)) {
+            revert InvalidOrderSignature();
+        }
         _validateOrder(permit);
-        require(_records[permit.orderKey].orderKey == bytes32(0), "order already recorded");
-        require(!authorizationKeyUsed[permit.authorizationKey], "authorization already recorded");
+        if (_records[permit.orderKey].orderKey != bytes32(0)) revert OrderAlreadyRecorded();
+        if (authorizationKeyUsed[permit.authorizationKey]) revert AuthorizationAlreadyRecorded();
 
         _records[permit.orderKey] = ReputationRecord({
             orderKey: permit.orderKey,
@@ -66,19 +66,18 @@ abstract contract ReputationAccounting is ReputationAdmin {
         external
         whenExternalDependencyOperational
     {
-        require(_configured, "configuration not finalized");
-        require(block.timestamp <= permit.validBefore, "refund permit expired");
-        require(
-            SignatureChecker.isValidSignatureNow(orderSigner, refundDigest(permit), signature),
-            "invalid refund signature"
-        );
-        require(permit.refundEvidenceHash != bytes32(0), "zero refund evidence");
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (block.timestamp > permit.validBefore) revert RefundPermitExpired();
+        if (!SignatureChecker.isValidSignatureNow(orderSigner, refundDigest(permit), signature)) {
+            revert InvalidRefundSignature();
+        }
+        if (permit.refundEvidenceHash == bytes32(0)) revert ZeroRefundEvidence();
         ReputationRecord storage record = _records[permit.orderKey];
-        require(record.orderKey != bytes32(0), "order not recorded");
-        require(record.authorizationKey == permit.authorizationKey, "authorization mismatch");
+        if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
+        if (record.authorizationKey != permit.authorizationKey) revert AuthorizationMismatch();
         uint256 previous = refundedAmount[permit.orderKey];
-        require(permit.cumulativeRefundedAmount > previous, "refund not monotonic");
-        require(permit.cumulativeRefundedAmount <= record.grossAmount, "refund exceeds gross");
+        if (permit.cumulativeRefundedAmount <= previous) revert RefundNotMonotonic();
+        if (permit.cumulativeRefundedAmount > record.grossAmount) revert RefundExceedsGross();
         uint256 delta = permit.cumulativeRefundedAmount - previous;
         refundedAmount[permit.orderKey] = permit.cumulativeRefundedAmount;
         if (record.reputationEligible) {
@@ -169,37 +168,32 @@ abstract contract ReputationAccounting is ReputationAdmin {
     }
 
     function _validateOrder(StandardReputationOrderV1 calldata permit) private view {
-        require(permit.orderKey != bytes32(0) && permit.authorizationKey != bytes32(0), "zero order identifier");
-        require(permit.providerAgentId != 0 && permit.serviceId != bytes32(0), "zero provider or service");
-        require(
-            permit.payer != address(0) && permit.providerOwner != address(0)
-                && permit.providerAgentWallet != address(0),
-            "zero participant"
-        );
-        require(permit.providerPayee != address(0) && permit.canonicalToken == canonicalToken, "payment token mismatch");
-        require(
-            permit.grossAmount != 0 && permit.paidAt != 0 && permit.paidAt <= block.timestamp, "invalid payment facts"
-        );
-        require(permit.blockNumber != 0 && permit.blockNumber <= block.number, "invalid snapshot block");
-        require(permit.blockHash != bytes32(0), "zero snapshot block hash");
-        require(
-            permit.listingManifestHash != bytes32(0) && permit.releaseEvidenceHash != bytes32(0), "zero evidence hash"
-        );
-        require(permit.identityRegistry == identityRegistry, "identity registry mismatch");
-        require(permit.providerRegistry == address(providerRegistry), "provider registry mismatch");
-        require(permit.serviceRegistry == address(serviceRegistry), "service registry mismatch");
-        require(providerRegistry.isRegistered(permit.providerAgentId), "provider not registered");
+        if (!(permit.orderKey != bytes32(0) && permit.authorizationKey != bytes32(0))) revert ZeroOrderIdentifier();
+        if (!(permit.providerAgentId != 0 && permit.serviceId != bytes32(0))) revert ZeroProviderOrService();
+        if (!(permit.payer != address(0) && permit.providerOwner != address(0)
+                    && permit.providerAgentWallet != address(0))) revert ZeroParticipant();
+        if (!(permit.providerPayee != address(0) && permit.canonicalToken == canonicalToken)) {
+            revert PaymentTokenMismatch();
+        }
+        if (!(permit.grossAmount != 0 && permit.paidAt != 0 && permit.paidAt <= block.timestamp)) {
+            revert InvalidPaymentFacts();
+        }
+        if (!(permit.blockNumber != 0 && permit.blockNumber <= block.number)) revert InvalidSnapshotBlock();
+        if (permit.blockHash == bytes32(0)) revert ZeroSnapshotBlockHash();
+        if (!(permit.listingManifestHash != bytes32(0) && permit.releaseEvidenceHash != bytes32(0))) {
+            revert ZeroEvidenceHash();
+        }
+        if (permit.identityRegistry != identityRegistry) revert IdentityRegistryMismatch();
+        if (permit.providerRegistry != address(providerRegistry)) revert ProviderRegistryMismatch();
+        if (permit.serviceRegistry != address(serviceRegistry)) revert ServiceRegistryMismatch();
+        if (!providerRegistry.isRegistered(permit.providerAgentId)) revert ProviderNotRegistered();
         IServiceRegistry.Service memory service = serviceRegistry.getService(permit.serviceId);
-        require(
-            service.providerAgentId == permit.providerAgentId && service.serviceId == permit.serviceId,
-            "service mismatch"
-        );
-        require(providerIdentitySnapshotHash(permit) == permit.providerIdentitySnapshotHash, "snapshot hash mismatch");
-        require(
-            permit.payer != permit.providerOwner && permit.payer != permit.providerAgentWallet
-                && permit.payer != permit.providerPayee,
-            "provider self purchase"
-        );
+        if (!(service.providerAgentId == permit.providerAgentId && service.serviceId == permit.serviceId)) {
+            revert ServiceMismatch();
+        }
+        if (providerIdentitySnapshotHash(permit) != permit.providerIdentitySnapshotHash) revert SnapshotHashMismatch();
+        if (!(permit.payer != permit.providerOwner && permit.payer != permit.providerAgentWallet
+                    && permit.payer != permit.providerPayee)) revert ProviderSelfPurchase();
         _requireNotSanctioned(permit.payer);
         _requireNotSanctioned(permit.providerOwner);
         _requireNotSanctioned(permit.providerAgentWallet);

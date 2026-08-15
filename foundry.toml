@@ -6,10 +6,8 @@ solc_version = "0.8.24"
 evm_version = "cancun"
 via_ir = true
 optimizer = true
-# 100 keeps ReputationStorage inside the EIP-170 runtime limit — at 200 the
-# CI sizes gate fails (24,700 B runtime, 124 over). Raising runs again needs
-# that headroom back first (custom-error conversion frees far more).
-optimizer_runs = 100
+# The reputation tree uses custom errors, so the sizes gate has headroom at 200 runs.
+optimizer_runs = 200
 extra_output = ["ir"]
 fs_permissions = [
     { access = "read", path = "./test/vectors" },

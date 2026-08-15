@@ -9,86 +9,86 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
     function test_rejectsEveryZeroOrderFieldClass() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("zero-order"));
         permit.orderKey = bytes32(0);
-        _expectOrderRevert(permit, "zero order identifier");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroOrderIdentifier.selector));
 
         permit = _permit(keccak256("zero-authorization"));
         permit.authorizationKey = bytes32(0);
-        _expectOrderRevert(permit, "zero order identifier");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroOrderIdentifier.selector));
 
         permit = _permit(keccak256("zero-provider"));
         permit.providerAgentId = 0;
-        _expectOrderRevert(permit, "zero provider or service");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
 
         permit = _permit(keccak256("zero-service"));
         permit.serviceId = bytes32(0);
-        _expectOrderRevert(permit, "zero provider or service");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
 
         permit = _permit(keccak256("zero-payer"));
         permit.payer = address(0);
-        _expectOrderRevert(permit, "zero participant");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroParticipant.selector));
 
         permit = _permit(keccak256("zero-owner"));
         permit.providerOwner = address(0);
-        _expectOrderRevert(permit, "zero participant");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroParticipant.selector));
 
         permit = _permit(keccak256("zero-agent-wallet"));
         permit.providerAgentWallet = address(0);
-        _expectOrderRevert(permit, "zero participant");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroParticipant.selector));
 
         permit = _permit(keccak256("zero-payee"));
         permit.providerPayee = address(0);
-        _expectOrderRevert(permit, "payment token mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.PaymentTokenMismatch.selector));
 
         permit = _permit(keccak256("zero-gross"));
         permit.grossAmount = 0;
-        _expectOrderRevert(permit, "invalid payment facts");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.InvalidPaymentFacts.selector));
 
         permit = _permit(keccak256("zero-paid-at"));
         permit.paidAt = 0;
-        _expectOrderRevert(permit, "invalid payment facts");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.InvalidPaymentFacts.selector));
 
         permit = _permit(keccak256("zero-block"));
         permit.blockNumber = 0;
-        _expectOrderRevert(permit, "invalid snapshot block");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.InvalidSnapshotBlock.selector));
 
         permit = _permit(keccak256("zero-block-hash"));
         permit.blockHash = bytes32(0);
-        _expectOrderRevert(permit, "zero snapshot block hash");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroSnapshotBlockHash.selector));
 
         permit = _permit(keccak256("zero-release"));
         permit.releaseEvidenceHash = bytes32(0);
-        _expectOrderRevert(permit, "zero evidence hash");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroEvidenceHash.selector));
     }
 
     function test_rejectsSelfPurchasesForEveryProviderRole() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("owner-self"));
         permit.payer = permit.providerOwner;
-        _expectOrderRevert(permit, "provider self purchase");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ProviderSelfPurchase.selector));
 
         permit = _permit(keccak256("wallet-self"));
         permit.payer = permit.providerAgentWallet;
-        _expectOrderRevert(permit, "provider self purchase");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ProviderSelfPurchase.selector));
 
         permit = _permit(keccak256("payee-self"));
         permit.payer = permit.providerPayee;
-        _expectOrderRevert(permit, "provider self purchase");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ProviderSelfPurchase.selector));
     }
 
     function test_rejectsEveryRegistryAddressMismatch() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("identity-registry"));
         permit.identityRegistry = makeAddr("other-identity");
         permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
-        _expectOrderRevert(permit, "identity registry mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.IdentityRegistryMismatch.selector));
 
         permit = _permit(keccak256("provider-registry"));
         permit.providerRegistry = makeAddr("other-provider-registry");
         permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
-        _expectOrderRevert(permit, "provider registry mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ProviderRegistryMismatch.selector));
 
         permit = _permit(keccak256("service-registry"));
         permit.serviceRegistry = makeAddr("other-service-registry");
         permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
-        _expectOrderRevert(permit, "service registry mismatch");
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ServiceRegistryMismatch.selector));
     }
 
     function test_rejectsWrongRuntimeAttestationRevocability() public {
@@ -97,13 +97,13 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
         Attestation memory outcome =
             _attestation(keccak256("revocable-outcome"), outcomeSchema, providerWallet, orderKey, 0, true, bytes32(0));
         vm.prank(address(eas));
-        vm.expectRevert("invalid outcome semantics");
+        vm.expectRevert(ReputationStorageBase.InvalidOutcomeSemantics.selector);
         reputation.attest(outcome);
 
         Attestation memory confirmation =
             _attestation(keccak256("fixed-confirmation"), confirmationSchema, payer, orderKey, 1, false, bytes32(0));
         vm.prank(address(eas));
-        vm.expectRevert("confirmation must be revocable");
+        vm.expectRevert(ReputationStorageBase.ConfirmationMustBeRevocable.selector);
         reputation.attest(confirmation);
     }
 
@@ -118,31 +118,31 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
         Attestation memory invalid = _activeConfirmation(orderKey);
         invalid.revocationTime = uint64(block.timestamp);
         invalid.schema = outcomeSchema;
-        _expectRevokeRevert(invalid, "outcomes are not revocable");
+        _expectRevokeRevert(invalid, abi.encodeWithSelector(ReputationStorageBase.OutcomeNotRevocable.selector));
 
         invalid = _activeConfirmation(orderKey);
         invalid.revocationTime = uint64(block.timestamp);
         invalid.expirationTime = 1;
-        _expectRevokeRevert(invalid, "invalid revocation");
+        _expectRevokeRevert(invalid, abi.encodeWithSelector(ReputationStorageBase.InvalidRevocation.selector));
 
         invalid = _activeConfirmation(orderKey);
         invalid.revocationTime = uint64(block.timestamp);
         invalid.revocable = false;
-        _expectRevokeRevert(invalid, "invalid revocation");
+        _expectRevokeRevert(invalid, abi.encodeWithSelector(ReputationStorageBase.InvalidRevocation.selector));
 
         invalid = _activeConfirmation(orderKey);
         invalid.revocationTime = uint64(block.timestamp);
         invalid.attester = makeAddr("wrong-payer");
-        _expectRevokeRevert(invalid, "not order payer");
+        _expectRevokeRevert(invalid, abi.encodeWithSelector(ReputationStorageBase.NotOrderPayer.selector));
 
         invalid = _activeConfirmation(orderKey);
         invalid.revocationTime = uint64(block.timestamp);
         invalid.recipient = makeAddr("wrong-recipient");
-        _expectRevokeRevert(invalid, "wrong reputation recipient");
+        _expectRevokeRevert(invalid, abi.encodeWithSelector(ReputationStorageBase.WrongReputationRecipient.selector));
 
         vm.deal(address(eas), 1);
         vm.prank(address(eas));
-        vm.expectRevert("value unsupported");
+        vm.expectRevert(ReputationStorageBase.ValueUnsupported.selector);
         reputation.revoke{value: 1}(confirmation);
     }
 
@@ -150,18 +150,18 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
         return _attestation(keccak256("active-confirmation"), confirmationSchema, payer, orderKey, 1, true, bytes32(0));
     }
 
-    function _expectOrderRevert(ReputationStorageBase.StandardReputationOrderV1 memory permit, string memory reason)
+    function _expectOrderRevert(ReputationStorageBase.StandardReputationOrderV1 memory permit, bytes memory revertData)
         private
     {
         bytes32 digest = reputation.orderDigest(permit);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ORDER_SIGNER_KEY, digest);
-        vm.expectRevert(bytes(reason));
+        vm.expectRevert(revertData);
         reputation.registerOrder(permit, abi.encodePacked(r, s, v));
     }
 
-    function _expectRevokeRevert(Attestation memory item, string memory reason) private {
+    function _expectRevokeRevert(Attestation memory item, bytes memory revertData) private {
         vm.prank(address(eas));
-        vm.expectRevert(bytes(reason));
+        vm.expectRevert(revertData);
         reputation.revoke(item);
     }
 }
