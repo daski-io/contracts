@@ -39,8 +39,7 @@ contract WriteOutcomeSplitterManifest is Script {
         input.token = vm.envAddress("STANDARD_RAIL_CANONICAL_TOKEN");
         input.provider = vm.envAddress("STANDARD_RAIL_PROVIDER_PAYEE");
         input.daski = vm.envAddress("STANDARD_RAIL_DASKI_COMMISSION_RECEIVER");
-        input.commissionBps = vm.envUint("MARKETPLACE_COMMISSION_BPS");
-        require(input.commissionBps == 500, "marketplace commission must be 5%");
+        input.commissionBps = vm.envOr("MARKETPLACE_COMMISSION_BPS", uint256(500));
         input.policyHash = vm.envBytes32("STANDARD_RAIL_POLICY_VERSION_HASH");
         input.outcomeHash = vm.envBytes32("STANDARD_RAIL_OUTCOME_ID_HASH");
         input.listingHash = vm.envBytes32("STANDARD_RAIL_LISTING_COMMITMENT_HASH");

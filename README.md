@@ -1,7 +1,7 @@
 # Daski Standard-Rail Contracts
 
 This repository contains Daski's marketplace identity, catalog, validation,
-historical reputation, and standard Exact-EVM payment contracts.
+standard-order reputation, and standard Exact-EVM payment contracts.
 
 ## Standard-rail payment contracts
 
@@ -22,9 +22,9 @@ USDC authorizations whose `to` address is the outcome splitter.
 - `ServiceRegistry` records versioned provider catalog entries.
 - `DaskiValidationRegistry` records agent-scoped validation requests and
   responses.
-- `ReputationStorage` preserves the existing EAS-backed reputation history.
-  It remains readable for historical native-payment records; standard-rail
-  orders do not write it or receive native reputation credit.
+- `ReputationStorage` is the fresh EAS-backed standard-order reputation
+  ledger. The gateway registers finalized paid orders, the provider records
+  terminal outcomes, and payers can submit or revoke delivery confirmation.
 
 These contracts are independent of the standard payment route. Restoring them
 does not restore `PaymentRouter`, `X402Adapter`, `PermitAdapter`, or
@@ -46,9 +46,14 @@ forge coverage --ir-minimum --exclude-tests --no-match-coverage 'script/' --repo
 
 ## Testnet deployment inputs
 
-Deploy the shared factory with `DeployOutcomeSplitterFactory.s.sol`, then one
-splitter per reviewed outcome with `DeployOutcomeSplitter.s.sol`. Validate and
-write the public artifact with `WriteOutcomeSplitterManifest.s.sol`.
+Deploy and finalize the fresh standard-order reputation resolver with
+`DeployReputationStorage.s.sol`. Deploy the shared factory with
+`DeployOutcomeSplitterFactory.s.sol`, then one splitter per reviewed outcome
+with `DeployOutcomeSplitter.s.sol`. Validate and write the public artifact with
+`WriteOutcomeSplitterManifest.s.sol`.
+
+The deployment scripts default `MARKETPLACE_COMMISSION_BPS` to 500. A later
+fee change is represented by a new immutable splitter and listing epoch.
 
 The scripts require the `STANDARD_RAIL_*` values named in their source. They
 are deployment tooling only; running tests or pushing this repository does not

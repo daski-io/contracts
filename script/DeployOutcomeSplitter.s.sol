@@ -13,8 +13,7 @@ contract DeployOutcomeSplitter is Script {
         OutcomeSplitterFactory factory = OutcomeSplitterFactory(vm.envAddress("STANDARD_RAIL_SPLITTER_FACTORY"));
         address provider = vm.envAddress("STANDARD_RAIL_PROVIDER_PAYEE");
         address daski = vm.envAddress("STANDARD_RAIL_DASKI_COMMISSION_RECEIVER");
-        uint256 commissionBpsRaw = vm.envUint("MARKETPLACE_COMMISSION_BPS");
-        require(commissionBpsRaw == 500, "marketplace commission must be 5%");
+        uint256 commissionBpsRaw = vm.envOr("MARKETPLACE_COMMISSION_BPS", uint256(500));
         bytes32 policyHash = vm.envBytes32("STANDARD_RAIL_POLICY_VERSION_HASH");
         bytes32 outcomeHash = vm.envBytes32("STANDARD_RAIL_OUTCOME_ID_HASH");
         bytes32 listingHash = vm.envBytes32("STANDARD_RAIL_LISTING_COMMITMENT_HASH");
