@@ -91,7 +91,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         // Collision guard. If a service with the same (provider, slug,
         // version) already exists, registerService MUST revert — the same
         // (slug, version) pair represents the same product offering and
-        // duplicating it would create ambiguity in payment routing.
+        // duplicating it would create ambiguity in catalog identity.
         require(!_serviceExists[serviceId], "service already registered");
 
         _services[serviceId] = Service({
@@ -126,7 +126,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
 
     /// @inheritdoc IServiceRegistry
     /// @dev Passing `address(0)` is an explicit "clear and inherit from the
-    ///      provider's ERC-8004 agentWallet at settle". Most providers will
+    ///      provider's ERC-8004 agentWallet". Most providers will
     ///      register with serviceWallet = address(0) and never call this.
     ///      Non-zero overrides are valid only while the authorizing owner and
     ///      agentWallet both remain current.
@@ -141,7 +141,7 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
 
     /// @inheritdoc IServiceRegistry
     /// @dev Deactivating a service flips the flag but preserves the row so
-    ///      historical payment records and reputation queries still resolve.
+    ///      historical records and reputation queries still resolve.
     ///      _servicesByProvider is append-only; deactivate does not remove.
     function setActive(bytes32 serviceId, bool active) external whenExternalDependencyOperational {
         Service storage svc = _services[serviceId];

@@ -7,6 +7,7 @@ import {
     Attestation,
     AttestationRequest,
     AttestationRequestData,
+    DelegatedAttestationRequest,
     RevocationRequest,
     SchemaRecord
 } from "../../src/interfaces/IEAS.sol";
@@ -24,6 +25,7 @@ import {ISchemaResolver} from "../../src/interfaces/ISchemaResolver.sol";
 contract MockEAS is IEAS, ISchemaRegistry {
     mapping(bytes32 => SchemaRecord) internal _schemas;
     mapping(bytes32 => Attestation) internal _attestations;
+    mapping(address => uint256) internal _nonces;
     uint256 internal _schemaCounter;
     uint256 internal _attestationCounter;
 
@@ -45,6 +47,12 @@ contract MockEAS is IEAS, ISchemaRegistry {
         return _attest(request.schema, msg.sender, request.data);
     }
 
+    function attestByDelegation(DelegatedAttestationRequest calldata request) external payable returns (bytes32) {
+        require(request.deadline == 0 || request.deadline >= block.timestamp, "delegation expired");
+        _nonces[request.attester]++;
+        return _attest(request.schema, request.attester, request.data);
+    }
+
     function revoke(RevocationRequest calldata request) external payable {
         _revoke(request.data.uid, msg.sender);
     }
@@ -55,6 +63,10 @@ contract MockEAS is IEAS, ISchemaRegistry {
 
     function isAttestationValid(bytes32 uid) external view returns (bool) {
         return _attestations[uid].uid != bytes32(0);
+    }
+
+    function getNonce(address account) external view returns (uint256) {
+        return _nonces[account];
     }
 
     function getSchemaRegistry() external view returns (ISchemaRegistry) {

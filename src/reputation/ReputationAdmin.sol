@@ -5,7 +5,7 @@ import {IEAS, ISchemaRegistry, SchemaRecord} from "../interfaces/IEAS.sol";
 import {ReputationSchemas} from "./ReputationSchemas.sol";
 import {ReputationStorageBase} from "./ReputationStorageBase.sol";
 
-/// @notice One-time resolver configuration for the reputation ledger.
+/// @notice One-time EAS configuration and explicit order-signer governance.
 abstract contract ReputationAdmin is ReputationStorageBase {
     function isConfigured() external view returns (bool) {
         return _configured;
@@ -21,8 +21,7 @@ abstract contract ReputationAdmin is ReputationStorageBase {
 
     function setEAS(address newEAS) external onlyAdmin {
         _requireMutableConfiguration();
-        require(newEAS != address(0), "zero eas");
-        require(newEAS.code.length > 0, "eas has no code");
+        if (newEAS.code.length == 0) revert TargetHasNoCode(newEAS);
         address oldEAS = address(eas);
         eas = IEAS(newEAS);
         emit EASUpdated(oldEAS, newEAS);
@@ -30,8 +29,8 @@ abstract contract ReputationAdmin is ReputationStorageBase {
 
     function setOutcomeSchema(bytes32 newSchema) external onlyAdmin {
         _requireMutableConfiguration();
-        require(newSchema != bytes32(0), "zero schema");
-        require(newSchema != confirmationSchema, "schemas must differ");
+        if (newSchema == bytes32(0)) revert ZeroSchema();
+        if (newSchema == confirmationSchema) revert SchemasMustDiffer();
         bytes32 oldSchema = outcomeSchema;
         outcomeSchema = newSchema;
         emit OutcomeSchemaUpdated(oldSchema, newSchema);
@@ -39,65 +38,60 @@ abstract contract ReputationAdmin is ReputationStorageBase {
 
     function setConfirmationSchema(bytes32 newSchema) external onlyAdmin {
         _requireMutableConfiguration();
-        require(newSchema != bytes32(0), "zero schema");
-        require(newSchema != outcomeSchema, "schemas must differ");
+        if (newSchema == bytes32(0)) revert ZeroSchema();
+        if (newSchema == outcomeSchema) revert SchemasMustDiffer();
         bytes32 oldSchema = confirmationSchema;
         confirmationSchema = newSchema;
         emit ConfirmationSchemaUpdated(oldSchema, newSchema);
     }
 
-    function finalizeConfiguration() external onlyAdmin {
-        _requireMutableConfiguration();
-        require(address(paymentRouter).code.length > 0, "router has no code");
-        require(address(eas).code.length > 0, "eas not configured");
-        require(outcomeSchema != bytes32(0), "outcome schema not configured");
-        require(confirmationSchema != bytes32(0), "confirmation schema not configured");
-        require(outcomeSchema != confirmationSchema, "schemas must differ");
-        ISchemaRegistry schemaRegistry = eas.getSchemaRegistry();
-        require(address(schemaRegistry).code.length > 0, "schema registry has no code");
-        _requireSchema(
-            schemaRegistry,
-            outcomeSchema,
-            ReputationSchemas.outcomeSchemaHash(),
-            false,
-            "outcome schema missing",
-            "wrong outcome resolver",
-            "wrong outcome schema",
-            "outcome schema revocable"
-        );
-        _requireSchema(
-            schemaRegistry,
-            confirmationSchema,
-            ReputationSchemas.confirmationSchemaHash(),
-            true,
-            "confirmation schema missing",
-            "wrong confirmation resolver",
-            "wrong confirmation schema",
-            "confirmation schema not revocable"
-        );
-        _configured = true;
-        emit ConfigurationFinalized(address(paymentRouter), address(eas), outcomeSchema, confirmationSchema);
+    function setOrderSigner(address newSigner) external onlyAdmin {
+        if (!(newSigner != address(0) && newSigner != admin && newSigner != pendingAdmin)) revert InvalidOrderSigner();
+        address oldSigner = orderSigner;
+        orderSigner = newSigner;
+        emit OrderSignerUpdated(oldSigner, newSigner);
     }
 
-    function _requireSchema(
-        ISchemaRegistry schemaRegistry,
-        bytes32 uid,
-        bytes32 expectedSchemaHash,
-        bool expectedRevocable,
-        string memory missingError,
-        string memory resolverError,
-        string memory schemaError,
-        string memory revocableError
-    ) private view {
-        SchemaRecord memory schema = schemaRegistry.getSchema(uid);
-        require(schema.uid == uid, missingError);
-        require(schema.resolver == address(this), resolverError);
-        require(keccak256(bytes(schema.schema)) == expectedSchemaHash, schemaError);
-        require(schema.revocable == expectedRevocable, revocableError);
+    function finalizeConfiguration() external onlyAdmin {
+        _requireMutableConfiguration();
+        if (address(eas).code.length == 0) revert TargetHasNoCode(address(eas));
+        if (!(orderSigner != address(0) && orderSigner != admin)) revert InvalidOrderSigner();
+        if (outcomeSchema == bytes32(0)) revert OutcomeSchemaNotConfigured();
+        if (confirmationSchema == bytes32(0)) revert ConfirmationSchemaNotConfigured();
+        if (outcomeSchema == confirmationSchema) revert SchemasMustDiffer();
+        ISchemaRegistry registry = eas.getSchemaRegistry();
+        if (address(registry).code.length == 0) revert TargetHasNoCode(address(registry));
+        _requireSchema(registry, outcomeSchema, ReputationSchemas.outcomeSchemaHash(), false);
+        _requireSchema(registry, confirmationSchema, ReputationSchemas.confirmationSchemaHash(), true);
+        _configured = true;
+        emit ConfigurationFinalized(
+            address(eas),
+            orderSigner,
+            identityRegistry,
+            address(providerRegistry),
+            address(serviceRegistry),
+            outcomeSchema,
+            confirmationSchema
+        );
+    }
+
+    function _requireSchema(ISchemaRegistry registry, bytes32 uid, bytes32 expectedHash, bool expectedRevocable)
+        private
+        view
+    {
+        SchemaRecord memory schema = registry.getSchema(uid);
+        if (schema.uid != uid) revert SchemaMissing(uid);
+        if (schema.resolver != address(this)) revert WrongSchemaResolver(uid);
+        if (keccak256(bytes(schema.schema)) != expectedHash) revert WrongSchemaDefinition(uid);
+        if (expectedRevocable) {
+            if (!schema.revocable) revert SchemaMustBeRevocable(uid);
+        } else {
+            if (schema.revocable) revert SchemaMustBeIrrevocable(uid);
+        }
     }
 
     function _requireMutableConfiguration() private view {
-        require(!_configured, "configuration finalized");
-        require(recordIds.length == 0, "records exist");
+        if (_configured) revert ConfigurationIsFinalized();
+        if (recordKeys.length != 0) revert RecordsExist();
     }
 }

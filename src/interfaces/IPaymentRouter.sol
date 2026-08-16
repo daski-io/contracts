@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @notice Payment-rail-agnostic router interface. Whitelisted adapter
-///         contracts arrange for funds to be moved into the router, then call
-///         `settle` to split (provider / treasury) and record the payment.
-///         Refunds are provider-initiated and partial/cumulative.
+/// @notice Historical PaymentRouter ABI retained so the independently deployed
+///         ReputationStorage can read pre-standard-rail records. The standard
+///         rail does not deploy, call, or authorize a PaymentRouter.
 interface IPaymentRouter {
     struct PaymentRecord {
         uint256 buyerAgentId;

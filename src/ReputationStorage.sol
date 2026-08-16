@@ -2,240 +2,258 @@
 pragma solidity ^0.8.24;
 
 import {Attestation} from "./interfaces/IEAS.sol";
-import {IPaymentRouter} from "./interfaces/IPaymentRouter.sol";
 import {ISchemaResolver} from "./interfaces/ISchemaResolver.sol";
 import {ReputationAccounting} from "./reputation/ReputationAccounting.sol";
 
-/// @notice EAS-backed bilateral reputation aggregator. PaymentRouter creates
-///         every record through a retryable sink, while only qualified
-///         payments contribute to aggregate reputation. Providers attest
-///         outcomes and buyers submit revocable confirmations.
+/// @notice EAS-backed reputation ledger for finalized standard Exact-EVM orders.
 contract ReputationStorage is ReputationAccounting, ISchemaResolver {
+    uint8 public constant MAX_CONFIRMATION_TRANSITIONS = 3;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address paymentRouter_, address sanctionsOracle_, address admin_) external initializer {
-        _initializeReputation(paymentRouter_, sanctionsOracle_, admin_);
+    function initialize(
+        address orderSigner_,
+        address identityRegistry_,
+        address providerRegistry_,
+        address serviceRegistry_,
+        address sanctionsOracle_,
+        address canonicalToken_,
+        address admin_
+    ) external initializer {
+        _initializeReputation(
+            orderSigner_,
+            identityRegistry_,
+            providerRegistry_,
+            serviceRegistry_,
+            sanctionsOracle_,
+            canonicalToken_,
+            admin_
+        );
     }
 
     function isPayable() external pure override returns (bool) {
         return false;
     }
 
-    /// @notice Contract semver, per the canonical EAS resolver surface.
     function version() external pure override returns (string memory) {
-        return "1.0.0";
+        return "2.0.0";
     }
 
-    function attest(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
-        _handleAttest(attestation);
-        return true;
-    }
-
-    function multiAttest(Attestation[] calldata attestations, uint256[] calldata)
+    function attest(Attestation calldata attestation)
         external
         payable
         override
         onlyEAS
+        whenExternalDependencyOperational
         returns (bool)
     {
+        if (msg.value != 0) revert ValueUnsupported();
+        _handleAttest(attestation);
+        return true;
+    }
+
+    function multiAttest(Attestation[] calldata attestations, uint256[] calldata values)
+        external
+        payable
+        override
+        onlyEAS
+        whenExternalDependencyOperational
+        returns (bool)
+    {
+        if (!(msg.value == 0 && attestations.length == values.length)) revert InvalidBatchValues();
         for (uint256 i = 0; i < attestations.length; i++) {
+            if (values[i] != 0) revert ValueUnsupported();
             _handleAttest(attestations[i]);
         }
         return true;
     }
 
-    function revoke(Attestation calldata attestation) external payable override onlyEAS returns (bool) {
-        _handleRevoke(attestation);
-        return true;
-    }
-
-    function multiRevoke(Attestation[] calldata attestations, uint256[] calldata)
+    function revoke(Attestation calldata attestation)
         external
         payable
         override
         onlyEAS
+        whenExternalDependencyOperational
         returns (bool)
     {
+        if (msg.value != 0) revert ValueUnsupported();
+        _handleRevoke(attestation);
+        return true;
+    }
+
+    function multiRevoke(Attestation[] calldata attestations, uint256[] calldata values)
+        external
+        payable
+        override
+        onlyEAS
+        whenExternalDependencyOperational
+        returns (bool)
+    {
+        if (!(msg.value == 0 && attestations.length == values.length)) revert InvalidBatchValues();
         for (uint256 i = 0; i < attestations.length; i++) {
+            if (values[i] != 0) revert ValueUnsupported();
             _handleRevoke(attestations[i]);
         }
         return true;
     }
 
-    function _handleAttest(Attestation calldata a) internal {
-        _requireAttestationParticipantsAllowed(a);
-        require(a.expirationTime == 0, "expiring attestations unsupported");
-        require(a.revocationTime == 0, "attestation revoked");
+    function _handleAttest(Attestation calldata a) private {
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (!(a.expirationTime == 0 && a.revocationTime == 0)) revert InvalidAttestationTime();
+        _requireNotSanctioned(a.attester);
+        _requireNotSanctioned(a.recipient);
         if (a.schema == outcomeSchema) {
             _onOutcomeAttest(a);
         } else if (a.schema == confirmationSchema) {
             _onConfirmationAttest(a);
         } else {
-            revert("unknown schema");
+            revert UnknownSchema();
         }
     }
 
-    function _handleRevoke(Attestation calldata a) internal {
-        _requireAttestationParticipantsAllowed(a);
-        if (a.schema == confirmationSchema) {
-            _onConfirmationRevoke(a);
-        } else if (a.schema == outcomeSchema) {
-            revert("outcomes are not revocable");
-        } else {
-            revert("unknown schema");
-        }
+    function _handleRevoke(Attestation calldata a) private {
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (a.schema != confirmationSchema) revert OutcomeNotRevocable();
+        if (!(a.expirationTime == 0 && a.revocationTime != 0 && a.revocable)) revert InvalidRevocation();
+        _requireNotSanctioned(a.attester);
+        _requireNotSanctioned(a.recipient);
+        (bytes32 encodedOrderKey,) = abi.decode(a.data, (bytes32, uint8));
+        bytes32 orderKey = orderKeyByConfirmationUid[a.uid];
+        if (!(orderKey != bytes32(0) && orderKey == encodedOrderKey)) revert UnknownConfirmation();
+        ReputationRecord storage record = _records[orderKey];
+        if (record.currentConfirmationUid != a.uid) revert StaleConfirmation();
+        if (a.attester != record.payer) revert NotOrderPayer();
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
+        _transitionConfirmation(record, BuyerConfirmation.Pending, bytes32(0));
+        emit BuyerConfirmationRevoked(
+            orderKey, a.uid, record.providerAgentId, record.serviceId, record.payer, record.confirmationTransitions
+        );
     }
 
-    function _onOutcomeAttest(Attestation calldata a) internal {
-        (uint256 paymentId, uint8 raw) = abi.decode(a.data, (uint256, uint8));
-        require(raw <= uint8(TransactionOutcome.Canceled), "bad outcome");
+    function _onOutcomeAttest(Attestation calldata a) private {
+        if (!(!a.revocable && a.refUID == bytes32(0))) revert InvalidOutcomeSemantics();
+        (bytes32 orderKey, uint8 raw) = abi.decode(a.data, (bytes32, uint8));
+        if (raw > uint8(TransactionOutcome.Canceled)) revert BadOutcome();
+        ReputationRecord storage record = _eligibleRecord(orderKey);
+        if (record.outcomeRecorded) revert OutcomeAlreadyRecorded();
+        if (!(a.attester == record.providerOwner || a.attester == record.providerAgentWallet)) {
+            revert NotOrderProvider();
+        }
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
+        if (!(a.time >= record.paidAt && a.time <= block.timestamp)) revert InvalidAttestationTimestamp();
+
         TransactionOutcome outcome = TransactionOutcome(raw);
-        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
-        require(_isHistoricalProvider(payment, a.attester), "not provider for this payment");
-        require(a.recipient == _providerRecipient(payment), "wrong reputation recipient");
-
-        ReputationRecord storage record = _records[paymentId];
-        require(record.paymentId != 0, "payment not recorded");
-        require(record.reputationEligible, "payment not reputation eligible");
-        require(!record.outcomeRecorded, "outcome already recorded");
-
-        uint256 attestationDelay = block.timestamp - payment.paidAt;
+        uint64 delay = a.time - record.paidAt;
         record.outcome = outcome;
-        record.outcomeAttestationDelay = attestationDelay;
-        record.outcomeTimestamp = block.timestamp;
+        record.outcomeAttestationDelay = delay;
+        record.outcomeTimestamp = a.time;
         record.outcomeRecorded = true;
-
+        outcomeDelayTotalByProvider[record.providerAgentId] += delay;
         if (outcome == TransactionOutcome.Completed) {
-            completedCount[payment.providerAgentId]++;
+            completedCount[record.providerAgentId]++;
             completedByService[record.serviceId]++;
         } else if (outcome == TransactionOutcome.Failed) {
-            failedCount[payment.providerAgentId]++;
+            failedCount[record.providerAgentId]++;
             failedByService[record.serviceId]++;
         } else {
-            canceledCount[payment.providerAgentId]++;
+            canceledCount[record.providerAgentId]++;
             canceledByService[record.serviceId]++;
         }
-
-        emit OutcomeRecorded(
-            paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, outcome, attestationDelay, a.uid
-        );
+        emit OutcomeRecorded(orderKey, record.providerAgentId, record.payer, record.serviceId, outcome, delay, a.uid);
     }
 
-    function _onConfirmationAttest(Attestation calldata a) internal {
-        require(a.revocable, "confirmation must be revocable");
-        (uint256 paymentId, uint8 raw) = abi.decode(a.data, (uint256, uint8));
-        require(
-            raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed),
-            "binary confirmation only"
-        );
-
-        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
-        require(a.attester == payment.cachedBuyerWallet, "not buyer for this payment");
-        require(a.recipient == _providerRecipient(payment), "wrong reputation recipient");
-
-        ReputationRecord storage record = _records[paymentId];
-        require(record.paymentId != 0, "payment not recorded");
-        require(record.reputationEligible, "payment not reputation eligible");
-        BuyerConfirmation confirmation = BuyerConfirmation(raw);
-
-        bytes32 currentUid = record.currentConfirmationUid;
-        if (currentUid != bytes32(0)) {
-            require(a.refUID == currentUid, "must ref current confirmation");
-            require(a.refUID != a.uid, "self refUID");
-        } else {
-            require(a.refUID == bytes32(0), "refUID is not a tracked confirmation");
+    function _onConfirmationAttest(Attestation calldata a) private {
+        if (!a.revocable) revert ConfirmationMustBeRevocable();
+        (bytes32 orderKey, uint8 raw) = abi.decode(a.data, (bytes32, uint8));
+        if (!(raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed))) {
+            revert BinaryConfirmationOnly();
         }
-
-        _transitionConfirmation(payment, record, confirmation, a.uid);
-
+        ReputationRecord storage record = _eligibleRecord(orderKey);
+        if (a.attester != record.payer) revert NotOrderPayer();
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
+        bytes32 currentUid = record.currentConfirmationUid;
+        if (currentUid == bytes32(0)) {
+            if (a.refUID != bytes32(0)) revert UnexpectedConfirmationReference();
+        } else {
+            if (!(a.refUID == currentUid && a.refUID != a.uid)) revert MustReferenceCurrentConfirmation();
+        }
+        BuyerConfirmation confirmation = BuyerConfirmation(raw);
+        _transitionConfirmation(record, confirmation, a.uid);
         emit BuyerConfirmationSubmitted(
-            paymentId, payment.providerAgentId, payment.buyerAgentId, record.serviceId, confirmation, a.uid, a.refUID
+            orderKey,
+            record.providerAgentId,
+            record.payer,
+            record.serviceId,
+            confirmation,
+            a.uid,
+            a.refUID,
+            record.confirmationTransitions
         );
     }
 
-    function _onConfirmationRevoke(Attestation calldata a) internal {
-        uint256 paymentId = paymentIdByUid[a.uid];
-        if (paymentId == 0) return;
-        IPaymentRouter.PaymentRecord memory payment = paymentRouter.getPayment(paymentId);
-        ReputationRecord storage record = _records[paymentId];
-        if (record.currentConfirmationUid != a.uid) return;
-        _transitionConfirmation(payment, record, BuyerConfirmation.Pending, bytes32(0));
-    }
-
-    function _transitionConfirmation(
-        IPaymentRouter.PaymentRecord memory payment,
-        ReputationRecord storage record,
-        BuyerConfirmation next,
-        bytes32 nextUid
-    ) private {
+    function _transitionConfirmation(ReputationRecord storage record, BuyerConfirmation next, bytes32 nextUid) private {
+        if (record.confirmationTransitions >= MAX_CONFIRMATION_TRANSITIONS) revert ConfirmationTransitionCap();
         bytes32 previousUid = record.currentConfirmationUid;
         if (previousUid != bytes32(0)) {
-            BuyerConfirmation previous = confirmationByUid[previousUid];
-            _decrementConfirmation(payment, record.serviceId, previous);
+            _decrementConfirmation(record, confirmationByUid[previousUid]);
             delete confirmationByUid[previousUid];
-            delete paymentIdByUid[previousUid];
+            delete orderKeyByConfirmationUid[previousUid];
         }
-
+        record.confirmationTransitions++;
         record.confirmation = next;
         record.currentConfirmationUid = nextUid;
-        record.confirmationTimestamp = nextUid == bytes32(0) ? 0 : block.timestamp;
+        record.confirmationTimestamp = nextUid == bytes32(0) ? 0 : uint64(block.timestamp);
         if (nextUid != bytes32(0)) {
-            _incrementConfirmation(payment, record.serviceId, next);
+            _incrementConfirmation(record, next);
             confirmationByUid[nextUid] = next;
-            paymentIdByUid[nextUid] = record.paymentId;
+            orderKeyByConfirmationUid[nextUid] = record.orderKey;
         }
     }
 
-    function _incrementConfirmation(
-        IPaymentRouter.PaymentRecord memory payment,
-        bytes32 serviceId,
-        BuyerConfirmation confirmation
-    ) private {
+    function _incrementConfirmation(ReputationRecord storage record, BuyerConfirmation confirmation) private {
+        uint256 weight = _valueWeight(record.grossAmount);
         if (confirmation == BuyerConfirmation.Confirmed) {
-            confirmedCount[payment.providerAgentId]++;
-            confirmedByService[serviceId]++;
-            buyerConfirmedCount[payment.buyerAgentId]++;
+            confirmedCount[record.providerAgentId]++;
+            confirmedByService[record.serviceId]++;
+            payerConfirmedCount[record.payer]++;
+            confirmedWeightByProvider[record.providerAgentId] += weight;
+            confirmedWeightByService[record.serviceId] += weight;
         } else {
-            notConfirmedCount[payment.providerAgentId]++;
-            notConfirmedByService[serviceId]++;
-            buyerNotConfirmedCount[payment.buyerAgentId]++;
+            notConfirmedCount[record.providerAgentId]++;
+            notConfirmedByService[record.serviceId]++;
+            payerNotConfirmedCount[record.payer]++;
+            notConfirmedWeightByProvider[record.providerAgentId] += weight;
+            notConfirmedWeightByService[record.serviceId] += weight;
         }
     }
 
-    function _decrementConfirmation(
-        IPaymentRouter.PaymentRecord memory payment,
-        bytes32 serviceId,
-        BuyerConfirmation confirmation
-    ) private {
+    function _decrementConfirmation(ReputationRecord storage record, BuyerConfirmation confirmation) private {
+        uint256 weight = _valueWeight(record.grossAmount);
         if (confirmation == BuyerConfirmation.Confirmed) {
-            confirmedCount[payment.providerAgentId]--;
-            confirmedByService[serviceId]--;
-            buyerConfirmedCount[payment.buyerAgentId]--;
+            confirmedCount[record.providerAgentId]--;
+            confirmedByService[record.serviceId]--;
+            payerConfirmedCount[record.payer]--;
+            confirmedWeightByProvider[record.providerAgentId] -= weight;
+            confirmedWeightByService[record.serviceId] -= weight;
         } else {
-            notConfirmedCount[payment.providerAgentId]--;
-            notConfirmedByService[serviceId]--;
-            buyerNotConfirmedCount[payment.buyerAgentId]--;
+            notConfirmedCount[record.providerAgentId]--;
+            notConfirmedByService[record.serviceId]--;
+            payerNotConfirmedCount[record.payer]--;
+            notConfirmedWeightByProvider[record.providerAgentId] -= weight;
+            notConfirmedWeightByService[record.serviceId] -= weight;
         }
     }
 
-    function _isHistoricalProvider(IPaymentRouter.PaymentRecord memory payment, address account)
-        private
-        pure
-        returns (bool)
-    {
-        return account == payment.cachedProviderOwner || account == payment.cachedProviderWallet;
+    function _eligibleRecord(bytes32 orderKey) private view returns (ReputationRecord storage record) {
+        record = _records[orderKey];
+        if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
+        if (!record.reputationEligible) revert OrderNotReputationEligible();
     }
 
-    function _providerRecipient(IPaymentRouter.PaymentRecord memory payment) private pure returns (address) {
-        if (payment.cachedProviderWallet != address(0)) return payment.cachedProviderWallet;
-        return payment.cachedProviderOwner;
-    }
-
-    function _requireAttestationParticipantsAllowed(Attestation calldata attestation) private view {
-        _requireNotSanctioned(attestation.attester);
-        _requireNotSanctioned(attestation.recipient);
+    function _providerRecipient(ReputationRecord storage record) private view returns (address) {
+        return record.providerAgentWallet == address(0) ? record.providerOwner : record.providerAgentWallet;
     }
 }

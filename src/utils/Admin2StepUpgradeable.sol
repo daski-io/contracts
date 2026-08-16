@@ -54,6 +54,7 @@ abstract contract Admin2StepUpgradeable is
     ///         complete the handover.
     function transferAdmin(address newAdmin) external onlyAdmin {
         require(newAdmin != address(0), "zero admin");
+        _validateAdminTransfer(newAdmin);
         pendingAdmin = newAdmin;
         emit AdminTransferStarted(admin, newAdmin);
     }
@@ -62,6 +63,7 @@ abstract contract Admin2StepUpgradeable is
     ///         the pendingAdmin set in step 1.
     function acceptAdmin() external {
         require(msg.sender == pendingAdmin, "not pending admin");
+        _validateAdminTransfer(msg.sender);
         address oldAdmin = admin;
         admin = pendingAdmin;
         pendingAdmin = address(0);
@@ -93,6 +95,8 @@ abstract contract Admin2StepUpgradeable is
 
     /// @dev UUPS upgrade authorization — admin only.
     function _authorizeUpgrade(address) internal override onlyAdmin {}
+
+    function _validateAdminTransfer(address) internal view virtual {}
 
     uint256[47] private __gap;
 }

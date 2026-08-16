@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
+import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
-import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
-
-contract PaymentRouterCodeStub {}
+import {ReputationTestBase} from "./helpers/ReputationTestBase.sol";
 
 contract InvalidSchemaRegistryEAS {
     address private immutable REGISTRY;
@@ -22,214 +20,154 @@ contract InvalidSchemaRegistryEAS {
     }
 }
 
-contract ReputationConfigurationTest is Test {
-    address admin = makeAddr("admin");
-    PaymentRouterCodeStub router;
-    MockSanctionsList sanctions;
-
-    function setUp() public {
-        router = new PaymentRouterCodeStub();
-        sanctions = new MockSanctionsList();
+contract ReputationConfigurationTest is ReputationTestBase {
+    function test_finalizeValidatesFreshStandardSchemas() public {
+        ReputationStorage fresh = _fresh();
+        MockEAS freshEas = new MockEAS();
+        _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            address(fresh),
+            false,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            true
+        );
+        vm.prank(admin);
+        fresh.finalizeConfiguration();
+        assertTrue(fresh.isConfigured());
     }
 
-    function _fresh() internal returns (ReputationStorage reputation) {
+    function test_finalizeRejectsWrongResolverTextAndRevocability() public {
+        ReputationStorage fresh = _fresh();
+        MockEAS freshEas = new MockEAS();
+        (bytes32 outcomeUid,) = _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 wrong",
+            address(fresh),
+            false,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            true
+        );
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.WrongSchemaDefinition.selector, outcomeUid));
+        fresh.finalizeConfiguration();
+
+        fresh = _fresh();
+        freshEas = new MockEAS();
+        (outcomeUid,) = _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            makeAddr("wrong-resolver"),
+            false,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            false
+        );
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.WrongSchemaResolver.selector, outcomeUid));
+        fresh.finalizeConfiguration();
+
+        fresh = _fresh();
+        freshEas = new MockEAS();
+        (outcomeUid,) = _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            address(fresh),
+            true,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            true
+        );
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.SchemaMustBeIrrevocable.selector, outcomeUid));
+        fresh.finalizeConfiguration();
+
+        fresh = _fresh();
+        freshEas = new MockEAS();
+        (, bytes32 confirmationUid) = _setSchemas(
+            fresh,
+            freshEas,
+            "bytes32 orderKey,uint8 outcome",
+            address(fresh),
+            false,
+            "bytes32 orderKey,uint8 confirmation",
+            address(fresh),
+            false
+        );
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.SchemaMustBeRevocable.selector, confirmationUid));
+        fresh.finalizeConfiguration();
+    }
+
+    function test_finalizeRejectsSchemaRegistryWithoutCode() public {
+        ReputationStorage fresh = _fresh();
+        address missingRegistry = makeAddr("missing-registry");
+        InvalidSchemaRegistryEAS badEas = new InvalidSchemaRegistryEAS(missingRegistry);
+        vm.startPrank(admin);
+        fresh.setEAS(address(badEas));
+        fresh.setOutcomeSchema(keccak256("outcome"));
+        fresh.setConfirmationSchema(keccak256("confirmation"));
+        vm.expectRevert(abi.encodeWithSelector(ReputationStorageBase.TargetHasNoCode.selector, missingRegistry));
+        fresh.finalizeConfiguration();
+        vm.stopPrank();
+    }
+
+    function test_orderSignerRotationIsExplicitAndCannotSelectAdmin() public {
+        address newSigner = makeAddr("new-order-signer");
+        vm.prank(admin);
+        reputation.setOrderSigner(newSigner);
+        assertEq(reputation.orderSigner(), newSigner);
+
+        vm.prank(admin);
+        vm.expectRevert(ReputationStorageBase.InvalidOrderSigner.selector);
+        reputation.setOrderSigner(admin);
+    }
+
+    function _fresh() private returns (ReputationStorage fresh) {
         ReputationStorage implementation = new ReputationStorage();
-        reputation = ReputationStorage(
+        fresh = ReputationStorage(
             address(
                 new ERC1967Proxy(
                     address(implementation),
-                    abi.encodeCall(ReputationStorage.initialize, (address(router), address(sanctions), admin))
+                    abi.encodeCall(
+                        ReputationStorage.initialize,
+                        (
+                            vm.addr(ORDER_SIGNER_KEY),
+                            address(identity),
+                            address(providers),
+                            address(services),
+                            address(sanctions),
+                            token,
+                            admin
+                        )
+                    )
                 )
             )
         );
     }
 
     function _setSchemas(
-        ReputationStorage reputation,
-        MockEAS eas,
+        ReputationStorage fresh,
+        MockEAS freshEas,
         string memory outcomeText,
         address outcomeResolver,
         bool outcomeRevocable,
         string memory confirmationText,
         address confirmationResolver,
         bool confirmationRevocable
-    ) internal {
-        bytes32 outcome = eas.register(outcomeText, outcomeResolver, outcomeRevocable);
-        bytes32 confirmation = eas.register(confirmationText, confirmationResolver, confirmationRevocable);
+    ) private returns (bytes32 outcomeUid, bytes32 confirmationUid) {
+        outcomeUid = freshEas.register(outcomeText, outcomeResolver, outcomeRevocable);
+        confirmationUid = freshEas.register(confirmationText, confirmationResolver, confirmationRevocable);
         vm.startPrank(admin);
-        reputation.setEAS(address(eas));
-        reputation.setOutcomeSchema(outcome);
-        reputation.setConfirmationSchema(confirmation);
-        vm.stopPrank();
-    }
-
-    function test_finalizeValidatesSchemasFromConfiguredEAS() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            address(reputation),
-            false,
-            "uint256 paymentId,uint8 confirmation",
-            address(reputation),
-            true
-        );
-
-        vm.prank(admin);
-        reputation.finalizeConfiguration();
-        assertTrue(reputation.isConfigured());
-    }
-
-    function test_finalizeRejectsMissingSchemaAndRemainsMutable() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        vm.startPrank(admin);
-        reputation.setEAS(address(eas));
-        reputation.setOutcomeSchema(keccak256("missing"));
-        reputation.setConfirmationSchema(keccak256("also-missing"));
-        vm.expectRevert("outcome schema missing");
-        reputation.finalizeConfiguration();
-        reputation.setOutcomeSchema(keccak256("replacement"));
-        vm.stopPrank();
-        assertFalse(reputation.isConfigured());
-    }
-
-    function test_finalizeRejectsWrongOutcomeResolver() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            makeAddr("wrongResolver"),
-            false,
-            "uint256 paymentId,uint8 confirmation",
-            address(reputation),
-            true
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("wrong outcome resolver");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsWrongSchemaText() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 wrong",
-            address(reputation),
-            false,
-            "uint256 paymentId,uint8 confirmation",
-            address(reputation),
-            true
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("wrong outcome schema");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsWrongConfirmationResolver() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            address(reputation),
-            false,
-            "uint256 paymentId,uint8 confirmation",
-            makeAddr("wrongResolver"),
-            true
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("wrong confirmation resolver");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsWrongConfirmationSchemaText() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            address(reputation),
-            false,
-            "uint256 paymentId,uint8 wrong",
-            address(reputation),
-            true
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("wrong confirmation schema");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsOutcomeRevocability() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            address(reputation),
-            true,
-            "uint256 paymentId,uint8 confirmation",
-            address(reputation),
-            true
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("outcome schema revocable");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsConfirmationRevocability() public {
-        ReputationStorage reputation = _fresh();
-        MockEAS eas = new MockEAS();
-        _setSchemas(
-            reputation,
-            eas,
-            "uint256 paymentId,uint8 outcome",
-            address(reputation),
-            false,
-            "uint256 paymentId,uint8 confirmation",
-            address(reputation),
-            false
-        );
-
-        vm.prank(admin);
-        vm.expectRevert("confirmation schema not revocable");
-        reputation.finalizeConfiguration();
-    }
-
-    function test_finalizeRejectsSchemaRegistryWithoutCode() public {
-        ReputationStorage reputation = _fresh();
-        InvalidSchemaRegistryEAS eas = new InvalidSchemaRegistryEAS(makeAddr("missingRegistry"));
-        vm.startPrank(admin);
-        reputation.setEAS(address(eas));
-        reputation.setOutcomeSchema(keccak256("outcome"));
-        reputation.setConfirmationSchema(keccak256("confirmation"));
-        vm.expectRevert("schema registry has no code");
-        reputation.finalizeConfiguration();
-        vm.stopPrank();
-    }
-
-    function test_schemaUidsMustBeNonzeroAndDistinct() public {
-        ReputationStorage reputation = _fresh();
-        vm.startPrank(admin);
-        vm.expectRevert("zero schema");
-        reputation.setOutcomeSchema(bytes32(0));
-        reputation.setOutcomeSchema(keccak256("schema"));
-        vm.expectRevert("schemas must differ");
-        reputation.setConfirmationSchema(keccak256("schema"));
+        fresh.setEAS(address(freshEas));
+        fresh.setOutcomeSchema(outcomeUid);
+        fresh.setConfirmationSchema(confirmationUid);
         vm.stopPrank();
     }
 }

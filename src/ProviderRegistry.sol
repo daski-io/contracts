@@ -23,8 +23,8 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///         per-service NFT pattern.
 ///
 /// Wallet model: this registry stores no wallet. The payee surface is the
-/// canonical registry's `agentWallet` (PaymentRouter payee resolution and
-/// refund auth read it live; providers MUST verify one there before they can
+/// canonical registry's `agentWallet` (service attribution and provider
+/// authorization read it live; providers MUST verify one there before they can
 /// be paid or authorize a per-service serviceWallet). Wallet→agent
 /// resolution for payment attribution goes through the Daski `AgentIndex`,
 /// off-chain callers resolve agentIds before calling `getProvider`.
