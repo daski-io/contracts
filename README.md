@@ -20,7 +20,7 @@ USDC authorizations whose `to` address is the outcome splitter.
   around the canonical ERC-8004 Identity Registry.
 - `ProviderRegistry` records Daski marketplace providers.
 - `ServiceRegistry` records versioned provider catalog entries.
-- `DaskiValidationRegistry` records agent-scoped validation requests and
+- `ValidationRegistry` records agent-scoped validation requests and
   responses.
 - `ReputationStorage` is the fresh EAS-backed standard-order reputation
   ledger. The gateway registers finalized paid orders, the provider records

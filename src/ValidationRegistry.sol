@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IDaskiValidationRegistry} from "./interfaces/IDaskiValidationRegistry.sol";
+import {IValidationRegistry} from "./interfaces/IValidationRegistry.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
@@ -10,7 +10,7 @@ import {LibPagination} from "./utils/LibPagination.sol";
 /// @notice Daski-specific, ERC-8004-inspired validation registry. Storage and
 ///         calls use an agent-namespaced validationKey to prevent cross-agent
 ///         request-hash squatting; events retain the raw requestHash.
-contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegistry {
+contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
     struct Validation {
         address validatorAddress;
         uint256 agentId;

@@ -7,7 +7,7 @@ import {ICanonicalIdentity} from "../interfaces/ICanonicalIdentity.sol";
 /// @notice Shared auth check for "caller has agent-owner-equivalent rights":
 ///         NFT owner, OR ERC-721 operator (isApprovedForAll), OR per-token
 ///         approved spender (getApproved). Used by ServiceRegistry,
-///         ProviderRegistry, and DaskiValidationRegistry (`validationRequest`),
+///         ProviderRegistry, and ValidationRegistry (`validationRequest`),
 ///         all reading the canonical ERC-8004 IdentityRegistry.
 /// The extended helper also covers the canonical registry's live
 /// `agentWallet` for the refund path.

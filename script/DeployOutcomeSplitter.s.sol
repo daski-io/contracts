@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Script} from "forge-std/Script.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
+import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
+import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
 
 /// @notice Deploys one reviewed outcome splitter through the shared factory.
-contract DeployOutcomeSplitter is Script {
+contract DeployOutcomeSplitter is OutcomeSplitterScriptBase {
     uint256 private constant BASE_SEPOLIA_CHAIN_ID = 84532;
     address private constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
 
@@ -19,6 +20,9 @@ contract DeployOutcomeSplitter is Script {
         bytes32 listingHash = vm.envBytes32("STANDARD_RAIL_LISTING_COMMITMENT_HASH");
         uint256 listingEpochRaw = vm.envUint("STANDARD_RAIL_LISTING_EPOCH");
         bytes32 salt = vm.envBytes32("STANDARD_RAIL_DEPLOYMENT_SALT");
+        bytes32 reviewedFactoryHash = _reviewedFactoryRuntimeCodeHash();
+        bytes32 reviewedCreationCodeHash = vm.envBytes32("STANDARD_RAIL_SPLITTER_CREATION_CODE_HASH");
+        bytes32 reviewedInitCodeHash = vm.envBytes32("STANDARD_RAIL_SPLITTER_INIT_CODE_HASH");
 
         require(block.chainid == BASE_SEPOLIA_CHAIN_ID, "standard Testnet rail is Base Sepolia only");
         require(commissionBpsRaw > 0 && commissionBpsRaw < 10_000, "invalid commission bps");
@@ -28,6 +32,25 @@ contract DeployOutcomeSplitter is Script {
         uint16 commissionBps = uint16(commissionBpsRaw);
         // forge-lint: disable-next-line(unsafe-typecast)
         uint64 listingEpoch = uint64(listingEpochRaw);
+
+        _validateReviewedFactory(address(factory), reviewedFactoryHash);
+        require(
+            OutcomeSplitterCreate2.creationCodeHash() == reviewedCreationCodeHash,
+            "splitter creation code hash mismatch"
+        );
+        bytes32 localInitCodeHash = OutcomeSplitterCreate2.initCodeHash(
+            BASE_SEPOLIA_CHAIN_ID,
+            BASE_SEPOLIA_USDC,
+            provider,
+            daski,
+            commissionBps,
+            policyHash,
+            outcomeHash,
+            listingHash,
+            listingEpoch
+        );
+        require(localInitCodeHash == reviewedInitCodeHash, "splitter init code hash mismatch");
+        address predicted = OutcomeSplitterCreate2.computeAddress(address(factory), salt, localInitCodeHash);
 
         vm.startBroadcast();
         splitter = factory.deploy(
@@ -44,20 +67,7 @@ contract DeployOutcomeSplitter is Script {
         );
         vm.stopBroadcast();
 
-        require(
-            factory.computeAddress(
-                salt,
-                BASE_SEPOLIA_CHAIN_ID,
-                BASE_SEPOLIA_USDC,
-                provider,
-                daski,
-                commissionBps,
-                policyHash,
-                outcomeHash,
-                listingHash,
-                listingEpoch
-            ) == splitter,
-            "splitter address mismatch"
-        );
+        require(splitter == predicted, "splitter address mismatch");
+        require(splitter.code.length != 0, "splitter deployment missing code");
     }
 }

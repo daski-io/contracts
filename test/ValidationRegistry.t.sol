@@ -5,13 +5,13 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MockCanonicalIdentityRegistry} from "./mocks/MockCanonicalIdentityRegistry.sol";
 import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
-import {DaskiValidationRegistry} from "../src/DaskiValidationRegistry.sol";
-import {IDaskiValidationRegistry} from "../src/interfaces/IDaskiValidationRegistry.sol";
+import {ValidationRegistry} from "../src/ValidationRegistry.sol";
+import {IValidationRegistry} from "../src/interfaces/IValidationRegistry.sol";
 import {ISanctionsGuard} from "../src/interfaces/ISanctionsGuard.sol";
 
-contract DaskiValidationRegistryTest is Test {
+contract ValidationRegistryTest is Test {
     MockCanonicalIdentityRegistry identity;
-    DaskiValidationRegistry validation;
+    ValidationRegistry validation;
     MockSanctionsList sanctions;
 
     address admin = makeAddr("admin");
@@ -26,12 +26,12 @@ contract DaskiValidationRegistryTest is Test {
         identity = new MockCanonicalIdentityRegistry();
         sanctions = new MockSanctionsList();
 
-        DaskiValidationRegistry vImpl = new DaskiValidationRegistry();
+        ValidationRegistry vImpl = new ValidationRegistry();
         ERC1967Proxy vProxy = new ERC1967Proxy(
             address(vImpl),
-            abi.encodeCall(DaskiValidationRegistry.initialize, (address(identity), address(sanctions), admin))
+            abi.encodeCall(ValidationRegistry.initialize, (address(identity), address(sanctions), admin))
         );
-        validation = DaskiValidationRegistry(address(vProxy));
+        validation = ValidationRegistry(address(vProxy));
 
         vm.prank(agentOwner);
         agentId = identity.register();
@@ -43,9 +43,7 @@ contract DaskiValidationRegistryTest is Test {
 
     function test_validationRequestEmitsEvent() public {
         vm.expectEmit(true, true, true, true, address(validation));
-        emit IDaskiValidationRegistry.ValidationRequest(
-            validator, agentId, "ipfs://req", REQ_HASH, _key(agentId, REQ_HASH)
-        );
+        emit IValidationRegistry.ValidationRequest(validator, agentId, "ipfs://req", REQ_HASH, _key(agentId, REQ_HASH));
 
         vm.prank(agentOwner);
         validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
@@ -125,7 +123,7 @@ contract DaskiValidationRegistryTest is Test {
         validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
 
         vm.expectEmit(true, true, true, true, address(validation));
-        emit IDaskiValidationRegistry.ValidationResponse(
+        emit IValidationRegistry.ValidationResponse(
             validator, agentId, REQ_HASH, _key(agentId, REQ_HASH), 100, "ipfs://resp", keccak256("resp"), "pass"
         );
 

@@ -5,7 +5,13 @@ import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Test} from "forge-std/Test.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol";
-import {Attestation} from "../src/interfaces/IEAS.sol";
+import {
+    Attestation,
+    AttestationRequest,
+    AttestationRequestData,
+    RevocationRequest,
+    RevocationRequestData
+} from "../src/interfaces/IEAS.sol";
 import {MockEAS} from "./helpers/MockEAS.sol";
 import {ReputationTestBase} from "./helpers/ReputationTestBase.sol";
 
@@ -19,7 +25,7 @@ contract ReputationConfirmationHandler is Test {
 
     bytes32 public currentUid;
     uint8 public currentConfirmation;
-    uint8 public successfulTransitions;
+    uint8 public successfulSubmissions;
     bytes32[] private _submittedUids;
 
     constructor(
@@ -39,28 +45,42 @@ contract ReputationConfirmationHandler is Test {
     }
 
     function submit(uint8 seed) external {
-        if (successfulTransitions >= _reputation.MAX_CONFIRMATION_TRANSITIONS()) return;
+        if (successfulSubmissions >= _reputation.MAX_CONFIRMATION_SUBMISSIONS()) return;
         uint8 confirmation = (seed % 2) + 1;
-        bytes32 uid = keccak256(abi.encode(successfulTransitions, confirmation, currentUid));
-        Attestation memory item = _attestation(uid, confirmation, currentUid, 0);
-
-        vm.prank(address(_eas));
-        _reputation.attest(item);
+        AttestationRequest memory request = AttestationRequest({
+            schema: _schema,
+            data: AttestationRequestData({
+                recipient: _recipient,
+                expirationTime: 0,
+                revocable: true,
+                refUID: currentUid,
+                data: abi.encode(_orderKey, confirmation),
+                value: 0
+            })
+        });
+        vm.prank(_payer);
+        bytes32 uid = _eas.attest(request);
         currentUid = uid;
         currentConfirmation = confirmation;
-        successfulTransitions++;
+        successfulSubmissions++;
         _submittedUids.push(uid);
     }
 
     function revoke() external {
-        if (currentUid == bytes32(0) || successfulTransitions >= _reputation.MAX_CONFIRMATION_TRANSITIONS()) return;
-        Attestation memory item = _attestation(currentUid, currentConfirmation, bytes32(0), uint64(block.timestamp));
-
-        vm.prank(address(_eas));
-        _reputation.revoke(item);
+        if (currentUid == bytes32(0)) return;
+        _revoke(currentUid);
         currentUid = bytes32(0);
         currentConfirmation = 0;
-        successfulTransitions++;
+    }
+
+    function revokeStale(uint256 seed) external {
+        uint256 count = _submittedUids.length;
+        if (count == 0) return;
+        bytes32 uid = _submittedUids[seed % count];
+        if (uid == currentUid) return;
+        Attestation memory item = _eas.getAttestation(uid);
+        if (item.revocationTime != 0) return;
+        _revoke(uid);
     }
 
     function submittedUidCount() external view returns (uint256) {
@@ -71,23 +91,11 @@ contract ReputationConfirmationHandler is Test {
         return _submittedUids[index];
     }
 
-    function _attestation(bytes32 uid, uint8 confirmation, bytes32 refUid, uint64 revokedAt)
-        private
-        view
-        returns (Attestation memory)
-    {
-        return Attestation({
-            uid: uid,
-            schema: _schema,
-            time: uint64(block.timestamp),
-            expirationTime: 0,
-            revocationTime: revokedAt,
-            refUID: refUid,
-            recipient: _recipient,
-            attester: _payer,
-            revocable: true,
-            data: abi.encode(_orderKey, confirmation)
-        });
+    function _revoke(bytes32 uid) private {
+        RevocationRequest memory request =
+            RevocationRequest({schema: _schema, data: RevocationRequestData({uid: uid, value: 0})});
+        vm.prank(_payer);
+        _eas.revoke(request);
     }
 }
 
@@ -102,9 +110,10 @@ contract ReputationAccountingInvariantTest is StdInvariant, ReputationTestBase {
         _handler =
             new ReputationConfirmationHandler(reputation, eas, confirmationSchema, ORDER_KEY, payer, providerWallet);
 
-        bytes4[] memory selectors = new bytes4[](2);
+        bytes4[] memory selectors = new bytes4[](3);
         selectors[0] = ReputationConfirmationHandler.submit.selector;
         selectors[1] = ReputationConfirmationHandler.revoke.selector;
+        selectors[2] = ReputationConfirmationHandler.revokeStale.selector;
         targetSelector(FuzzSelector({addr: address(_handler), selectors: selectors}));
         targetContract(address(_handler));
     }
@@ -118,8 +127,8 @@ contract ReputationAccountingInvariantTest is StdInvariant, ReputationTestBase {
         uint256 buyerConfirmed = reputation.payerConfirmedCount(payer);
         uint256 buyerRejected = reputation.payerNotConfirmedCount(payer);
 
-        assertLe(record.confirmationTransitions, reputation.MAX_CONFIRMATION_TRANSITIONS());
-        assertEq(record.confirmationTransitions, _handler.successfulTransitions());
+        assertLe(record.confirmationSubmissions, reputation.MAX_CONFIRMATION_SUBMISSIONS());
+        assertEq(record.confirmationSubmissions, _handler.successfulSubmissions());
         assertEq(providerConfirmed, serviceConfirmed);
         assertEq(providerConfirmed, buyerConfirmed);
         assertEq(providerRejected, serviceRejected);

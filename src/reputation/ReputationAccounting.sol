@@ -42,7 +42,7 @@ abstract contract ReputationAccounting is ReputationAdmin {
             outcomeAttestationDelay: 0,
             outcomeTimestamp: 0,
             confirmationTimestamp: 0,
-            confirmationTransitions: 0,
+            confirmationSubmissions: 0,
             outcomeRecorded: false,
             reputationEligible: permit.reputationEligible,
             currentConfirmationUid: bytes32(0)

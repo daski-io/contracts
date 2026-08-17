@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @title IDaskiValidationRegistry — namespaced, paginated validation registry interface
-interface IDaskiValidationRegistry {
+/// @title IValidationRegistry — namespaced, paginated validation registry interface
+interface IValidationRegistry {
     event ValidationRequest(
         address indexed validatorAddress,
         uint256 indexed agentId,
