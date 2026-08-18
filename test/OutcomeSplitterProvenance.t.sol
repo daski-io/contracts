@@ -6,9 +6,8 @@ import {OutcomeSplitter} from "../src/OutcomeSplitter.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "../script/OutcomeSplitterScriptBase.sol";
-import {StandardRailCircleUSDC} from "../script/StandardRailCircleUSDC.sol";
 import {WriteOutcomeSplitterManifest} from "../script/WriteOutcomeSplitterManifest.s.sol";
-import {MockCircleUSDC} from "./mocks/MockCircleUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 
 contract OutcomeSplitterProvenanceHarness is OutcomeSplitterScriptBase {
     function validateFactory(address factory, bytes32 reviewedHash) external view {
@@ -25,10 +24,6 @@ contract OutcomeSplitterManifestHarness is WriteOutcomeSplitterManifest {
         return _rpcBlockTag(blockNumber);
     }
 
-    function rpcBlockReference(bytes32 blockHash) external pure returns (string memory) {
-        return _rpcBlockReference(blockHash);
-    }
-
     function deploymentPositionFromReceipt(string memory receipt, ManifestInput memory input)
         external
         pure
@@ -37,11 +32,8 @@ contract OutcomeSplitterManifestHarness is WriteOutcomeSplitterManifest {
         return _deploymentPositionFromReceipt(receipt, input);
     }
 
-    function writeManifest(ManifestInput memory input, StandardRailCircleUSDC.Snapshot memory tokenSnapshot)
-        external
-        returns (string memory)
-    {
-        return _writeManifest(input, tokenSnapshot);
+    function writeManifest(ManifestInput memory input) external returns (string memory) {
+        return _writeManifest(input);
     }
 }
 
@@ -70,7 +62,7 @@ contract SelfConsistentFactory {
 }
 
 contract OutcomeSplitterProvenanceTest is Test {
-    MockCircleUSDC private token;
+    MockUSDC private token;
     OutcomeSplitterFactory private factory;
     OutcomeSplitterProvenanceHarness private provenanceHarness;
     OutcomeSplitterManifestHarness private manifestHarness;
@@ -84,7 +76,8 @@ contract OutcomeSplitterProvenanceTest is Test {
 
     function setUp() public {
         vm.chainId(84532);
-        token = new MockCircleUSDC();
+        vm.roll(100);
+        token = new MockUSDC();
         factory = new OutcomeSplitterFactory();
         provenanceHarness = new OutcomeSplitterProvenanceHarness();
         manifestHarness = new OutcomeSplitterManifestHarness();
@@ -174,6 +167,11 @@ contract OutcomeSplitterProvenanceTest is Test {
         input.startingReleaseSequence = uint256(type(uint64).max) + 1;
         vm.expectRevert(bytes("starting release sequence range"));
         manifestHarness.validate(input);
+
+        input = _manifestInput(splitter);
+        input.activationBlockNumber++;
+        vm.expectRevert(bytes("manifest must run on activation fork"));
+        manifestHarness.validate(input);
     }
 
     function testManifestUsesMinimalRpcBlockQuantities() public view {
@@ -181,11 +179,6 @@ contract OutcomeSplitterProvenanceTest is Test {
         assertEq(manifestHarness.rpcBlockTag(15), "0xf");
         assertEq(manifestHarness.rpcBlockTag(256), "0x100");
         assertEq(manifestHarness.rpcBlockTag(45_573_030), "0x2b763a6");
-        bytes32 blockHash = keccak256("activation-block");
-        assertEq(
-            manifestHarness.rpcBlockReference(blockHash),
-            string.concat("{\"blockHash\":\"", vm.toString(blockHash), "\",\"requireCanonical\":true}")
-        );
     }
 
     function testManifestDerivesAndSerializesExactDeploymentPosition() public {
@@ -201,18 +194,10 @@ contract OutcomeSplitterProvenanceTest is Test {
         string memory output = "/tmp/daski-release-e2e/outcome-splitter-manifest.json";
         vm.createDir("/tmp/daski-release-e2e", true);
         vm.setEnv("STANDARD_RAIL_MANIFEST_OUTPUT", output);
-        StandardRailCircleUSDC.Snapshot memory tokenSnapshot = _tokenSnapshot();
-        token.setImplementation(makeAddr("head-token-implementation"));
-        manifestHarness.writeManifest(input, tokenSnapshot);
+        manifestHarness.writeManifest(input);
         string memory json = vm.readFile(output);
         assertEq(vm.parseJsonUint(json, ".splitterDeploymentTransactionIndex"), 7);
         assertEq(vm.parseJsonUint(json, ".splitterDeploymentLogIndex"), 11);
-        assertEq(vm.parseJsonBytes32(json, ".canonicalTokenProxyRuntimeCodeHash"), address(token).codehash);
-        assertEq(vm.parseJsonAddress(json, ".canonicalTokenImplementation"), address(token));
-        assertEq(vm.parseJsonBytes32(json, ".canonicalTokenImplementationRuntimeCodeHash"), address(token).codehash);
-        assertNotEq(vm.parseJsonAddress(json, ".canonicalTokenImplementation"), token.implementation());
-        assertFalse(vm.parseJsonBool(json, ".canonicalTokenPaused"));
-        assertFalse(vm.parseJsonBool(json, ".splitterTokenBlacklisted"));
     }
 
     function testManifestRejectsInconsistentDeploymentEventPosition() public {
@@ -271,23 +256,6 @@ contract OutcomeSplitterProvenanceTest is Test {
         input.activationPosition = "END_OF_BLOCK";
         input.startingTokenBalance = 0;
         input.startingReleaseSequence = 0;
-    }
-
-    function _tokenSnapshot() private view returns (StandardRailCircleUSDC.Snapshot memory snapshot) {
-        snapshot.proxyCodeHash = address(token).codehash;
-        snapshot.implementation = token.implementation();
-        snapshot.implementationCodeHash = snapshot.implementation.codehash;
-        snapshot.nameHash = keccak256(bytes(token.name()));
-        snapshot.symbolHash = keccak256(bytes(token.symbol()));
-        snapshot.currencyHash = keccak256(bytes(token.currency()));
-        snapshot.decimals = token.decimals();
-        snapshot.versionHash = keccak256(bytes(token.version()));
-        snapshot.pauser = token.pauser();
-        snapshot.blacklister = token.blacklister();
-        snapshot.paused = token.paused();
-        snapshot.splitterBlacklisted = token.isBlacklisted(address(0x1234));
-        snapshot.providerBlacklisted = token.isBlacklisted(provider);
-        snapshot.daskiBlacklisted = token.isBlacklisted(daski);
     }
 
     function _deploymentReceipt(

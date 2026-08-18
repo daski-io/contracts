@@ -3,16 +3,14 @@ pragma solidity ^0.8.24;
 
 import {OutcomeSplitter} from "../src/OutcomeSplitter.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
-import {IOutcomeSplitter} from "../src/interfaces/IOutcomeSplitter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
 import {StandardRailCircleUSDC} from "./StandardRailCircleUSDC.sol";
-import {StandardRailCircleUSDCActivation} from "./StandardRailCircleUSDCActivation.sol";
 
-/// @notice Sole activation gate for a splitter; binds validation to one finalized block hash.
-contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRailCircleUSDCActivation {
+/// @notice Sole activation gate for a splitter, run on the claimed finalized activation fork.
+contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
     using Strings for uint256;
 
     bytes32 private constant OUTCOME_SPLITTER_DEPLOYED_TOPIC =
@@ -53,8 +51,8 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
         ManifestInput memory input = _readInput();
         _validate(input);
         (input.deploymentTransactionIndex, input.deploymentLogIndex) = _deploymentPosition(input);
-        StandardRailCircleUSDC.Snapshot memory tokenSnapshot = _validateActivationCheckpoint(input);
-        json = _writeManifest(input, tokenSnapshot);
+        _validateActivationCheckpoint(input);
+        json = _writeManifest(input);
     }
 
     function _readInput() internal view returns (ManifestInput memory input) {
@@ -83,6 +81,12 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
     }
 
     function _validate(ManifestInput memory input) internal view {
+        require(input.activationBlockNumber >= input.deploymentBlockNumber, "activation predates deployment");
+        require(input.activationBlockHash != bytes32(0), "zero activation block hash");
+        require(keccak256(bytes(input.activationPosition)) == keccak256("END_OF_BLOCK"), "activation position mismatch");
+        require(input.startingReleaseSequence <= type(uint64).max, "starting release sequence range");
+        require(block.number == input.activationBlockNumber, "manifest must run on activation fork");
+
         OutcomeSplitter splitter = input.splitter;
         require(address(splitter).code.length != 0, "splitter has no code");
         _validateReviewedFactory(address(input.factory), input.factoryRuntimeCodeHash);
@@ -97,10 +101,6 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
         require(splitter.listingEpoch() == input.listingEpoch, "epoch mismatch");
         require(input.listingEpoch <= type(uint64).max, "epoch range");
         require(input.commissionBps <= type(uint16).max, "commission range");
-        require(input.activationBlockNumber >= input.deploymentBlockNumber, "activation predates deployment");
-        require(input.activationBlockHash != bytes32(0), "zero activation block hash");
-        require(keccak256(bytes(input.activationPosition)) == keccak256("END_OF_BLOCK"), "activation position mismatch");
-        require(input.startingReleaseSequence <= type(uint64).max, "starting release sequence range");
         require(
             OutcomeSplitterCreate2.creationCodeHash() == input.creationCodeHash, "splitter creation code hash mismatch"
         );
@@ -113,10 +113,7 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
         );
     }
 
-    function _validateActivationCheckpoint(ManifestInput memory input)
-        internal
-        returns (StandardRailCircleUSDC.Snapshot memory tokenSnapshot)
-    {
+    function _validateActivationCheckpoint(ManifestInput memory input) internal {
         bytes memory finalizedBlock = vm.rpc("eth_getBlockByNumber", "[\"finalized\",false]");
         uint256 finalizedBlockNumber = vm.parseJsonUint(string(finalizedBlock), ".number");
         require(input.activationBlockNumber <= finalizedBlockNumber, "activation block is not finalized");
@@ -132,20 +129,14 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
             "activation block hash mismatch"
         );
 
-        string memory blockReference = _rpcBlockReference(input.activationBlockHash);
-        tokenSnapshot = _historicalCircleSnapshot(
-            input.token, address(input.splitter), input.provider, input.daski, blockReference
-        );
-        StandardRailCircleUSDC.validateSnapshot(block.chainid, input.token, tokenSnapshot);
+        StandardRailCircleUSDC.validate(input.token, address(input.splitter), input.provider, input.daski);
 
-        uint256 historicalBalance =
-            _historicalUint(input.token, abi.encodeCall(IERC20.balanceOf, (address(input.splitter))), blockReference);
-        require(historicalBalance == input.startingTokenBalance, "starting token balance mismatch");
-
-        uint256 historicalReleaseSequence = _historicalUint(
-            address(input.splitter), abi.encodeCall(IOutcomeSplitter.releaseSequence, ()), blockReference
+        require(
+            IERC20(input.token).balanceOf(address(input.splitter)) == input.startingTokenBalance,
+            "starting token balance mismatch"
         );
-        require(historicalReleaseSequence == input.startingReleaseSequence, "starting release sequence mismatch");
+
+        require(input.splitter.releaseSequence() == input.startingReleaseSequence, "starting release sequence mismatch");
     }
 
     function _deploymentPosition(ManifestInput memory input)
@@ -233,10 +224,6 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
         return string(minimal);
     }
 
-    function _rpcBlockReference(bytes32 blockHash) internal pure returns (string memory) {
-        return string.concat("{\"blockHash\":\"", vm.toString(blockHash), "\",\"requireCanonical\":true}");
-    }
-
     function _initCodeHash(ManifestInput memory input) internal view returns (bytes32) {
         require(input.commissionBps <= type(uint16).max, "commission range");
         require(input.listingEpoch <= type(uint64).max, "epoch range");
@@ -274,27 +261,10 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRail
         );
     }
 
-    function _writeManifest(ManifestInput memory input, StandardRailCircleUSDC.Snapshot memory tokenSnapshot)
-        internal
-        returns (string memory json)
-    {
+    function _writeManifest(ManifestInput memory input) internal returns (string memory json) {
         string memory object = "splitter";
         vm.serializeUint(object, "chainId", block.chainid);
         vm.serializeAddress(object, "canonicalToken", input.token);
-        vm.serializeBytes32(object, "canonicalTokenProxyRuntimeCodeHash", tokenSnapshot.proxyCodeHash);
-        vm.serializeAddress(object, "canonicalTokenImplementation", tokenSnapshot.implementation);
-        vm.serializeBytes32(object, "canonicalTokenImplementationRuntimeCodeHash", tokenSnapshot.implementationCodeHash);
-        vm.serializeBytes32(object, "canonicalTokenNameHash", tokenSnapshot.nameHash);
-        vm.serializeBytes32(object, "canonicalTokenSymbolHash", tokenSnapshot.symbolHash);
-        vm.serializeBytes32(object, "canonicalTokenCurrencyHash", tokenSnapshot.currencyHash);
-        vm.serializeUint(object, "canonicalTokenDecimals", tokenSnapshot.decimals);
-        vm.serializeBytes32(object, "canonicalTokenVersionHash", tokenSnapshot.versionHash);
-        vm.serializeAddress(object, "canonicalTokenPauser", tokenSnapshot.pauser);
-        vm.serializeAddress(object, "canonicalTokenBlacklister", tokenSnapshot.blacklister);
-        vm.serializeBool(object, "canonicalTokenPaused", tokenSnapshot.paused);
-        vm.serializeBool(object, "splitterTokenBlacklisted", tokenSnapshot.splitterBlacklisted);
-        vm.serializeBool(object, "providerTokenBlacklisted", tokenSnapshot.providerBlacklisted);
-        vm.serializeBool(object, "daskiReceiverTokenBlacklisted", tokenSnapshot.daskiBlacklisted);
         vm.serializeAddress(object, "providerPayee", input.provider);
         vm.serializeAddress(object, "daskiCommissionReceiver", input.daski);
         vm.serializeUint(object, "commissionBps", input.commissionBps);

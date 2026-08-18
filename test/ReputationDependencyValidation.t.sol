@@ -2,67 +2,16 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {ReputationDependencyValidation} from "../script/ReputationDependencyValidation.sol";
 import {MockSanctionsList} from "./mocks/MockSanctionsList.sol";
-
-contract EmptyDependency {}
-
-contract IdentityDependencyStub {
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IERC721).interfaceId;
-    }
-
-    function getAgentWallet(uint256) external pure returns (address) {
-        return address(0);
-    }
-}
-
-contract UsdcDependencyStub {
-    function totalSupply() external pure returns (uint256) {
-        return 0;
-    }
-
-    function balanceOf(address) external pure returns (uint256) {
-        return 0;
-    }
-
-    function decimals() external pure returns (uint8) {
-        return 6;
-    }
-}
-
-contract ProviderDependencyStub {
-    address public immutable identity;
-    address public immutable usdc;
-    address public immutable sanctionsOracle;
-
-    constructor(address identity_, address usdc_, address sanctionsOracle_) {
-        identity = identity_;
-        usdc = usdc_;
-        sanctionsOracle = sanctionsOracle_;
-    }
-
-    function isRegistered(uint256) external pure returns (bool) {
-        return false;
-    }
-}
-
-contract ServiceDependencyStub {
-    address public immutable identity;
-    address public immutable providerRegistry;
-    address public immutable sanctionsOracle;
-
-    constructor(address identity_, address providerRegistry_, address sanctionsOracle_) {
-        identity = identity_;
-        providerRegistry = providerRegistry_;
-        sanctionsOracle = sanctionsOracle_;
-    }
-
-    function exists(bytes32) external pure returns (bool) {
-        return false;
-    }
-}
+import {
+    ReputationIdentityDependencyStub,
+    ReputationProviderDependencyStub,
+    ReputationProviderWiringOnlyStub,
+    ReputationServiceDependencyStub,
+    ReputationServiceWiringOnlyStub,
+    ReputationUsdcDependencyStub
+} from "./helpers/ReputationDependencyStubs.sol";
 
 contract ReputationDependencyValidationHarness is ReputationDependencyValidation {
     function validate(
@@ -78,78 +27,97 @@ contract ReputationDependencyValidationHarness is ReputationDependencyValidation
 
 contract ReputationDependencyValidationTest is Test {
     ReputationDependencyValidationHarness private validator;
-    IdentityDependencyStub private identity;
-    UsdcDependencyStub private token;
+    ReputationIdentityDependencyStub private identity;
+    ReputationUsdcDependencyStub private token;
     MockSanctionsList private sanctions;
-    ProviderDependencyStub private provider;
-    ServiceDependencyStub private service;
+    ReputationProviderDependencyStub private provider;
+    ReputationServiceDependencyStub private service;
 
     function setUp() public {
         validator = new ReputationDependencyValidationHarness();
-        identity = new IdentityDependencyStub();
-        token = new UsdcDependencyStub();
+        identity = new ReputationIdentityDependencyStub();
+        token = new ReputationUsdcDependencyStub();
         sanctions = new MockSanctionsList();
-        provider = new ProviderDependencyStub(address(identity), address(token), address(sanctions));
-        service = new ServiceDependencyStub(address(identity), address(provider), address(sanctions));
+        provider = new ReputationProviderDependencyStub(address(identity), address(token), address(sanctions));
+        service = new ReputationServiceDependencyStub(address(identity), address(provider), address(sanctions));
     }
 
     function test_acceptsCompleteConsistentDependencyGraph() public view {
         _validate(address(identity), address(provider), address(service), address(sanctions), address(token));
     }
 
-    function test_rejectsEmptyAbiDependencies() public {
-        EmptyDependency empty = new EmptyDependency();
+    function test_rejectsMissingDependencyCode() public {
+        address missing = makeAddr("missing");
+        vm.expectRevert("identity not contract");
+        _validate(missing, address(provider), address(service), address(sanctions), address(token));
+        vm.expectRevert("provider registry not contract");
+        _validate(address(identity), missing, address(service), address(sanctions), address(token));
+        vm.expectRevert("service registry not contract");
+        _validate(address(identity), address(provider), missing, address(sanctions), address(token));
+        vm.expectRevert("sanctions oracle not contract");
+        _validate(address(identity), address(provider), address(service), missing, address(token));
+        vm.expectRevert("token not contract");
+        _validate(address(identity), address(provider), address(service), address(sanctions), missing);
+    }
 
-        vm.expectRevert("invalid identity");
-        _validate(address(empty), address(provider), address(service), address(sanctions), address(token));
+    function test_rejectsProviderWithoutRegistrationProbe() public {
+        ReputationProviderWiringOnlyStub incompleteProvider =
+            new ReputationProviderWiringOnlyStub(address(identity), address(token), address(sanctions));
+        ReputationServiceDependencyStub linkedService =
+            new ReputationServiceDependencyStub(address(identity), address(incompleteProvider), address(sanctions));
+
         vm.expectRevert("invalid provider registry");
-        _validate(address(identity), address(empty), address(service), address(sanctions), address(token));
+        _validate(
+            address(identity), address(incompleteProvider), address(linkedService), address(sanctions), address(token)
+        );
+    }
+
+    function test_rejectsServiceWithoutExistsProbe() public {
+        ReputationServiceWiringOnlyStub incompleteService =
+            new ReputationServiceWiringOnlyStub(address(identity), address(provider), address(sanctions));
+
         vm.expectRevert("invalid service registry");
-        _validate(address(identity), address(provider), address(empty), address(sanctions), address(token));
-        vm.expectRevert("invalid sanctions oracle");
-        _validate(address(identity), address(provider), address(service), address(empty), address(token));
-        vm.expectRevert("invalid usdc");
-        _validate(address(identity), address(provider), address(service), address(sanctions), address(empty));
+        _validate(address(identity), address(provider), address(incompleteService), address(sanctions), address(token));
     }
 
     function test_rejectsCrossWiredProviderDependencies() public {
-        IdentityDependencyStub otherIdentity = new IdentityDependencyStub();
-        ProviderDependencyStub wrongIdentity =
-            new ProviderDependencyStub(address(otherIdentity), address(token), address(sanctions));
+        ReputationIdentityDependencyStub otherIdentity = new ReputationIdentityDependencyStub();
+        ReputationProviderDependencyStub wrongIdentity =
+            new ReputationProviderDependencyStub(address(otherIdentity), address(token), address(sanctions));
         vm.expectRevert("provider identity mismatch");
         _validate(address(identity), address(wrongIdentity), address(service), address(sanctions), address(token));
 
-        UsdcDependencyStub otherToken = new UsdcDependencyStub();
-        ProviderDependencyStub wrongToken =
-            new ProviderDependencyStub(address(identity), address(otherToken), address(sanctions));
+        ReputationUsdcDependencyStub otherToken = new ReputationUsdcDependencyStub();
+        ReputationProviderDependencyStub wrongToken =
+            new ReputationProviderDependencyStub(address(identity), address(otherToken), address(sanctions));
         vm.expectRevert("provider token mismatch");
         _validate(address(identity), address(wrongToken), address(service), address(sanctions), address(token));
 
         MockSanctionsList otherOracle = new MockSanctionsList();
-        ProviderDependencyStub wrongOracle =
-            new ProviderDependencyStub(address(identity), address(token), address(otherOracle));
-        vm.expectRevert("sanctions binding mismatch");
+        ReputationProviderDependencyStub wrongOracle =
+            new ReputationProviderDependencyStub(address(identity), address(token), address(otherOracle));
+        vm.expectRevert("provider sanctions mismatch");
         _validate(address(identity), address(wrongOracle), address(service), address(sanctions), address(token));
     }
 
     function test_rejectsCrossWiredServiceDependencies() public {
-        IdentityDependencyStub otherIdentity = new IdentityDependencyStub();
-        ServiceDependencyStub wrongIdentity =
-            new ServiceDependencyStub(address(otherIdentity), address(provider), address(sanctions));
+        ReputationIdentityDependencyStub otherIdentity = new ReputationIdentityDependencyStub();
+        ReputationServiceDependencyStub wrongIdentity =
+            new ReputationServiceDependencyStub(address(otherIdentity), address(provider), address(sanctions));
         vm.expectRevert("service identity mismatch");
         _validate(address(identity), address(provider), address(wrongIdentity), address(sanctions), address(token));
 
-        ProviderDependencyStub otherProvider =
-            new ProviderDependencyStub(address(identity), address(token), address(sanctions));
-        ServiceDependencyStub wrongProvider =
-            new ServiceDependencyStub(address(identity), address(otherProvider), address(sanctions));
+        ReputationProviderDependencyStub otherProvider =
+            new ReputationProviderDependencyStub(address(identity), address(token), address(sanctions));
+        ReputationServiceDependencyStub wrongProvider =
+            new ReputationServiceDependencyStub(address(identity), address(otherProvider), address(sanctions));
         vm.expectRevert("service provider mismatch");
         _validate(address(identity), address(provider), address(wrongProvider), address(sanctions), address(token));
 
         MockSanctionsList otherOracle = new MockSanctionsList();
-        ServiceDependencyStub wrongOracle =
-            new ServiceDependencyStub(address(identity), address(provider), address(otherOracle));
-        vm.expectRevert("sanctions binding mismatch");
+        ReputationServiceDependencyStub wrongOracle =
+            new ReputationServiceDependencyStub(address(identity), address(provider), address(otherOracle));
+        vm.expectRevert("service sanctions mismatch");
         _validate(address(identity), address(provider), address(wrongOracle), address(sanctions), address(token));
     }
 

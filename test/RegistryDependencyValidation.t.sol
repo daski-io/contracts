@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {AgentIndex} from "../src/AgentIndex.sol";
 import {ProviderRegistry} from "../src/ProviderRegistry.sol";
 import {ServiceRegistry} from "../src/ServiceRegistry.sol";
@@ -14,6 +15,24 @@ import {MockUSDC} from "./mocks/MockUSDC.sol";
 
 contract WrongDecimalsToken is ERC20 {
     constructor() ERC20("Wrong Decimals", "WRONG") {}
+}
+
+contract Erc721OnlyIdentity is ERC721 {
+    constructor() ERC721("Wrong Identity", "WRONG") {}
+}
+
+contract DecimalsOnlyToken {
+    function decimals() external pure returns (uint8) {
+        return 6;
+    }
+}
+
+contract IdentityOnlyProvider {
+    address public immutable identity;
+
+    constructor(address identity_) {
+        identity = identity_;
+    }
 }
 
 contract RegistryDependencyValidationTest is Test {
@@ -44,6 +63,16 @@ contract RegistryDependencyValidationTest is Test {
         vm.expectRevert("invalid identity");
         new ERC1967Proxy(
             address(implementation), abi.encodeCall(AgentIndex.initialize, (address(usdc), address(sanctions), admin))
+        );
+    }
+
+    function test_agentIndexRejectsErc721WithoutAgentWallet() public {
+        AgentIndex implementation = new AgentIndex();
+        Erc721OnlyIdentity wrongIdentity = new Erc721OnlyIdentity();
+        vm.expectRevert("invalid identity");
+        new ERC1967Proxy(
+            address(implementation),
+            abi.encodeCall(AgentIndex.initialize, (address(wrongIdentity), address(sanctions), admin))
         );
     }
 
@@ -80,6 +109,13 @@ contract RegistryDependencyValidationTest is Test {
         _deployProviderProxy(address(implementation), address(identity), address(wrongDecimals));
     }
 
+    function test_providerRegistryRejectsDecimalsOnlyToken() public {
+        ProviderRegistry implementation = new ProviderRegistry();
+        DecimalsOnlyToken decimalsOnly = new DecimalsOnlyToken();
+        vm.expectRevert("invalid usdc");
+        _deployProviderProxy(address(implementation), address(identity), address(decimalsOnly));
+    }
+
     function test_serviceRegistryRejectsIdentityWithoutCode() public {
         ProviderRegistry providers = _deployProvider(address(identity), address(usdc));
         address missingIdentity = makeAddr("missingServiceIdentity");
@@ -106,6 +142,13 @@ contract RegistryDependencyValidationTest is Test {
         ServiceRegistry implementation = new ServiceRegistry();
         vm.expectRevert("invalid provider registry");
         _deployServicesProxy(address(implementation), address(identity), address(usdc));
+    }
+
+    function test_serviceRegistryRejectsIdentityOnlyProvider() public {
+        ServiceRegistry implementation = new ServiceRegistry();
+        IdentityOnlyProvider identityOnly = new IdentityOnlyProvider(address(identity));
+        vm.expectRevert("invalid provider registry");
+        _deployServicesProxy(address(implementation), address(identity), address(identityOnly));
     }
 
     function test_serviceRegistryRejectsCrossWiredIdentity() public {

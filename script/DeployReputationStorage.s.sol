@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {Script} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ReputationStorage} from "../src/ReputationStorage.sol";
 import {ISchemaRegistry} from "../src/interfaces/IEAS.sol";
@@ -11,7 +12,12 @@ import {ReputationSafeValidation} from "./ReputationSafeValidation.sol";
 
 /// @notice Deploys a configured reputation resolver that remains paused until
 ///         its reviewed Safe accepts administration and explicitly activates it.
-contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyValidation, ReputationSafeValidation {
+contract DeployReputationStorage is
+    Script,
+    ReputationEASIdentity,
+    ReputationDependencyValidation,
+    ReputationSafeValidation
+{
     struct DeploymentConfig {
         address admin;
         address finalAdmin;
@@ -23,8 +29,6 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
         address sanctionsOracle;
         address canonicalToken;
         address eas;
-        bool allowNonCanonicalEAS;
-        SafeProfile safeProfile;
     }
 
     error InvalidPauseGuardian();
@@ -33,7 +37,6 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
 
     function run() external returns (address proxyAddress, bytes32 outcomeSchema, bytes32 confirmationSchema) {
         uint256 adminPrivateKey = vm.envUint("STANDARD_REPUTATION_ADMIN_PRIVATE_KEY");
-        address[] memory noModules = new address[](0);
         DeploymentConfig memory config = DeploymentConfig({
             admin: vm.addr(adminPrivateKey),
             finalAdmin: vm.envAddress("STANDARD_REPUTATION_FINAL_ADMIN"),
@@ -44,16 +47,7 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
             serviceRegistry: vm.envAddress("SERVICE_REGISTRY_ADDRESS"),
             sanctionsOracle: vm.envAddress("SANCTIONS_ORACLE_ADDRESS"),
             canonicalToken: vm.envAddress("STANDARD_RAIL_CANONICAL_TOKEN"),
-            eas: vm.envAddress("EAS_ADDRESS"),
-            allowNonCanonicalEAS: vm.envOr("STANDARD_REPUTATION_ALLOW_NON_CANONICAL_EAS", false),
-            safeProfile: SafeProfile({
-                singleton: vm.envAddress("STANDARD_REPUTATION_SAFE_SINGLETON"),
-                owners: vm.envAddress("STANDARD_REPUTATION_SAFE_OWNERS", ","),
-                threshold: vm.envUint("STANDARD_REPUTATION_SAFE_THRESHOLD"),
-                modules: vm.envOr("STANDARD_REPUTATION_SAFE_MODULES", ",", noModules),
-                guard: vm.envOr("STANDARD_REPUTATION_SAFE_GUARD", address(0)),
-                fallbackHandler: vm.envAddress("STANDARD_REPUTATION_SAFE_FALLBACK_HANDLER")
-            })
+            eas: canonicalEAS(block.chainid)
         });
 
         _validateDependencies(
@@ -64,7 +58,7 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
             config.canonicalToken
         );
         _validateGovernance(config);
-        ISchemaRegistry schemaRegistry = _validateEAS(config.eas, config.allowNonCanonicalEAS);
+        ISchemaRegistry schemaRegistry = _validateEAS(config.eas);
 
         vm.startBroadcast(adminPrivateKey);
         ReputationStorage implementation = new ReputationStorage();
@@ -99,13 +93,13 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
         reputation.transferAdmin(config.finalAdmin);
         vm.stopBroadcast();
 
-        _validateEAS(config.eas, config.allowNonCanonicalEAS);
+        _validateEAS(config.eas);
         _requireHandoffReady(reputation, config, outcomeSchema, confirmationSchema);
         proxyAddress = address(reputation);
     }
 
     function _validateGovernance(DeploymentConfig memory config) internal view {
-        _validateSafeProfile(config.finalAdmin, config.safeProfile);
+        _validateSafe(config.finalAdmin);
         if (
             config.pauseGuardian == address(0) || config.pauseGuardian == config.admin
                 || config.pauseGuardian == config.finalAdmin || config.pauseGuardian == config.orderSigner
@@ -129,7 +123,7 @@ contract DeployReputationStorage is ReputationEASIdentity, ReputationDependencyV
             config.sanctionsOracle,
             config.canonicalToken
         );
-        _validateSafeProfile(config.finalAdmin, config.safeProfile);
+        _validateSafe(config.finalAdmin);
         bool ready = reputation.isConfigured() && reputation.admin() == config.admin
             && reputation.pendingAdmin() == config.finalAdmin && reputation.pauseGuardian() == config.pauseGuardian
             && reputation.externalDependencyPaused() && reputation.orderSigner() == config.orderSigner

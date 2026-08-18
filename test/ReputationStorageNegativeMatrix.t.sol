@@ -6,6 +6,19 @@ import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol
 import {ReputationTestBase} from "./helpers/ReputationTestBase.sol";
 
 contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
+    function test_acceptsRegisteredProviderAgentZero() public {
+        providers.setRegistered(0, true);
+        services.setService(serviceId, 0);
+        ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("agent-zero"));
+        permit.providerAgentId = 0;
+        permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
+
+        _register(permit);
+
+        (,,,,, uint256 transactions) = reputation.getProviderStats(0);
+        assertEq(transactions, 1);
+    }
+
     function test_rejectsEveryZeroOrderFieldClass() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("zero-order"));
         permit.orderKey = bytes32(0);

@@ -53,29 +53,37 @@ Deploy and finalize the fresh standard-order reputation resolver with
 with `DeployOutcomeSplitter.s.sol`. Validate and write the public artifact with
 `WriteOutcomeSplitterManifest.s.sol`.
 
-The splitter deployment's current-state Circle check is an advisory broadcast
-preflight. `WriteOutcomeSplitterManifest.s.sol` is the sole activation gate: it
-checks the Circle proxy, implementation, metadata, control roles, pause state,
-route blacklists, starting balance, and release sequence at the exact claimed
-finalized activation block hash.
+`WriteOutcomeSplitterManifest.s.sol` is the sole activation gate and must run
+against a Base Sepolia fork pinned to the claimed activation block:
+
+```bash
+forge script script/WriteOutcomeSplitterManifest.s.sol:WriteOutcomeSplitterManifest \
+  --fork-url "$BASE_SEPOLIA_RPC_URL" \
+  --fork-block-number "$STANDARD_RAIL_SPLITTER_ACTIVATION_BLOCK_NUMBER" \
+  --no-storage-caching
+```
+
+The script requires the fork block number to match the manifest input, verifies
+that block's canonical hash and finalized status through RPC, and checks Circle
+USDC readiness, starting balance, and release sequence using ordinary calls on
+that fork. The mandatory `--no-storage-caching` flag prevents cached pre-reorg
+fork state from being labeled with the finalized block hash.
 
 The reputation deployment requires `STANDARD_REPUTATION_FINAL_ADMIN` to be a
-threshold-two-or-higher Safe and `STANDARD_REPUTATION_PAUSE_GUARDIAN` to be a
-distinct nonzero address. It leaves the configured proxy paused with the Safe
-as pending admin; the Safe must accept administration before it can unpause the
-resolver. Base and Base Sepolia deployments also pin the reviewed EAS and
-SchemaRegistry proxy and implementation identities. Other development chains
-require the explicit `STANDARD_REPUTATION_ALLOW_NON_CANONICAL_EAS` override.
+canonical SafeL2 v1.4.1 proxy with a threshold of at least two, no modules, a
+zero guard, and the canonical compatibility fallback handler. The Safe must
+have at least two unique nonzero owners and its threshold cannot exceed the
+owner count.
+`STANDARD_REPUTATION_PAUSE_GUARDIAN` must be a distinct nonzero address. Review
+the Safe address and owners independently as part of the release process. The
+script leaves the configured proxy paused with the Safe as pending admin; the
+Safe must accept administration before it can unpause the resolver.
 
-The reviewed Safe profile is supplied explicitly with
-`STANDARD_REPUTATION_SAFE_SINGLETON`, comma-separated
-`STANDARD_REPUTATION_SAFE_OWNERS`, `STANDARD_REPUTATION_SAFE_THRESHOLD`, and
-`STANDARD_REPUTATION_SAFE_FALLBACK_HANDLER`. The optional
-`STANDARD_REPUTATION_SAFE_MODULES` and `STANDARD_REPUTATION_SAFE_GUARD`
-default to an empty module set and the zero address. Validation requires exact
-owner, threshold, module, guard, and handler matches; only the source-pinned
-canonical Safe or SafeL2 v1.4.1 profiles on Base and Base Sepolia pass proxy,
-singleton, and fallback-handler runtime identity checks.
+Reputation deployment is limited to Base and Base Sepolia. It uses the
+canonical EAS and SchemaRegistry addresses for the selected chain and verifies
+that both have code and that EAS reports the canonical registry. Implementation
+versions are recorded during release review rather than hard-coded in the
+deployment script.
 
 Standard-order reputation treats the configured order signer as the settlement
 evidence authority. Signed snapshot block numbers and hashes are evidence, not
@@ -98,13 +106,13 @@ construction, fee-on-transfer behavior, partial release, and reentrancy.
 The factory applies the same deployability checks before returning a predicted
 CREATE2 address.
 
-Base Sepolia release tooling pins Circle's canonical USDC address, proxy bytecode,
-and reviewed implementation. It also verifies token metadata and refuses to
-activate a route while USDC is paused or the splitter or either recipient is
-blacklisted. Circle's pause and blacklist controls can still stop an existing
-immutable route; recipients cannot be rotated and the splitter has no rescue
-path. Direct native-currency transfers revert, while EVM-forced native currency
-remains outside token accounting and cannot be withdrawn.
+Base Sepolia release tooling requires Circle's canonical USDC address to contain
+token code and report six decimals. It refuses to activate a route while USDC is
+paused or the splitter or either recipient is blacklisted. Circle's pause and
+blacklist controls can still stop an existing immutable route; recipients cannot
+be rotated and the splitter has no rescue path. Direct native-currency transfers
+revert, while EVM-forced native currency remains outside token accounting and
+cannot be withdrawn.
 
 ## License
 

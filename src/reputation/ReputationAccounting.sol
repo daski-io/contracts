@@ -3,11 +3,69 @@ pragma solidity ^0.8.24;
 
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IServiceRegistry} from "../interfaces/IServiceRegistry.sol";
-import {ReputationQueries} from "./ReputationQueries.sol";
+import {ReputationAdmin} from "./ReputationAdmin.sol";
 
 /// @notice Signed standard-order registration and refund accounting.
-abstract contract ReputationAccounting is ReputationQueries {
+abstract contract ReputationAccounting is ReputationAdmin {
     uint256 internal constant VALUE_WEIGHT_FLOOR = 250_000;
+
+    function providerIdentitySnapshotHash(StandardReputationOrderV1 calldata permit) public view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                PROVIDER_IDENTITY_SNAPSHOT_V1_TYPEHASH,
+                block.chainid,
+                permit.providerAgentId,
+                permit.serviceId,
+                permit.identityRegistry,
+                permit.providerRegistry,
+                permit.serviceRegistry,
+                permit.providerOwner,
+                permit.providerAgentWallet,
+                permit.providerPayee,
+                permit.blockNumber,
+                permit.blockHash
+            )
+        );
+    }
+
+    function getRecord(bytes32 orderKey) external view returns (ReputationRecord memory) {
+        return _records[orderKey];
+    }
+
+    function getRecordCount() external view returns (uint256) {
+        return recordKeys.length;
+    }
+
+    function getProviderStats(uint256 id) external view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        return (
+            completedCount[id],
+            failedCount[id],
+            canceledCount[id],
+            confirmedCount[id],
+            notConfirmedCount[id],
+            providerTransactionCount[id]
+        );
+    }
+
+    function getServiceStats(bytes32 id)
+        external
+        view
+        returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256)
+    {
+        return (
+            completedByService[id],
+            failedByService[id],
+            canceledByService[id],
+            confirmedByService[id],
+            notConfirmedByService[id],
+            refundedAmountByService[id],
+            serviceTransactionCount[id]
+        );
+    }
+
+    function getBuyerStats(address payer) external view returns (uint256, uint256, uint256) {
+        return (payerTransactionCount[payer], payerConfirmedCount[payer], payerNotConfirmedCount[payer]);
+    }
 
     function registerOrder(StandardReputationOrderV1 calldata permit, bytes calldata signature)
         external
@@ -165,8 +223,7 @@ abstract contract ReputationAccounting is ReputationQueries {
     }
 
     function _encodeOrder(StandardReputationOrderV1 calldata p) private pure returns (bytes memory) {
-        // A single 22-argument abi.encode exceeds the compiler stack frame.
-        // Every argument is static, so concatenated halves encode identically.
+        // Static arguments let concatenated halves avoid the compiler's stack-frame limit.
         return bytes.concat(
             abi.encode(
                 ORDER_TYPEHASH,

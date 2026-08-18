@@ -62,3 +62,27 @@ contract ReputationServiceDependencyStub {
         return false;
     }
 }
+
+contract ReputationProviderWiringOnlyStub {
+    address public identity;
+    address public usdc;
+    address public sanctionsOracle;
+
+    constructor(address identity_, address usdc_, address sanctionsOracle_) {
+        identity = identity_;
+        usdc = usdc_;
+        sanctionsOracle = sanctionsOracle_;
+    }
+}
+
+contract ReputationServiceWiringOnlyStub {
+    address public identity;
+    address public providerRegistry;
+    address public sanctionsOracle;
+
+    constructor(address identity_, address providerRegistry_, address sanctionsOracle_) {
+        identity = identity_;
+        providerRegistry = providerRegistry_;
+        sanctionsOracle = sanctionsOracle_;
+    }
+}

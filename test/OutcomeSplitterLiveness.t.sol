@@ -7,114 +7,76 @@ import {StandardRailCircleUSDC} from "../script/StandardRailCircleUSDC.sol";
 import {MockCircleUSDC} from "./mocks/MockCircleUSDC.sol";
 
 contract StandardRailCircleUSDCHarness {
-    function validateIdentity(
-        address token,
-        uint256 chainId,
-        address expectedToken,
-        bytes32 proxyCodeHash,
-        address implementation,
-        bytes32 implementationCodeHash
-    ) external view returns (address) {
-        return StandardRailCircleUSDC.validateIdentity(
-            token, chainId, expectedToken, proxyCodeHash, implementation, implementationCodeHash
-        );
-    }
-
-    function validateBehavior(address token, address splitter, address provider, address daski) external view {
-        StandardRailCircleUSDC.validateBehavior(token, splitter, provider, daski);
+    function validate(address token, address splitter, address provider, address daski) external view {
+        StandardRailCircleUSDC.validate(token, splitter, provider, daski);
     }
 }
 
-contract WrongMetadataCircleUSDC is MockCircleUSDC {
-    function name() public pure override returns (string memory) {
-        return "USD Coin";
+contract WrongDecimalsCircleUSDC is MockCircleUSDC {
+    function decimals() public pure override returns (uint8) {
+        return 18;
     }
 }
 
 contract OutcomeSplitterLivenessTest is Test {
+    address private constant BASE_SEPOLIA_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
+
     MockCircleUSDC private token;
+    MockCircleUSDC private tokenCodeSource;
     StandardRailCircleUSDCHarness private circleHarness;
     address private provider = makeAddr("provider");
     address private daski = makeAddr("daski");
 
     function setUp() public {
         vm.chainId(84_532);
-        token = new MockCircleUSDC();
+        tokenCodeSource = new MockCircleUSDC();
+        vm.etch(BASE_SEPOLIA_USDC, address(tokenCodeSource).code);
+        token = MockCircleUSDC(BASE_SEPOLIA_USDC);
         circleHarness = new StandardRailCircleUSDCHarness();
     }
 
-    function testCircleIdentityAndBehaviorChecks() public {
-        assertEq(
-            circleHarness.validateIdentity(
-                address(token),
-                block.chainid,
-                address(token),
-                address(token).codehash,
-                address(token),
-                address(token).codehash
-            ),
-            address(token)
-        );
-        circleHarness.validateBehavior(address(token), makeAddr("splitter"), provider, daski);
-    }
+    function testCanonicalTokenAddressCodeAndDecimalsChecks() public {
+        address splitter = makeAddr("splitter");
+        circleHarness.validate(address(token), splitter, provider, daski);
 
-    function testCircleIdentityRejectsUnexpectedCodeAndImplementation() public {
-        vm.expectRevert(bytes("canonical token proxy code hash mismatch"));
-        circleHarness.validateIdentity(
-            address(token), block.chainid, address(token), bytes32(uint256(1)), address(token), address(token).codehash
-        );
+        vm.chainId(1);
+        vm.expectRevert(bytes("standard Testnet rail is Base Sepolia only"));
+        circleHarness.validate(address(token), splitter, provider, daski);
+        vm.chainId(84_532);
 
-        vm.expectRevert(bytes("canonical token implementation mismatch"));
-        circleHarness.validateIdentity(
-            address(token),
-            block.chainid,
-            address(token),
-            address(token).codehash,
-            makeAddr("implementation"),
-            bytes32(0)
-        );
+        vm.expectRevert(bytes("canonical token address mismatch"));
+        circleHarness.validate(address(tokenCodeSource), splitter, provider, daski);
 
-        vm.expectRevert(bytes("canonical token implementation code hash mismatch"));
-        circleHarness.validateIdentity(
-            address(token), block.chainid, address(token), address(token).codehash, address(token), bytes32(uint256(1))
-        );
-    }
+        vm.etch(address(token), bytes(""));
+        vm.expectRevert(bytes("canonical token has no code"));
+        circleHarness.validate(address(token), splitter, provider, daski);
 
-    function testCircleReadinessRejectsMetadataAndMissingRoles() public {
-        WrongMetadataCircleUSDC wrongMetadata = new WrongMetadataCircleUSDC();
-        vm.expectRevert(bytes("canonical token name mismatch"));
-        circleHarness.validateBehavior(address(wrongMetadata), makeAddr("splitter"), provider, daski);
-
-        token.setPauser(address(0));
-        vm.expectRevert(bytes("canonical token pauser missing"));
-        circleHarness.validateBehavior(address(token), makeAddr("splitter"), provider, daski);
-
-        token.setPauser(address(1));
-        token.setBlacklister(address(0));
-        vm.expectRevert(bytes("canonical token blacklister missing"));
-        circleHarness.validateBehavior(address(token), makeAddr("splitter"), provider, daski);
+        WrongDecimalsCircleUSDC wrongDecimals = new WrongDecimalsCircleUSDC();
+        vm.etch(address(token), address(wrongDecimals).code);
+        vm.expectRevert(bytes("canonical token decimals mismatch"));
+        circleHarness.validate(address(token), splitter, provider, daski);
     }
 
     function testCircleReadinessRejectsPauseAndBlacklists() public {
         address splitter = makeAddr("splitter");
         token.setPaused(true);
         vm.expectRevert(bytes("canonical token is paused"));
-        circleHarness.validateBehavior(address(token), splitter, provider, daski);
+        circleHarness.validate(address(token), splitter, provider, daski);
 
         token.setPaused(false);
         token.setBlacklisted(splitter, true);
         vm.expectRevert(bytes("splitter is blacklisted"));
-        circleHarness.validateBehavior(address(token), splitter, provider, daski);
+        circleHarness.validate(address(token), splitter, provider, daski);
 
         token.setBlacklisted(splitter, false);
         token.setBlacklisted(provider, true);
         vm.expectRevert(bytes("provider is blacklisted"));
-        circleHarness.validateBehavior(address(token), splitter, provider, daski);
+        circleHarness.validate(address(token), splitter, provider, daski);
 
         token.setBlacklisted(provider, false);
         token.setBlacklisted(daski, true);
         vm.expectRevert(bytes("Daski receiver is blacklisted"));
-        circleHarness.validateBehavior(address(token), splitter, provider, daski);
+        circleHarness.validate(address(token), splitter, provider, daski);
     }
 
     function testImmutableCircleControlsBlockReleaseWithoutChangingRoute() public {
@@ -146,7 +108,6 @@ contract OutcomeSplitterLivenessTest is Test {
 
     function testForcedNativeCurrencyRemainsOutsideTokenAccounting() public {
         OutcomeSplitter splitter = _deploySplitter();
-        // Models native currency delivered without executing receive or fallback.
         vm.deal(address(splitter), 1 ether);
         token.mint(address(splitter), 1_000_000);
 

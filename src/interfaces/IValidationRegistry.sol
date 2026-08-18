@@ -60,6 +60,8 @@ interface IValidationRegistry {
 
     /// @notice Returns the matching count and response sum for one page.
     /// @dev Callers aggregate pages and divide the total sum by total count.
+    ///      An empty validator filter includes every validator and is an
+    ///      untrusted raw aggregate; it must not be treated as a trust score.
     ///      `nextOffset` is the next request-list position to scan.
     function getSummaryPaginated(
         uint256 agentId,

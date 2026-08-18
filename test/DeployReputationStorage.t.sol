@@ -77,7 +77,7 @@ contract DeployReputationStorageTest is Test {
         reputation.pauseExternalDependency();
         script.requireHandoffReady(reputation, config, outcomeSchema, confirmationSchema);
         ReputationProviderDependencyStub(config.providerRegistry).setSanctionsOracle(makeAddr("wrong-oracle"));
-        vm.expectRevert("sanctions binding mismatch");
+        vm.expectRevert("provider sanctions mismatch");
         script.requireHandoffReady(reputation, config, outcomeSchema, confirmationSchema);
         ReputationProviderDependencyStub(config.providerRegistry).setSanctionsOracle(config.sanctionsOracle);
         vm.expectRevert("admin transfer pending");
@@ -108,9 +108,7 @@ contract DeployReputationStorageTest is Test {
             serviceRegistry: address(service),
             sanctionsOracle: address(sanctions),
             canonicalToken: address(token),
-            eas: address(new MockEAS()),
-            allowNonCanonicalEAS: true,
-            safeProfile: _safeProfile()
+            eas: address(new MockEAS())
         });
     }
 
@@ -143,18 +141,6 @@ contract DeployReputationStorageTest is Test {
             new ThresholdSafeStub(
                 address(safeSingleton), threshold, _owners(), modules, address(0), address(safeHandler)
             );
-    }
-
-    function _safeProfile() private returns (ReputationSafeValidation.SafeProfile memory profile) {
-        address[] memory modules = new address[](0);
-        profile = ReputationSafeValidation.SafeProfile({
-            singleton: address(safeSingleton),
-            owners: _owners(),
-            threshold: 2,
-            modules: modules,
-            guard: address(0),
-            fallbackHandler: address(safeHandler)
-        });
     }
 
     function _owners() private returns (address[] memory owners) {
