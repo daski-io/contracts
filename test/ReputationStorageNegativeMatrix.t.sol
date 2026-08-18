@@ -15,13 +15,9 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
         permit.authorizationKey = bytes32(0);
         _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroOrderIdentifier.selector));
 
-        permit = _permit(keccak256("zero-provider"));
-        permit.providerAgentId = 0;
-        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
-
         permit = _permit(keccak256("zero-service"));
         permit.serviceId = bytes32(0);
-        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroService.selector));
 
         permit = _permit(keccak256("zero-payer"));
         permit.payer = address(0);

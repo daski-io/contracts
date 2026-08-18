@@ -5,6 +5,7 @@ import {IValidationRegistry} from "./interfaces/IValidationRegistry.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski-specific, ERC-8004-inspired validation registry. Storage and
@@ -37,6 +38,7 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
 
     function initialize(address identityRegistry_, address sanctionsOracle_, address _admin) external initializer {
         require(identityRegistry_ != address(0), "zero identity");
+        LibDependencyValidation.requireIdentity(identityRegistry_);
         __Admin2Step_init(_admin, sanctionsOracle_);
         identityRegistry = ICanonicalIdentity(identityRegistry_);
     }
@@ -194,6 +196,18 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         uint256 end = requests.length - offset > limit ? offset + limit : requests.length;
         bytes32 tagHash = keccak256(bytes(tag));
         bool filterTag = bytes(tag).length != 0;
+        (count, totalResponse) = _accumulateSummary(requests, validatorAddresses, tagHash, filterTag, offset, end);
+        nextOffset = end;
+    }
+
+    function _accumulateSummary(
+        bytes32[] storage requests,
+        address[] calldata validatorAddresses,
+        bytes32 tagHash,
+        bool filterTag,
+        uint256 offset,
+        uint256 end
+    ) private view returns (uint64 count, uint256 totalResponse) {
         for (uint256 i = offset; i < end; i++) {
             Validation storage v = _validations[requests[i]];
             if (!v.hasResponse) continue;
@@ -202,7 +216,6 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
             count++;
             totalResponse += v.response;
         }
-        nextOffset = end;
     }
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {

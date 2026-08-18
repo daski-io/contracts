@@ -8,9 +8,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
+import {StandardRailCircleUSDC} from "./StandardRailCircleUSDC.sol";
+import {StandardRailCircleUSDCActivation} from "./StandardRailCircleUSDCActivation.sol";
 
-/// @notice Validates a deployed splitter and writes the public manifest input.
-contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
+/// @notice Sole activation gate for a splitter; binds validation to one finalized block hash.
+contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase, StandardRailCircleUSDCActivation {
     using Strings for uint256;
 
     bytes32 private constant OUTCOME_SPLITTER_DEPLOYED_TOPIC =
@@ -51,8 +53,8 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         ManifestInput memory input = _readInput();
         _validate(input);
         (input.deploymentTransactionIndex, input.deploymentLogIndex) = _deploymentPosition(input);
-        _validateActivationCheckpoint(input);
-        json = _writeManifest(input);
+        StandardRailCircleUSDC.Snapshot memory tokenSnapshot = _validateActivationCheckpoint(input);
+        json = _writeManifest(input, tokenSnapshot);
     }
 
     function _readInput() internal view returns (ManifestInput memory input) {
@@ -111,7 +113,10 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         );
     }
 
-    function _validateActivationCheckpoint(ManifestInput memory input) internal {
+    function _validateActivationCheckpoint(ManifestInput memory input)
+        internal
+        returns (StandardRailCircleUSDC.Snapshot memory tokenSnapshot)
+    {
         bytes memory finalizedBlock = vm.rpc("eth_getBlockByNumber", "[\"finalized\",false]");
         uint256 finalizedBlockNumber = vm.parseJsonUint(string(finalizedBlock), ".number");
         require(input.activationBlockNumber <= finalizedBlockNumber, "activation block is not finalized");
@@ -127,12 +132,19 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
             "activation block hash mismatch"
         );
 
+        string memory blockReference = _rpcBlockReference(input.activationBlockHash);
+        tokenSnapshot = _historicalCircleSnapshot(
+            input.token, address(input.splitter), input.provider, input.daski, blockReference
+        );
+        StandardRailCircleUSDC.validateSnapshot(block.chainid, input.token, tokenSnapshot);
+
         uint256 historicalBalance =
-            _historicalWord(input.token, abi.encodeCall(IERC20.balanceOf, (address(input.splitter))), blockTag);
+            _historicalUint(input.token, abi.encodeCall(IERC20.balanceOf, (address(input.splitter))), blockReference);
         require(historicalBalance == input.startingTokenBalance, "starting token balance mismatch");
 
-        uint256 historicalReleaseSequence =
-            _historicalWord(address(input.splitter), abi.encodeCall(IOutcomeSplitter.releaseSequence, ()), blockTag);
+        uint256 historicalReleaseSequence = _historicalUint(
+            address(input.splitter), abi.encodeCall(IOutcomeSplitter.releaseSequence, ()), blockReference
+        );
         require(historicalReleaseSequence == input.startingReleaseSequence, "starting release sequence mismatch");
     }
 
@@ -205,20 +217,6 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         require(logIndex <= MAX_SAFE_JSON_INTEGER, "deployment log index range");
     }
 
-    function _historicalWord(address target, bytes memory callData, string memory blockTag)
-        internal
-        returns (uint256 value)
-    {
-        bytes memory result = vm.rpc(
-            "eth_call",
-            string.concat(
-                "[{\"to\":\"", vm.toString(target), "\",\"data\":\"", vm.toString(callData), "\"},\"", blockTag, "\"]"
-            )
-        );
-        require(result.length == 32, "invalid historical eth_call result");
-        value = abi.decode(result, (uint256));
-    }
-
     function _rpcBlockTag(uint256 blockNumber) internal pure returns (string memory) {
         bytes memory padded = bytes(blockNumber.toHexString());
         uint256 firstDigit = 2;
@@ -233,6 +231,10 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
             minimal[i - firstDigit + 2] = padded[i];
         }
         return string(minimal);
+    }
+
+    function _rpcBlockReference(bytes32 blockHash) internal pure returns (string memory) {
+        return string.concat("{\"blockHash\":\"", vm.toString(blockHash), "\",\"requireCanonical\":true}");
     }
 
     function _initCodeHash(ManifestInput memory input) internal view returns (bytes32) {
@@ -272,10 +274,27 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         );
     }
 
-    function _writeManifest(ManifestInput memory input) internal returns (string memory json) {
+    function _writeManifest(ManifestInput memory input, StandardRailCircleUSDC.Snapshot memory tokenSnapshot)
+        internal
+        returns (string memory json)
+    {
         string memory object = "splitter";
         vm.serializeUint(object, "chainId", block.chainid);
         vm.serializeAddress(object, "canonicalToken", input.token);
+        vm.serializeBytes32(object, "canonicalTokenProxyRuntimeCodeHash", tokenSnapshot.proxyCodeHash);
+        vm.serializeAddress(object, "canonicalTokenImplementation", tokenSnapshot.implementation);
+        vm.serializeBytes32(object, "canonicalTokenImplementationRuntimeCodeHash", tokenSnapshot.implementationCodeHash);
+        vm.serializeBytes32(object, "canonicalTokenNameHash", tokenSnapshot.nameHash);
+        vm.serializeBytes32(object, "canonicalTokenSymbolHash", tokenSnapshot.symbolHash);
+        vm.serializeBytes32(object, "canonicalTokenCurrencyHash", tokenSnapshot.currencyHash);
+        vm.serializeUint(object, "canonicalTokenDecimals", tokenSnapshot.decimals);
+        vm.serializeBytes32(object, "canonicalTokenVersionHash", tokenSnapshot.versionHash);
+        vm.serializeAddress(object, "canonicalTokenPauser", tokenSnapshot.pauser);
+        vm.serializeAddress(object, "canonicalTokenBlacklister", tokenSnapshot.blacklister);
+        vm.serializeBool(object, "canonicalTokenPaused", tokenSnapshot.paused);
+        vm.serializeBool(object, "splitterTokenBlacklisted", tokenSnapshot.splitterBlacklisted);
+        vm.serializeBool(object, "providerTokenBlacklisted", tokenSnapshot.providerBlacklisted);
+        vm.serializeBool(object, "daskiReceiverTokenBlacklisted", tokenSnapshot.daskiBlacklisted);
         vm.serializeAddress(object, "providerPayee", input.provider);
         vm.serializeAddress(object, "daskiCommissionReceiver", input.daski);
         vm.serializeUint(object, "commissionBps", input.commissionBps);

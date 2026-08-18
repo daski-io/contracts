@@ -3,10 +3,10 @@ pragma solidity ^0.8.24;
 
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IServiceRegistry} from "../interfaces/IServiceRegistry.sol";
-import {ReputationAdmin} from "./ReputationAdmin.sol";
+import {ReputationQueries} from "./ReputationQueries.sol";
 
-/// @notice Signed standard-order registration, refund accounting, and views.
-abstract contract ReputationAccounting is ReputationAdmin {
+/// @notice Signed standard-order registration and refund accounting.
+abstract contract ReputationAccounting is ReputationQueries {
     uint256 internal constant VALUE_WEIGHT_FLOOR = 250_000;
 
     function registerOrder(StandardReputationOrderV1 calldata permit, bytes calldata signature)
@@ -75,6 +75,10 @@ abstract contract ReputationAccounting is ReputationAdmin {
         ReputationRecord storage record = _records[permit.orderKey];
         if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
         if (record.authorizationKey != permit.authorizationKey) revert AuthorizationMismatch();
+        _requireNotSanctioned(record.payer);
+        _requireNotSanctioned(record.providerOwner);
+        _requireNotSanctioned(record.providerAgentWallet);
+        _requireNotSanctioned(record.providerPayee);
         uint256 previous = refundedAmount[permit.orderKey];
         if (permit.cumulativeRefundedAmount <= previous) revert RefundNotMonotonic();
         if (permit.cumulativeRefundedAmount > record.grossAmount) revert RefundExceedsGross();
@@ -109,67 +113,9 @@ abstract contract ReputationAccounting is ReputationAdmin {
         );
     }
 
-    function providerIdentitySnapshotHash(StandardReputationOrderV1 calldata permit) public view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                PROVIDER_IDENTITY_SNAPSHOT_V1_TYPEHASH,
-                block.chainid,
-                permit.providerAgentId,
-                permit.serviceId,
-                permit.identityRegistry,
-                permit.providerRegistry,
-                permit.serviceRegistry,
-                permit.providerOwner,
-                permit.providerAgentWallet,
-                permit.providerPayee,
-                permit.blockNumber,
-                permit.blockHash
-            )
-        );
-    }
-
-    function getRecord(bytes32 orderKey) external view returns (ReputationRecord memory) {
-        return _records[orderKey];
-    }
-
-    function getRecordCount() external view returns (uint256) {
-        return recordKeys.length;
-    }
-
-    function getProviderStats(uint256 id) external view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        return (
-            completedCount[id],
-            failedCount[id],
-            canceledCount[id],
-            confirmedCount[id],
-            notConfirmedCount[id],
-            providerTransactionCount[id]
-        );
-    }
-
-    function getServiceStats(bytes32 id)
-        external
-        view
-        returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256)
-    {
-        return (
-            completedByService[id],
-            failedByService[id],
-            canceledByService[id],
-            confirmedByService[id],
-            notConfirmedByService[id],
-            refundedAmountByService[id],
-            serviceTransactionCount[id]
-        );
-    }
-
-    function getBuyerStats(address payer) external view returns (uint256, uint256, uint256) {
-        return (payerTransactionCount[payer], payerConfirmedCount[payer], payerNotConfirmedCount[payer]);
-    }
-
     function _validateOrder(StandardReputationOrderV1 calldata permit) private view {
         if (!(permit.orderKey != bytes32(0) && permit.authorizationKey != bytes32(0))) revert ZeroOrderIdentifier();
-        if (!(permit.providerAgentId != 0 && permit.serviceId != bytes32(0))) revert ZeroProviderOrService();
+        if (permit.serviceId == bytes32(0)) revert ZeroService();
         if (!(permit.payer != address(0) && permit.providerOwner != address(0)
                     && permit.providerAgentWallet != address(0))) revert ZeroParticipant();
         if (!(permit.providerPayee != address(0) && permit.canonicalToken == canonicalToken)) {
@@ -219,9 +165,8 @@ abstract contract ReputationAccounting is ReputationAdmin {
     }
 
     function _encodeOrder(StandardReputationOrderV1 calldata p) private pure returns (bytes memory) {
-        // A single 22-argument abi.encode cannot allocate its frame under
-        // --ir-minimum (the coverage build). Every argument is a static type,
-        // so two concatenated halves encode byte-identically.
+        // A single 22-argument abi.encode exceeds the compiler stack frame.
+        // Every argument is static, so concatenated halves encode identically.
         return bytes.concat(
             abi.encode(
                 ORDER_TYPEHASH,

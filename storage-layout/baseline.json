@@ -1,0 +1,2130 @@
+{
+  "contracts": [
+    {
+      "contract": "AgentIndex",
+      "storage": [
+        {
+          "label": "sanctionsOracle",
+          "offset": 0,
+          "order": 0,
+          "slot": "0",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ISanctionsList",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 1,
+          "slot": "1",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          }
+        },
+        {
+          "label": "admin",
+          "offset": 0,
+          "order": 2,
+          "slot": "50",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pendingAdmin",
+          "offset": 0,
+          "order": 3,
+          "slot": "51",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pauseGuardian",
+          "offset": 0,
+          "order": 4,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "externalDependencyPaused",
+          "offset": 20,
+          "order": 5,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 6,
+          "slot": "53",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
+          }
+        },
+        {
+          "label": "identity",
+          "offset": 0,
+          "order": 7,
+          "slot": "100",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ICanonicalIdentity",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "_agentIdOf",
+          "offset": 0,
+          "order": 8,
+          "slot": "101",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "_hasBinding",
+          "offset": 0,
+          "order": 9,
+          "slot": "102",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "bool",
+              "numberOfBytes": "1"
+            }
+          }
+        },
+        {
+          "label": "_registrationNonces",
+          "offset": 0,
+          "order": 10,
+          "slot": "103",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "_acceptingRegistrationNft",
+          "offset": 0,
+          "order": 11,
+          "slot": "104",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 12,
+          "slot": "105",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[50]",
+            "numberOfBytes": "1600"
+          }
+        }
+      ]
+    },
+    {
+      "contract": "ProviderRegistry",
+      "storage": [
+        {
+          "label": "sanctionsOracle",
+          "offset": 0,
+          "order": 0,
+          "slot": "0",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ISanctionsList",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 1,
+          "slot": "1",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          }
+        },
+        {
+          "label": "admin",
+          "offset": 0,
+          "order": 2,
+          "slot": "50",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pendingAdmin",
+          "offset": 0,
+          "order": 3,
+          "slot": "51",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pauseGuardian",
+          "offset": 0,
+          "order": 4,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "externalDependencyPaused",
+          "offset": 20,
+          "order": 5,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 6,
+          "slot": "53",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
+          }
+        },
+        {
+          "label": "_providers",
+          "offset": 0,
+          "order": 7,
+          "slot": "100",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => struct IProviderRegistry.Provider)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "struct IProviderRegistry.Provider",
+              "members": [
+                {
+                  "label": "agentId",
+                  "offset": 0,
+                  "slot": "0",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "registrationTime",
+                  "offset": 0,
+                  "slot": "1",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "isActive",
+                  "offset": 0,
+                  "slot": "2",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                }
+              ],
+              "numberOfBytes": "96"
+            }
+          }
+        },
+        {
+          "label": "_registered",
+          "offset": 0,
+          "order": 8,
+          "slot": "101",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => bool)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "bool",
+              "numberOfBytes": "1"
+            }
+          }
+        },
+        {
+          "label": "providerIds",
+          "offset": 0,
+          "order": 9,
+          "slot": "102",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "dynamic_array",
+            "label": "uint256[]",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "treasury",
+          "offset": 0,
+          "order": 10,
+          "slot": "103",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "usdc",
+          "offset": 0,
+          "order": 11,
+          "slot": "104",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract IERC20",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "identity",
+          "offset": 0,
+          "order": 12,
+          "slot": "105",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ICanonicalIdentity",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "listingFee",
+          "offset": 0,
+          "order": 13,
+          "slot": "106",
+          "type": {
+            "encoding": "inplace",
+            "label": "uint256",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 14,
+          "slot": "107",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[50]",
+            "numberOfBytes": "1600"
+          }
+        }
+      ]
+    },
+    {
+      "contract": "ServiceRegistry",
+      "storage": [
+        {
+          "label": "sanctionsOracle",
+          "offset": 0,
+          "order": 0,
+          "slot": "0",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ISanctionsList",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 1,
+          "slot": "1",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          }
+        },
+        {
+          "label": "admin",
+          "offset": 0,
+          "order": 2,
+          "slot": "50",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pendingAdmin",
+          "offset": 0,
+          "order": 3,
+          "slot": "51",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pauseGuardian",
+          "offset": 0,
+          "order": 4,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "externalDependencyPaused",
+          "offset": 20,
+          "order": 5,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 6,
+          "slot": "53",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
+          }
+        },
+        {
+          "label": "identity",
+          "offset": 0,
+          "order": 7,
+          "slot": "100",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ICanonicalIdentity",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "providerRegistry",
+          "offset": 0,
+          "order": 8,
+          "slot": "101",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract IProviderRegistry",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "_services",
+          "offset": 0,
+          "order": 9,
+          "slot": "102",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => struct IServiceRegistry.Service)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "struct IServiceRegistry.Service",
+              "members": [
+                {
+                  "label": "providerAgentId",
+                  "offset": 0,
+                  "slot": "0",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "serviceId",
+                  "offset": 0,
+                  "slot": "1",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "serviceSlug",
+                  "offset": 0,
+                  "slot": "2",
+                  "type": {
+                    "encoding": "bytes",
+                    "label": "string",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "version",
+                  "offset": 0,
+                  "slot": "3",
+                  "type": {
+                    "encoding": "bytes",
+                    "label": "string",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "serviceURI",
+                  "offset": 0,
+                  "slot": "4",
+                  "type": {
+                    "encoding": "bytes",
+                    "label": "string",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "serviceWallet",
+                  "offset": 0,
+                  "slot": "5",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "serviceWalletOwner",
+                  "offset": 0,
+                  "slot": "6",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "serviceWalletAgentWallet",
+                  "offset": 0,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "createdAt",
+                  "offset": 20,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "active",
+                  "offset": 28,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                }
+              ],
+              "numberOfBytes": "256"
+            }
+          }
+        },
+        {
+          "label": "_serviceExists",
+          "offset": 0,
+          "order": 10,
+          "slot": "103",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => bool)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "bool",
+              "numberOfBytes": "1"
+            }
+          }
+        },
+        {
+          "label": "_servicesByProvider",
+          "offset": 0,
+          "order": 11,
+          "slot": "104",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => bytes32[])",
+            "numberOfBytes": "32",
+            "value": {
+              "base": {
+                "encoding": "inplace",
+                "label": "bytes32",
+                "numberOfBytes": "32"
+              },
+              "encoding": "dynamic_array",
+              "label": "bytes32[]",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 12,
+          "slot": "105",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[50]",
+            "numberOfBytes": "1600"
+          }
+        }
+      ]
+    },
+    {
+      "contract": "ValidationRegistry",
+      "storage": [
+        {
+          "label": "sanctionsOracle",
+          "offset": 0,
+          "order": 0,
+          "slot": "0",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ISanctionsList",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 1,
+          "slot": "1",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          }
+        },
+        {
+          "label": "admin",
+          "offset": 0,
+          "order": 2,
+          "slot": "50",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pendingAdmin",
+          "offset": 0,
+          "order": 3,
+          "slot": "51",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pauseGuardian",
+          "offset": 0,
+          "order": 4,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "externalDependencyPaused",
+          "offset": 20,
+          "order": 5,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 6,
+          "slot": "53",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
+          }
+        },
+        {
+          "label": "identityRegistry",
+          "offset": 0,
+          "order": 7,
+          "slot": "100",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ICanonicalIdentity",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "_validations",
+          "offset": 0,
+          "order": 8,
+          "slot": "101",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => struct ValidationRegistry.Validation)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "struct ValidationRegistry.Validation",
+              "members": [
+                {
+                  "label": "validatorAddress",
+                  "offset": 0,
+                  "slot": "0",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "agentId",
+                  "offset": 0,
+                  "slot": "1",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "requestHash",
+                  "offset": 0,
+                  "slot": "2",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "response",
+                  "offset": 0,
+                  "slot": "3",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint8",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "responseHash",
+                  "offset": 0,
+                  "slot": "4",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "tag",
+                  "offset": 0,
+                  "slot": "5",
+                  "type": {
+                    "encoding": "bytes",
+                    "label": "string",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "lastUpdate",
+                  "offset": 0,
+                  "slot": "6",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "exists",
+                  "offset": 0,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "hasResponse",
+                  "offset": 1,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                }
+              ],
+              "numberOfBytes": "256"
+            }
+          }
+        },
+        {
+          "label": "_agentRequests",
+          "offset": 0,
+          "order": 9,
+          "slot": "102",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => bytes32[])",
+            "numberOfBytes": "32",
+            "value": {
+              "base": {
+                "encoding": "inplace",
+                "label": "bytes32",
+                "numberOfBytes": "32"
+              },
+              "encoding": "dynamic_array",
+              "label": "bytes32[]",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "_validatorRequests",
+          "offset": 0,
+          "order": 10,
+          "slot": "103",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => bytes32[])",
+            "numberOfBytes": "32",
+            "value": {
+              "base": {
+                "encoding": "inplace",
+                "label": "bytes32",
+                "numberOfBytes": "32"
+              },
+              "encoding": "dynamic_array",
+              "label": "bytes32[]",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 11,
+          "slot": "104",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[50]",
+            "numberOfBytes": "1600"
+          }
+        }
+      ]
+    },
+    {
+      "contract": "ReputationStorage",
+      "storage": [
+        {
+          "label": "sanctionsOracle",
+          "offset": 0,
+          "order": 0,
+          "slot": "0",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract ISanctionsList",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 1,
+          "slot": "1",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[49]",
+            "numberOfBytes": "1568"
+          }
+        },
+        {
+          "label": "admin",
+          "offset": 0,
+          "order": 2,
+          "slot": "50",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pendingAdmin",
+          "offset": 0,
+          "order": 3,
+          "slot": "51",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "pauseGuardian",
+          "offset": 0,
+          "order": 4,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "externalDependencyPaused",
+          "offset": 20,
+          "order": 5,
+          "slot": "52",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 6,
+          "slot": "53",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[47]",
+            "numberOfBytes": "1504"
+          }
+        },
+        {
+          "label": "_records",
+          "offset": 0,
+          "order": 7,
+          "slot": "100",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => struct ReputationStorageBase.ReputationRecord)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "struct ReputationStorageBase.ReputationRecord",
+              "members": [
+                {
+                  "label": "orderKey",
+                  "offset": 0,
+                  "slot": "0",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "authorizationKey",
+                  "offset": 0,
+                  "slot": "1",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "providerAgentId",
+                  "offset": 0,
+                  "slot": "2",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "serviceId",
+                  "offset": 0,
+                  "slot": "3",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "payer",
+                  "offset": 0,
+                  "slot": "4",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "providerOwner",
+                  "offset": 0,
+                  "slot": "5",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "providerAgentWallet",
+                  "offset": 0,
+                  "slot": "6",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "providerPayee",
+                  "offset": 0,
+                  "slot": "7",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "canonicalToken",
+                  "offset": 0,
+                  "slot": "8",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "address",
+                    "numberOfBytes": "20"
+                  }
+                },
+                {
+                  "label": "grossAmount",
+                  "offset": 0,
+                  "slot": "9",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint256",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "paidAt",
+                  "offset": 0,
+                  "slot": "10",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "providerIdentitySnapshotHash",
+                  "offset": 0,
+                  "slot": "11",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "listingManifestHash",
+                  "offset": 0,
+                  "slot": "12",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "releaseEvidenceHash",
+                  "offset": 0,
+                  "slot": "13",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "outcome",
+                  "offset": 0,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "enum ReputationStorageBase.TransactionOutcome",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "confirmation",
+                  "offset": 1,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "enum ReputationStorageBase.BuyerConfirmation",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "outcomeAttestationDelay",
+                  "offset": 2,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "outcomeTimestamp",
+                  "offset": 10,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "confirmationTimestamp",
+                  "offset": 18,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "confirmationSubmissions",
+                  "offset": 26,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint8",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "outcomeRecorded",
+                  "offset": 27,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "reputationEligible",
+                  "offset": 28,
+                  "slot": "14",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bool",
+                    "numberOfBytes": "1"
+                  }
+                },
+                {
+                  "label": "currentConfirmationUid",
+                  "offset": 0,
+                  "slot": "15",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                }
+              ],
+              "numberOfBytes": "512"
+            }
+          }
+        },
+        {
+          "label": "recordKeys",
+          "offset": 0,
+          "order": 8,
+          "slot": "101",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "encoding": "dynamic_array",
+            "label": "bytes32[]",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "authorizationKeyUsed",
+          "offset": 0,
+          "order": 9,
+          "slot": "102",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => bool)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "bool",
+              "numberOfBytes": "1"
+            }
+          }
+        },
+        {
+          "label": "refundedAmount",
+          "offset": 0,
+          "order": 10,
+          "slot": "103",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "confirmationByUid",
+          "offset": 0,
+          "order": 11,
+          "slot": "104",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => enum ReputationStorageBase.BuyerConfirmation)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "enum ReputationStorageBase.BuyerConfirmation",
+              "numberOfBytes": "1"
+            }
+          }
+        },
+        {
+          "label": "orderKeyByConfirmationUid",
+          "offset": 0,
+          "order": 12,
+          "slot": "105",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => bytes32)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "completedCount",
+          "offset": 0,
+          "order": 13,
+          "slot": "106",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "failedCount",
+          "offset": 0,
+          "order": 14,
+          "slot": "107",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "canceledCount",
+          "offset": 0,
+          "order": 15,
+          "slot": "108",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "confirmedCount",
+          "offset": 0,
+          "order": 16,
+          "slot": "109",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "notConfirmedCount",
+          "offset": 0,
+          "order": 17,
+          "slot": "110",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "providerTransactionCount",
+          "offset": 0,
+          "order": 18,
+          "slot": "111",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "totalPaidByProvider",
+          "offset": 0,
+          "order": 19,
+          "slot": "112",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "refundedAmountByProvider",
+          "offset": 0,
+          "order": 20,
+          "slot": "113",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "outcomeDelayTotalByProvider",
+          "offset": 0,
+          "order": 21,
+          "slot": "114",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "completedByService",
+          "offset": 0,
+          "order": 22,
+          "slot": "115",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "failedByService",
+          "offset": 0,
+          "order": 23,
+          "slot": "116",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "canceledByService",
+          "offset": 0,
+          "order": 24,
+          "slot": "117",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "confirmedByService",
+          "offset": 0,
+          "order": 25,
+          "slot": "118",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "notConfirmedByService",
+          "offset": 0,
+          "order": 26,
+          "slot": "119",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "serviceTransactionCount",
+          "offset": 0,
+          "order": 27,
+          "slot": "120",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "totalPaidByService",
+          "offset": 0,
+          "order": 28,
+          "slot": "121",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "refundedAmountByService",
+          "offset": 0,
+          "order": 29,
+          "slot": "122",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "payerTransactionCount",
+          "offset": 0,
+          "order": 30,
+          "slot": "123",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "payerConfirmedCount",
+          "offset": 0,
+          "order": 31,
+          "slot": "124",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "payerNotConfirmedCount",
+          "offset": 0,
+          "order": 32,
+          "slot": "125",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "totalPaidByPayer",
+          "offset": 0,
+          "order": 33,
+          "slot": "126",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "refundedAmountByPayer",
+          "offset": 0,
+          "order": 34,
+          "slot": "127",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "address",
+              "numberOfBytes": "20"
+            },
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "confirmedWeightByProvider",
+          "offset": 0,
+          "order": 35,
+          "slot": "128",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "notConfirmedWeightByProvider",
+          "offset": 0,
+          "order": 36,
+          "slot": "129",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "confirmedWeightByService",
+          "offset": 0,
+          "order": 37,
+          "slot": "130",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "notConfirmedWeightByService",
+          "offset": 0,
+          "order": 38,
+          "slot": "131",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "eas",
+          "offset": 0,
+          "order": 39,
+          "slot": "132",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract IEAS",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "providerRegistry",
+          "offset": 0,
+          "order": 40,
+          "slot": "133",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract IProviderRegistry",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "serviceRegistry",
+          "offset": 0,
+          "order": 41,
+          "slot": "134",
+          "type": {
+            "encoding": "inplace",
+            "label": "contract IServiceRegistry",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "identityRegistry",
+          "offset": 0,
+          "order": 42,
+          "slot": "135",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "orderSigner",
+          "offset": 0,
+          "order": 43,
+          "slot": "136",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "outcomeSchema",
+          "offset": 0,
+          "order": 44,
+          "slot": "137",
+          "type": {
+            "encoding": "inplace",
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "confirmationSchema",
+          "offset": 0,
+          "order": 45,
+          "slot": "138",
+          "type": {
+            "encoding": "inplace",
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "_configured",
+          "offset": 0,
+          "order": 46,
+          "slot": "139",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "canonicalToken",
+          "offset": 1,
+          "order": 47,
+          "slot": "139",
+          "type": {
+            "encoding": "inplace",
+            "label": "address",
+            "numberOfBytes": "20"
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 48,
+          "slot": "140",
+          "type": {
+            "base": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "encoding": "inplace",
+            "label": "uint256[41]",
+            "numberOfBytes": "1312"
+          }
+        }
+      ]
+    }
+  ],
+  "schema": "daski-storage-layout/v1"
+}

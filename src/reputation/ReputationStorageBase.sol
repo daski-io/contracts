@@ -221,7 +221,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     error RefundNotMonotonic();
     error RefundExceedsGross();
     error ZeroOrderIdentifier();
-    error ZeroProviderOrService();
+    error ZeroService();
     error ZeroParticipant();
     error PaymentTokenMismatch();
     error InvalidPaymentFacts();

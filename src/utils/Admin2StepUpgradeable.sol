@@ -86,6 +86,7 @@ abstract contract Admin2StepUpgradeable is
     }
 
     function unpauseExternalDependency() external onlyAdmin {
+        require(pendingAdmin == address(0), "admin transfer pending");
         require(pauseGuardian != address(0), "zero guardian");
         if (externalDependencyPaused) {
             externalDependencyPaused = false;

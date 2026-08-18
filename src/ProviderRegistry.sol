@@ -10,6 +10,7 @@ import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski-specific provider gate. A "provider" is the real-world
@@ -67,6 +68,8 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         require(_identity != address(0), "zero identity");
         require(_usdc != address(0), "zero usdc");
         require(_treasury != address(0), "zero treasury");
+        LibDependencyValidation.requireIdentity(_identity);
+        LibDependencyValidation.requireUsdc(_usdc);
         __Admin2Step_init(_admin, _sanctionsOracle);
         identity = ICanonicalIdentity(_identity);
         usdc = IERC20(_usdc);

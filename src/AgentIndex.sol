@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IAgentIndex} from "./interfaces/IAgentIndex.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 
 /// @notice Daski-local companion to the canonical ERC-8004 IdentityRegistry
 ///         (the 0x8004A... per-chain singleton). Daski no longer deploys an
@@ -66,6 +67,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
 
     function initialize(address _identity, address _sanctionsOracle, address _admin) external initializer {
         require(_identity != address(0), "zero identity");
+        LibDependencyValidation.requireIdentity(_identity);
         __Admin2Step_init(_admin, _sanctionsOracle);
         __EIP712_init("Daski AgentIndex", "1");
         identity = ICanonicalIdentity(_identity);

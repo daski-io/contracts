@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
+import {StandardRailCircleUSDC} from "./StandardRailCircleUSDC.sol";
 
 /// @notice Deploys one reviewed outcome splitter through the shared factory.
 contract DeployOutcomeSplitter is OutcomeSplitterScriptBase {
@@ -51,6 +52,9 @@ contract DeployOutcomeSplitter is OutcomeSplitterScriptBase {
         );
         require(localInitCodeHash == reviewedInitCodeHash, "splitter init code hash mismatch");
         address predicted = OutcomeSplitterCreate2.computeAddress(address(factory), salt, localInitCodeHash);
+        // This head-state check avoids a knowingly unusable broadcast. The manifest
+        // script is the sole activation gate and validates the finalized checkpoint.
+        StandardRailCircleUSDC.validate(BASE_SEPOLIA_USDC, predicted, provider, daski);
 
         vm.startBroadcast();
         splitter = factory.deploy(

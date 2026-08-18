@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {OutcomeSplitter} from "./OutcomeSplitter.sol";
 import {OutcomeSplitterCreate2} from "./utils/OutcomeSplitterCreate2.sol";
+import {OutcomeSplitterValidation} from "./utils/OutcomeSplitterValidation.sol";
 
 /// @notice Permissionless deterministic deployer for immutable outcome splitters.
 contract OutcomeSplitterFactory {
@@ -65,7 +66,20 @@ contract OutcomeSplitterFactory {
             listingCommitmentHash,
             listingEpoch
         );
-        return OutcomeSplitterCreate2.computeAddress(address(this), salt, splitterInitCodeHash);
+        address predicted = OutcomeSplitterCreate2.computeAddress(address(this), salt, splitterInitCodeHash);
+        OutcomeSplitterValidation.validate(
+            canonicalChainId,
+            canonicalToken,
+            providerPayee,
+            daskiCommissionReceiver,
+            commissionBps,
+            policyVersionHash,
+            outcomeIdHash,
+            listingCommitmentHash,
+            listingEpoch,
+            predicted
+        );
+        return predicted;
     }
 
     function initCodeHash(
