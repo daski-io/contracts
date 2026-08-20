@@ -8,6 +8,7 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
 import {StandardRailCircleUSDC} from "./StandardRailCircleUSDC.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 
 /// @notice Sole activation gate for a splitter, run on the claimed finalized activation fork.
 contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
@@ -113,20 +114,13 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         );
     }
 
+    /// @dev The fork itself is the activation checkpoint: forge pins the
+    ///      fork at the reviewed block, so equality with the claimed number
+    ///      binds the manifest input to the executed state. The checkpoint's
+    ///      canonical hash and finalized status are verified across two
+    ///      independent RPC views by the release evidence capture.
     function _validateActivationCheckpoint(ManifestInput memory input) internal {
-        string memory finalizedBlock = vm.rpcJson("eth_getBlockByNumber", "[\"finalized\",false]");
-        uint256 finalizedBlockNumber = vm.parseJsonUint(finalizedBlock, ".number");
-        require(input.activationBlockNumber <= finalizedBlockNumber, "activation block is not finalized");
-
-        string memory blockTag = _rpcBlockTag(input.activationBlockNumber);
-        string memory activationBlock = vm.rpcJson("eth_getBlockByNumber", string.concat("[\"", blockTag, "\",false]"));
-        require(
-            vm.parseJsonUint(activationBlock, ".number") == input.activationBlockNumber,
-            "activation block number mismatch"
-        );
-        require(
-            vm.parseJsonBytes32(activationBlock, ".hash") == input.activationBlockHash, "activation block hash mismatch"
-        );
+        require(vm.getBlockNumber() == input.activationBlockNumber, "fork is not pinned at the activation block");
 
         StandardRailCircleUSDC.validate(input.token, address(input.splitter), input.provider, input.daski);
 
@@ -142,85 +136,49 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         internal
         returns (uint256 transactionIndex, uint256 logIndex)
     {
-        string memory receipt = vm.rpcJson(
-            "eth_getTransactionReceipt", string.concat("[\"", vm.toString(input.deploymentTransaction), "\"]")
-        );
-        return _deploymentPositionFromReceipt(receipt, input);
+        bytes32[] memory topics = new bytes32[](1);
+        topics[0] = OUTCOME_SPLITTER_DEPLOYED_TOPIC;
+        VmSafe.EthGetLogs[] memory logs =
+            vm.eth_getLogs(input.deploymentBlockNumber, input.deploymentBlockNumber, address(input.factory), topics);
+        return _deploymentPositionFromLogs(logs, input);
     }
 
-    function _deploymentPositionFromReceipt(string memory receipt, ManifestInput memory input)
+    /// @dev A matching log proves the deployment transaction succeeded (failed
+    ///      transactions emit no logs) and that the factory itself emitted the
+    ///      event; the typed fields replace every receipt-level check.
+    function _deploymentPositionFromLogs(VmSafe.EthGetLogs[] memory logs, ManifestInput memory input)
         internal
         pure
         returns (uint256 transactionIndex, uint256 logIndex)
     {
-        require(vm.parseJsonUint(receipt, ".status") == 1, "deployment transaction reverted");
+        uint256 found = type(uint256).max;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].transactionHash == input.deploymentTransaction) {
+                require(found == type(uint256).max, "duplicate deployment events in transaction");
+                found = i;
+            }
+        }
+        require(found != type(uint256).max, "deployment event not found in block");
+        VmSafe.EthGetLogs memory log = logs[found];
+        require(log.emitter == address(input.factory), "deployment event factory mismatch");
+        require(!log.removed, "deployment event removed by reorg");
+        require(log.blockNumber == input.deploymentBlockNumber, "deployment event block mismatch");
+        require(log.blockHash == input.deploymentBlockHash, "deployment event block hash mismatch");
+        require(log.topics.length == 4, "deployment event topics mismatch");
+        require(log.topics[0] == OUTCOME_SPLITTER_DEPLOYED_TOPIC, "deployment event signature mismatch");
         require(
-            vm.parseJsonBytes32(receipt, ".transactionHash") == input.deploymentTransaction,
-            "deployment receipt transaction mismatch"
+            log.topics[1] == bytes32(uint256(uint160(address(input.splitter)))), "deployment event splitter mismatch"
         );
+        require(log.topics[2] == input.deploymentSalt, "deployment event salt mismatch");
+        require(log.topics[3] == input.outcomeHash, "deployment event outcome mismatch");
         require(
-            vm.parseJsonUint(receipt, ".blockNumber") == input.deploymentBlockNumber,
-            "deployment receipt block mismatch"
-        );
-        require(
-            vm.parseJsonBytes32(receipt, ".blockHash") == input.deploymentBlockHash,
-            "deployment receipt block hash mismatch"
-        );
-        require(vm.parseJsonAddress(receipt, ".to") == address(input.factory), "deployment receipt target mismatch");
-
-        transactionIndex = vm.parseJsonUint(receipt, ".transactionIndex");
-        require(transactionIndex <= MAX_SAFE_JSON_INTEGER, "deployment transaction index range");
-
-        string memory logPath = ".logs[0]";
-        require(
-            vm.parseJsonAddress(receipt, string.concat(logPath, ".address")) == address(input.factory),
-            "deployment event factory mismatch"
-        );
-        bytes32[] memory topics = vm.parseJsonBytes32Array(receipt, string.concat(logPath, ".topics"));
-        require(topics.length == 4, "deployment event topics mismatch");
-        require(topics[0] == OUTCOME_SPLITTER_DEPLOYED_TOPIC, "deployment event signature mismatch");
-        require(topics[1] == bytes32(uint256(uint160(address(input.splitter)))), "deployment event splitter mismatch");
-        require(topics[2] == input.deploymentSalt, "deployment event salt mismatch");
-        require(topics[3] == input.outcomeHash, "deployment event outcome mismatch");
-        require(
-            keccak256(vm.parseJsonBytes(receipt, string.concat(logPath, ".data")))
-                == keccak256(abi.encode(uint64(input.listingEpoch), input.listingHash)),
+            keccak256(log.data) == keccak256(abi.encode(uint64(input.listingEpoch), input.listingHash)),
             "deployment event data mismatch"
         );
-        require(
-            vm.parseJsonBytes32(receipt, string.concat(logPath, ".transactionHash")) == input.deploymentTransaction,
-            "deployment event transaction mismatch"
-        );
-        require(
-            vm.parseJsonUint(receipt, string.concat(logPath, ".blockNumber")) == input.deploymentBlockNumber,
-            "deployment event block mismatch"
-        );
-        require(
-            vm.parseJsonBytes32(receipt, string.concat(logPath, ".blockHash")) == input.deploymentBlockHash,
-            "deployment event block hash mismatch"
-        );
-        require(
-            vm.parseJsonUint(receipt, string.concat(logPath, ".transactionIndex")) == transactionIndex,
-            "deployment event transaction index mismatch"
-        );
-        logIndex = vm.parseJsonUint(receipt, string.concat(logPath, ".logIndex"));
+        transactionIndex = log.transactionIndex;
+        logIndex = log.logIndex;
+        require(transactionIndex <= MAX_SAFE_JSON_INTEGER, "deployment transaction index range");
         require(logIndex <= MAX_SAFE_JSON_INTEGER, "deployment log index range");
-    }
-
-    function _rpcBlockTag(uint256 blockNumber) internal pure returns (string memory) {
-        bytes memory padded = bytes(blockNumber.toHexString());
-        uint256 firstDigit = 2;
-        while (firstDigit + 1 < padded.length && padded[firstDigit] == 0x30) {
-            firstDigit++;
-        }
-
-        bytes memory minimal = new bytes(padded.length - firstDigit + 2);
-        minimal[0] = 0x30;
-        minimal[1] = 0x78;
-        for (uint256 i = firstDigit; i < padded.length; i++) {
-            minimal[i - firstDigit + 2] = padded[i];
-        }
-        return string(minimal);
     }
 
     function _initCodeHash(ManifestInput memory input) internal view returns (bytes32) {

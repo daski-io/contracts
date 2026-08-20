@@ -7,6 +7,7 @@ import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "../script/OutcomeSplitterScriptBase.sol";
 import {WriteOutcomeSplitterManifest} from "../script/WriteOutcomeSplitterManifest.s.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 
 contract OutcomeSplitterProvenanceHarness is OutcomeSplitterScriptBase {
@@ -20,16 +21,12 @@ contract OutcomeSplitterManifestHarness is WriteOutcomeSplitterManifest {
         _validate(input);
     }
 
-    function rpcBlockTag(uint256 blockNumber) external pure returns (string memory) {
-        return _rpcBlockTag(blockNumber);
-    }
-
-    function deploymentPositionFromReceipt(string memory receipt, ManifestInput memory input)
+    function deploymentPositionFromLogs(VmSafe.EthGetLogs[] memory logs, ManifestInput memory input)
         external
         pure
         returns (uint256 transactionIndex, uint256 logIndex)
     {
-        return _deploymentPositionFromReceipt(receipt, input);
+        return _deploymentPositionFromLogs(logs, input);
     }
 
     function writeManifest(ManifestInput memory input) external returns (string memory) {
@@ -174,20 +171,11 @@ contract OutcomeSplitterProvenanceTest is Test {
         manifestHarness.validate(input);
     }
 
-    function testManifestUsesMinimalRpcBlockQuantities() public view {
-        assertEq(manifestHarness.rpcBlockTag(0), "0x0");
-        assertEq(manifestHarness.rpcBlockTag(15), "0xf");
-        assertEq(manifestHarness.rpcBlockTag(256), "0x100");
-        assertEq(manifestHarness.rpcBlockTag(45_573_030), "0x2b763a6");
-    }
-
     function testManifestDerivesAndSerializesExactDeploymentPosition() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = _deploymentReceipt(input, 7, 11, 7);
-
         (input.deploymentTransactionIndex, input.deploymentLogIndex) =
-            manifestHarness.deploymentPositionFromReceipt(receipt, input);
+            manifestHarness.deploymentPositionFromLogs(_deploymentLogs(input, 7, 11), input);
         assertEq(input.deploymentTransactionIndex, 7);
         assertEq(input.deploymentLogIndex, 11);
 
@@ -200,81 +188,96 @@ contract OutcomeSplitterProvenanceTest is Test {
         assertEq(vm.parseJsonUint(json, ".splitterDeploymentLogIndex"), 11);
     }
 
-    function testManifestRejectsInconsistentDeploymentEventPosition() public {
+    function testManifestRejectsMissingDeploymentEvent() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].transactionHash = keccak256("some-other-transaction");
 
-        vm.expectRevert(bytes("deployment event transaction index mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(_deploymentReceipt(input, 7, 11, 8), input);
+        vm.expectRevert(bytes("deployment event not found in block"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
-    function testManifestRejectsRevertedDeploymentReceipt() public {
+    function testManifestRejectsDuplicateDeploymentEvents() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = vm.replace(_deploymentReceipt(input, 7, 11, 7), '"status":"0x1"', '"status":"0x0"');
+        VmSafe.EthGetLogs[] memory one = _deploymentLogs(input, 7, 11);
+        VmSafe.EthGetLogs[] memory logs = new VmSafe.EthGetLogs[](2);
+        logs[0] = one[0];
+        logs[1] = one[0];
 
-        vm.expectRevert(bytes("deployment transaction reverted"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        vm.expectRevert(bytes("duplicate deployment events in transaction"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
-    function testManifestRejectsWrongReceiptTarget() public {
+    function testManifestRejectsForeignEmitter() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = vm.replace(
-            _deploymentReceipt(input, 7, 11, 7),
-            string.concat('"to":"', vm.toString(address(input.factory)), '"'),
-            string.concat('"to":"', vm.toString(makeAddr("wrong-target")), '"')
-        );
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].emitter = makeAddr("foreign-emitter");
 
-        vm.expectRevert(bytes("deployment receipt target mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        vm.expectRevert(bytes("deployment event factory mismatch"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
-    function testManifestRejectsWrongReceiptBlockNumber() public {
+    function testManifestRejectsReorgRemovedEvent() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt =
-            vm.replace(_deploymentReceipt(input, 7, 11, 7), '"blockNumber":"0x64"', '"blockNumber":"0x65"');
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].removed = true;
 
-        vm.expectRevert(bytes("deployment receipt block mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        vm.expectRevert(bytes("deployment event removed by reorg"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
-    function testManifestRejectsWrongReceiptBlockHash() public {
+    function testManifestRejectsWrongEventBlockNumber() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = vm.replace(
-            _deploymentReceipt(input, 7, 11, 7),
-            vm.toString(input.deploymentBlockHash),
-            vm.toString(keccak256("wrong-block"))
-        );
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].blockNumber += 1;
 
-        vm.expectRevert(bytes("deployment receipt block hash mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        vm.expectRevert(bytes("deployment event block mismatch"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
+    }
+
+    function testManifestRejectsWrongEventBlockHash() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].blockHash = keccak256("wrong-block");
+
+        vm.expectRevert(bytes("deployment event block hash mismatch"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
     function testManifestRejectsWrongEventSalt() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = vm.replace(
-            _deploymentReceipt(input, 7, 11, 7), vm.toString(input.deploymentSalt), vm.toString(keccak256("wrong-salt"))
-        );
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].topics[2] = keccak256("wrong-salt");
 
         vm.expectRevert(bytes("deployment event salt mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        manifestHarness.deploymentPositionFromLogs(logs, input);
+    }
+
+    function testManifestRejectsWrongEventOutcome() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].topics[3] = keccak256("wrong-outcome");
+
+        vm.expectRevert(bytes("deployment event outcome mismatch"));
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
     function testManifestRejectsWrongEventData() public {
         OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
         WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
-        string memory receipt = vm.replace(
-            _deploymentReceipt(input, 7, 11, 7),
-            vm.toString(abi.encode(uint64(input.listingEpoch), input.listingHash)),
-            vm.toString(abi.encode(uint64(input.listingEpoch) + 1, input.listingHash))
-        );
+        VmSafe.EthGetLogs[] memory logs = _deploymentLogs(input, 7, 11);
+        logs[0].data = abi.encode(uint64(input.listingEpoch) + 1, input.listingHash);
 
         vm.expectRevert(bytes("deployment event data mismatch"));
-        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+        manifestHarness.deploymentPositionFromLogs(logs, input);
     }
 
     function testCounterfactualPrefundingDoesNotCensorDeployment() public {
@@ -327,74 +330,27 @@ contract OutcomeSplitterProvenanceTest is Test {
         input.startingReleaseSequence = 0;
     }
 
-    function _deploymentReceipt(
+    function _deploymentLogs(
         WriteOutcomeSplitterManifest.ManifestInput memory input,
         uint256 transactionIndex,
-        uint256 logIndex,
-        uint256 logTransactionIndex
-    ) private pure returns (string memory receipt) {
-        receipt = string.concat(
-            _receiptPrefix(input, transactionIndex),
-            _deploymentLogTopics(input),
-            vm.toString(abi.encode(uint64(input.listingEpoch), input.listingHash)),
-            _deploymentLogPosition(input, logIndex, logTransactionIndex)
-        );
-    }
-
-    function _receiptPrefix(WriteOutcomeSplitterManifest.ManifestInput memory input, uint256 transactionIndex)
-        private
-        pure
-        returns (string memory)
-    {
-        return string.concat(
-            '{"status":"0x1","transactionHash":"',
-            vm.toString(input.deploymentTransaction),
-            '","blockNumber":"0x64","blockHash":"',
-            vm.toString(input.deploymentBlockHash),
-            '","to":"',
-            vm.toString(address(input.factory)),
-            '","transactionIndex":"',
-            vm.toString(bytes32(transactionIndex)),
-            '","logs":['
-        );
-    }
-
-    function _deploymentLogTopics(WriteOutcomeSplitterManifest.ManifestInput memory input)
-        private
-        pure
-        returns (string memory)
-    {
-        bytes32 splitterTopic = bytes32(uint256(uint160(address(input.splitter))));
-        return string.concat(
-            '{"address":"',
-            vm.toString(address(input.factory)),
-            '","topics":["',
-            vm.toString(keccak256("OutcomeSplitterDeployed(address,bytes32,bytes32,uint64,bytes32)")),
-            '","',
-            vm.toString(splitterTopic),
-            '","',
-            vm.toString(input.deploymentSalt),
-            '","',
-            vm.toString(input.outcomeHash),
-            '"],"data":"'
-        );
-    }
-
-    function _deploymentLogPosition(
-        WriteOutcomeSplitterManifest.ManifestInput memory input,
-        uint256 logIndex,
-        uint256 logTransactionIndex
-    ) private pure returns (string memory) {
-        return string.concat(
-            '","transactionHash":"',
-            vm.toString(input.deploymentTransaction),
-            '","blockNumber":"0x64","blockHash":"',
-            vm.toString(input.deploymentBlockHash),
-            '","transactionIndex":"',
-            vm.toString(bytes32(logTransactionIndex)),
-            '","logIndex":"',
-            vm.toString(bytes32(logIndex)),
-            '"}]}'
-        );
+        uint256 logIndex
+    ) private pure returns (VmSafe.EthGetLogs[] memory logs) {
+        bytes32[] memory topics = new bytes32[](4);
+        topics[0] = keccak256("OutcomeSplitterDeployed(address,bytes32,bytes32,uint64,bytes32)");
+        topics[1] = bytes32(uint256(uint160(address(input.splitter))));
+        topics[2] = input.deploymentSalt;
+        topics[3] = input.outcomeHash;
+        logs = new VmSafe.EthGetLogs[](1);
+        logs[0] = VmSafe.EthGetLogs({
+            emitter: address(input.factory),
+            topics: topics,
+            data: abi.encode(uint64(input.listingEpoch), input.listingHash),
+            blockHash: input.deploymentBlockHash,
+            blockNumber: uint64(input.deploymentBlockNumber),
+            transactionHash: input.deploymentTransaction,
+            transactionIndex: uint64(transactionIndex),
+            logIndex: logIndex,
+            removed: false
+        });
     }
 }
