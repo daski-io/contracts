@@ -74,7 +74,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         address serviceWallet
     ) external whenExternalDependencyOperational returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(providerAgentId), identity.getAgentWallet(providerAgentId)
+        );
 
         // Inactive providers cannot add services; existing services remain queryable.
         require(providerRegistry.isRegistered(providerAgentId), "provider not registered");
@@ -118,7 +120,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
     }
@@ -133,7 +137,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         _setServiceWalletAuthorization(svc, newWallet);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
@@ -146,7 +152,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
     }
@@ -237,12 +245,6 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         svc.serviceWallet = newWallet;
         svc.serviceWalletOwner = owner;
         svc.serviceWalletAgentWallet = agentWallet;
-    }
-
-    function _requireProviderParticipantsAllowed(uint256 providerAgentId, address caller) private view {
-        _requireNotSanctioned(caller);
-        _requireNotSanctioned(identity.ownerOf(providerAgentId));
-        _requireNotSanctioned(identity.getAgentWallet(providerAgentId));
     }
 
     uint256[50] private __gap;

@@ -62,7 +62,9 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         require(validatorAddress != address(0), "zero validator");
         require(bytes(requestURI).length != 0, "empty request URI");
         require(requestHash != bytes32(0), "zero request hash");
-        _requireAgentParticipantsAllowed(agentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identityRegistry.ownerOf(agentId), identityRegistry.getAgentWallet(agentId)
+        );
         _requireNotSanctioned(validatorAddress);
 
         validationKey = _validationKey(agentId, requestHash);
@@ -92,7 +94,7 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
         string calldata responseURI,
         bytes32 responseHash,
         string calldata tag
-    ) external override {
+    ) external override whenExternalDependencyOperational {
         Validation storage v = _validations[validationKey];
         require(v.exists, "no such request");
         require(msg.sender == v.validatorAddress, "not validator");
@@ -220,12 +222,6 @@ contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {
         return keccak256(abi.encode(agentId, requestHash));
-    }
-
-    function _requireAgentParticipantsAllowed(uint256 agentId, address caller) private view {
-        _requireNotSanctioned(caller);
-        _requireNotSanctioned(identityRegistry.ownerOf(agentId));
-        _requireNotSanctioned(identityRegistry.getAgentWallet(agentId));
     }
 
     uint256[50] private __gap;

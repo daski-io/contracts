@@ -159,6 +159,20 @@ contract ValidationRegistryTest is Test {
         assertFalse(validation.hasValidationResponse(_key(agentId, REQ_HASH)));
     }
 
+    function test_validationResponseRevertsWhileExternalDependencyPaused() public {
+        vm.prank(agentOwner);
+        validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);
+
+        vm.prank(admin);
+        validation.pauseExternalDependency();
+
+        vm.prank(validator);
+        vm.expectRevert("external dependency paused");
+        validation.validationResponse(_key(agentId, REQ_HASH), 100, "ipfs://resp", keccak256("resp"), "pass");
+
+        assertFalse(validation.hasValidationResponse(_key(agentId, REQ_HASH)));
+    }
+
     function test_zeroResponseIsDistinguishedFromPending() public {
         vm.prank(agentOwner);
         validation.validationRequest(validator, agentId, "ipfs://req", REQ_HASH);

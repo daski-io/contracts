@@ -21,6 +21,12 @@ abstract contract SanctionsGuardUpgradeable is ISanctionsGuard {
         if (_readSanctions(address(sanctionsOracle), account)) revert SanctionedAddress(account);
     }
 
+    function _requireAgentParticipantsAllowed(address caller, address owner, address agentWallet) internal view {
+        _requireNotSanctioned(caller);
+        _requireNotSanctioned(owner);
+        _requireNotSanctioned(agentWallet);
+    }
+
     function _readSanctions(address oracle, address account) private view returns (bool) {
         (bool success, bytes memory data) = oracle.staticcall(abi.encodeCall(ISanctionsList.isSanctioned, (account)));
         if (!success || data.length != 32) revert SanctionsOracleUnavailable(oracle);
