@@ -114,19 +114,18 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
     }
 
     function _validateActivationCheckpoint(ManifestInput memory input) internal {
-        bytes memory finalizedBlock = vm.rpc("eth_getBlockByNumber", "[\"finalized\",false]");
-        uint256 finalizedBlockNumber = vm.parseJsonUint(string(finalizedBlock), ".number");
+        string memory finalizedBlock = vm.rpcJson("eth_getBlockByNumber", "[\"finalized\",false]");
+        uint256 finalizedBlockNumber = vm.parseJsonUint(finalizedBlock, ".number");
         require(input.activationBlockNumber <= finalizedBlockNumber, "activation block is not finalized");
 
         string memory blockTag = _rpcBlockTag(input.activationBlockNumber);
-        bytes memory activationBlock = vm.rpc("eth_getBlockByNumber", string.concat("[\"", blockTag, "\",false]"));
+        string memory activationBlock = vm.rpcJson("eth_getBlockByNumber", string.concat("[\"", blockTag, "\",false]"));
         require(
-            vm.parseJsonUint(string(activationBlock), ".number") == input.activationBlockNumber,
+            vm.parseJsonUint(activationBlock, ".number") == input.activationBlockNumber,
             "activation block number mismatch"
         );
         require(
-            vm.parseJsonBytes32(string(activationBlock), ".hash") == input.activationBlockHash,
-            "activation block hash mismatch"
+            vm.parseJsonBytes32(activationBlock, ".hash") == input.activationBlockHash, "activation block hash mismatch"
         );
 
         StandardRailCircleUSDC.validate(input.token, address(input.splitter), input.provider, input.daski);
@@ -143,10 +142,10 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         internal
         returns (uint256 transactionIndex, uint256 logIndex)
     {
-        bytes memory receipt = vm.rpc(
+        string memory receipt = vm.rpcJson(
             "eth_getTransactionReceipt", string.concat("[\"", vm.toString(input.deploymentTransaction), "\"]")
         );
-        return _deploymentPositionFromReceipt(string(receipt), input);
+        return _deploymentPositionFromReceipt(receipt, input);
     }
 
     function _deploymentPositionFromReceipt(string memory receipt, ManifestInput memory input)

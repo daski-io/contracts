@@ -208,6 +208,75 @@ contract OutcomeSplitterProvenanceTest is Test {
         manifestHarness.deploymentPositionFromReceipt(_deploymentReceipt(input, 7, 11, 8), input);
     }
 
+    function testManifestRejectsRevertedDeploymentReceipt() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt = vm.replace(_deploymentReceipt(input, 7, 11, 7), '"status":"0x1"', '"status":"0x0"');
+
+        vm.expectRevert(bytes("deployment transaction reverted"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
+    function testManifestRejectsWrongReceiptTarget() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt = vm.replace(
+            _deploymentReceipt(input, 7, 11, 7),
+            string.concat('"to":"', vm.toString(address(input.factory)), '"'),
+            string.concat('"to":"', vm.toString(makeAddr("wrong-target")), '"')
+        );
+
+        vm.expectRevert(bytes("deployment receipt target mismatch"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
+    function testManifestRejectsWrongReceiptBlockNumber() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt =
+            vm.replace(_deploymentReceipt(input, 7, 11, 7), '"blockNumber":"0x64"', '"blockNumber":"0x65"');
+
+        vm.expectRevert(bytes("deployment receipt block mismatch"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
+    function testManifestRejectsWrongReceiptBlockHash() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt = vm.replace(
+            _deploymentReceipt(input, 7, 11, 7),
+            vm.toString(input.deploymentBlockHash),
+            vm.toString(keccak256("wrong-block"))
+        );
+
+        vm.expectRevert(bytes("deployment receipt block hash mismatch"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
+    function testManifestRejectsWrongEventSalt() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt = vm.replace(
+            _deploymentReceipt(input, 7, 11, 7), vm.toString(input.deploymentSalt), vm.toString(keccak256("wrong-salt"))
+        );
+
+        vm.expectRevert(bytes("deployment event salt mismatch"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
+    function testManifestRejectsWrongEventData() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        string memory receipt = vm.replace(
+            _deploymentReceipt(input, 7, 11, 7),
+            vm.toString(abi.encode(uint64(input.listingEpoch), input.listingHash)),
+            vm.toString(abi.encode(uint64(input.listingEpoch) + 1, input.listingHash))
+        );
+
+        vm.expectRevert(bytes("deployment event data mismatch"));
+        manifestHarness.deploymentPositionFromReceipt(receipt, input);
+    }
+
     function testCounterfactualPrefundingDoesNotCensorDeployment() public {
         address predicted = OutcomeSplitterCreate2.computeAddress(address(factory), salt, _initCodeHash());
         token.mint(predicted, 19);
