@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {IDaskiValidationRegistry} from "./interfaces/IDaskiValidationRegistry.sol";
+import {IValidationRegistry} from "./interfaces/IValidationRegistry.sol";
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski-specific, ERC-8004-inspired validation registry. Storage and
 ///         calls use an agent-namespaced validationKey to prevent cross-agent
 ///         request-hash squatting; events retain the raw requestHash.
-contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegistry {
+contract ValidationRegistry is Admin2StepUpgradeable, IValidationRegistry {
     struct Validation {
         address validatorAddress;
         uint256 agentId;
@@ -37,6 +38,7 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
 
     function initialize(address identityRegistry_, address sanctionsOracle_, address _admin) external initializer {
         require(identityRegistry_ != address(0), "zero identity");
+        LibDependencyValidation.requireIdentity(identityRegistry_);
         __Admin2Step_init(_admin, sanctionsOracle_);
         identityRegistry = ICanonicalIdentity(identityRegistry_);
     }
@@ -60,7 +62,9 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         require(validatorAddress != address(0), "zero validator");
         require(bytes(requestURI).length != 0, "empty request URI");
         require(requestHash != bytes32(0), "zero request hash");
-        _requireAgentParticipantsAllowed(agentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identityRegistry.ownerOf(agentId), identityRegistry.getAgentWallet(agentId)
+        );
         _requireNotSanctioned(validatorAddress);
 
         validationKey = _validationKey(agentId, requestHash);
@@ -90,7 +94,7 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         string calldata responseURI,
         bytes32 responseHash,
         string calldata tag
-    ) external override {
+    ) external override whenExternalDependencyOperational {
         Validation storage v = _validations[validationKey];
         require(v.exists, "no such request");
         require(msg.sender == v.validatorAddress, "not validator");
@@ -194,6 +198,18 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
         uint256 end = requests.length - offset > limit ? offset + limit : requests.length;
         bytes32 tagHash = keccak256(bytes(tag));
         bool filterTag = bytes(tag).length != 0;
+        (count, totalResponse) = _accumulateSummary(requests, validatorAddresses, tagHash, filterTag, offset, end);
+        nextOffset = end;
+    }
+
+    function _accumulateSummary(
+        bytes32[] storage requests,
+        address[] calldata validatorAddresses,
+        bytes32 tagHash,
+        bool filterTag,
+        uint256 offset,
+        uint256 end
+    ) private view returns (uint64 count, uint256 totalResponse) {
         for (uint256 i = offset; i < end; i++) {
             Validation storage v = _validations[requests[i]];
             if (!v.hasResponse) continue;
@@ -202,17 +218,10 @@ contract DaskiValidationRegistry is Admin2StepUpgradeable, IDaskiValidationRegis
             count++;
             totalResponse += v.response;
         }
-        nextOffset = end;
     }
 
     function _validationKey(uint256 agentId, bytes32 requestHash) internal pure returns (bytes32) {
         return keccak256(abi.encode(agentId, requestHash));
-    }
-
-    function _requireAgentParticipantsAllowed(uint256 agentId, address caller) private view {
-        _requireNotSanctioned(caller);
-        _requireNotSanctioned(identityRegistry.ownerOf(agentId));
-        _requireNotSanctioned(identityRegistry.getAgentWallet(agentId));
     }
 
     uint256[50] private __gap;

@@ -80,7 +80,7 @@ contract ReputationStorageTest is ReputationTestBase {
         reputation.attest(outcome);
     }
 
-    function test_confirmationRevisionRevocationAndTransitionCap() public {
+    function test_confirmationRevisionRevocationAndSubmissionCap() public {
         bytes32 orderKey = keccak256("confirmation-order");
         _register(_permit(orderKey));
         bytes32 firstUid = keccak256("confirmation-one");
@@ -101,13 +101,77 @@ contract ReputationStorageTest is ReputationTestBase {
         reputation.revoke(second);
         ReputationStorageBase.ReputationRecord memory record = reputation.getRecord(orderKey);
         assertEq(uint8(record.confirmation), uint8(ReputationStorageBase.BuyerConfirmation.Pending));
-        assertEq(record.confirmationTransitions, 3);
+        assertEq(record.confirmationSubmissions, 2);
+
+        Attestation memory third =
+            _attestation(keccak256("confirmation-three"), confirmationSchema, payer, orderKey, 1, true, bytes32(0));
+        vm.prank(address(eas));
+        reputation.attest(third);
+        third.revocationTime = uint64(block.timestamp);
+        vm.prank(address(eas));
+        reputation.revoke(third);
+
+        record = reputation.getRecord(orderKey);
+        assertEq(uint8(record.confirmation), uint8(ReputationStorageBase.BuyerConfirmation.Pending));
+        assertEq(record.confirmationSubmissions, 3);
 
         Attestation memory fourth =
             _attestation(keccak256("confirmation-four"), confirmationSchema, payer, orderKey, 1, true, bytes32(0));
         vm.prank(address(eas));
-        vm.expectRevert(ReputationStorageBase.ConfirmationTransitionCap.selector);
+        vm.expectRevert(ReputationStorageBase.ConfirmationSubmissionCap.selector);
         reputation.attest(fourth);
+    }
+
+    function test_mockEASStaleRevisionRevokeIsAccountingNoOp() public {
+        bytes32 orderKey = keccak256("stale-confirmation-revoke");
+        _register(_permit(orderKey));
+        bytes32 firstUid = _submitConfirmation(orderKey, 1, bytes32(0));
+        bytes32 secondUid = _submitConfirmation(orderKey, 2, firstUid);
+        uint256 weightBefore = reputation.notConfirmedWeightByProvider(PROVIDER_AGENT_ID);
+
+        vm.warp(block.timestamp + 1);
+        _revokeConfirmation(firstUid);
+
+        Attestation memory stale = eas.getAttestation(firstUid);
+        ReputationStorageBase.ReputationRecord memory record = reputation.getRecord(orderKey);
+        assertGt(stale.revocationTime, 0);
+        assertEq(record.currentConfirmationUid, secondUid);
+        assertEq(uint8(record.confirmation), uint8(ReputationStorageBase.BuyerConfirmation.NotConfirmed));
+        assertEq(record.confirmationSubmissions, 2);
+        assertEq(reputation.confirmedCount(PROVIDER_AGENT_ID), 0);
+        assertEq(reputation.notConfirmedCount(PROVIDER_AGENT_ID), 1);
+        assertEq(reputation.notConfirmedWeightByProvider(PROVIDER_AGENT_ID), weightBefore);
+    }
+
+    function test_mockEASFinalSubmissionRemainsRevocable() public {
+        bytes32 orderKey = keccak256("final-submission-revoke");
+        _register(_permit(orderKey));
+        bytes32 firstUid = _submitConfirmation(orderKey, 1, bytes32(0));
+        bytes32 secondUid = _submitConfirmation(orderKey, 2, firstUid);
+        bytes32 thirdUid = _submitConfirmation(orderKey, 1, secondUid);
+
+        vm.warp(block.timestamp + 1);
+        _revokeConfirmation(thirdUid);
+
+        Attestation memory revoked = eas.getAttestation(thirdUid);
+        ReputationStorageBase.ReputationRecord memory record = reputation.getRecord(orderKey);
+        assertGt(revoked.revocationTime, 0);
+        assertEq(record.currentConfirmationUid, bytes32(0));
+        assertEq(uint8(record.confirmation), uint8(ReputationStorageBase.BuyerConfirmation.Pending));
+        assertEq(record.confirmationSubmissions, reputation.MAX_CONFIRMATION_SUBMISSIONS());
+        assertEq(reputation.confirmedCount(PROVIDER_AGENT_ID), 0);
+        assertEq(reputation.notConfirmedCount(PROVIDER_AGENT_ID), 0);
+
+        vm.expectRevert(ReputationStorageBase.ConfirmationSubmissionCap.selector);
+        _submitConfirmation(orderKey, 2, bytes32(0));
+    }
+
+    function test_resolverVersionDoesNotChangeSigningDomainVersion() public view {
+        (bytes1 fields, string memory name, string memory domainVersion,,,,) = reputation.eip712Domain();
+        assertEq(fields, bytes1(0x0f));
+        assertEq(name, "Daski Reputation");
+        assertEq(domainVersion, "1");
+        assertEq(reputation.version(), "2.1.0");
     }
 
     function test_refundIsSignedMonotonicAndCappedAtGross() public {

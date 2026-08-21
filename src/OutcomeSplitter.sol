@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IOutcomeSplitter} from "./interfaces/IOutcomeSplitter.sol";
+import {OutcomeSplitterValidation} from "./utils/OutcomeSplitterValidation.sol";
 
 /// @notice Immutable, permissionless splitter for one Daski outcome epoch.
 contract OutcomeSplitter is IOutcomeSplitter, ReentrancyGuard {
@@ -44,21 +45,18 @@ contract OutcomeSplitter is IOutcomeSplitter, ReentrancyGuard {
         bytes32 listingCommitmentHash_,
         uint64 listingEpoch_
     ) {
-        if (canonicalChainId_ != block.chainid) revert InvalidChain();
-        if (canonicalToken_ == address(0) || canonicalToken_.code.length == 0) {
-            revert InvalidToken();
-        }
-        if (
-            providerPayee_ == address(0) || daskiCommissionReceiver_ == address(0)
-                || providerPayee_ == daskiCommissionReceiver_ || providerPayee_ == address(this)
-                || daskiCommissionReceiver_ == address(this) || canonicalToken_ == providerPayee_
-                || canonicalToken_ == daskiCommissionReceiver_
-        ) revert InvalidRecipient();
-        if (commissionBps_ == 0 || commissionBps_ >= BPS_DENOMINATOR) revert InvalidCommission();
-        if (
-            policyVersionHash_ == bytes32(0) || outcomeIdHash_ == bytes32(0) || listingCommitmentHash_ == bytes32(0)
-                || listingEpoch_ == 0
-        ) revert InvalidListing();
+        OutcomeSplitterValidation.validate(
+            canonicalChainId_,
+            canonicalToken_,
+            providerPayee_,
+            daskiCommissionReceiver_,
+            commissionBps_,
+            policyVersionHash_,
+            outcomeIdHash_,
+            listingCommitmentHash_,
+            listingEpoch_,
+            address(this)
+        );
 
         canonicalChainId = canonicalChainId_;
         canonicalToken = canonicalToken_;

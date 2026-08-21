@@ -73,7 +73,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         uint64 outcomeAttestationDelay;
         uint64 outcomeTimestamp;
         uint64 confirmationTimestamp;
-        uint8 confirmationTransitions;
+        uint8 confirmationSubmissions;
         bool outcomeRecorded;
         bool reputationEligible;
         bytes32 currentConfirmationUid;
@@ -162,7 +162,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         BuyerConfirmation confirmation,
         bytes32 attestationUid,
         bytes32 refUid,
-        uint8 transitionCount
+        uint8 submissionCount
     );
     event BuyerConfirmationRevoked(
         bytes32 indexed orderKey,
@@ -170,7 +170,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         uint256 indexed providerAgentId,
         bytes32 serviceId,
         address payer,
-        uint8 transitionCount
+        uint8 submissionCount
     );
     event ReputationRefunded(
         bytes32 indexed orderKey,
@@ -221,7 +221,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     error RefundNotMonotonic();
     error RefundExceedsGross();
     error ZeroOrderIdentifier();
-    error ZeroProviderOrService();
+    error ZeroService();
     error ZeroParticipant();
     error PaymentTokenMismatch();
     error InvalidPaymentFacts();
@@ -242,7 +242,6 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     error OutcomeNotRevocable();
     error InvalidRevocation();
     error UnknownConfirmation();
-    error StaleConfirmation();
     error NotOrderPayer();
     error WrongReputationRecipient();
     error InvalidOutcomeSemantics();
@@ -254,7 +253,7 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     error BinaryConfirmationOnly();
     error UnexpectedConfirmationReference();
     error MustReferenceCurrentConfirmation();
-    error ConfirmationTransitionCap();
+    error ConfirmationSubmissionCap();
     error OrderNotReputationEligible();
 
     modifier onlyEAS() {

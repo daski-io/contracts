@@ -6,6 +6,7 @@ import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {IServiceRegistry} from "./interfaces/IServiceRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski service catalog. Services live here as first-class records
@@ -34,13 +35,11 @@ import {LibPagination} from "./utils/LibPagination.sol";
 ///
 /// Auth model — every mutating call on an existing service requires the
 /// caller to be authorized over the provider's ERC-8004 NFT, matching the
-/// surface used by IdentityRegistry / ReputationRegistry / DaskiValidationRegistry:
+/// surface used by IdentityRegistry / ReputationRegistry / ValidationRegistry:
 ///   1. NFT owner (ownerOf), OR
 ///   2. operator approved via setApprovalForAll, OR
 ///   3. per-token approved spender (getApproved).
 contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
-    // ── Storage ──────────────────────────────────────────────────────
-
     ICanonicalIdentity public identity;
     IProviderRegistry public providerRegistry;
 
@@ -59,12 +58,12 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     {
         require(_identity != address(0), "zero identity");
         require(_providerRegistry != address(0), "zero provider registry");
+        LibDependencyValidation.requireIdentity(_identity);
+        LibDependencyValidation.requireProviderRegistry(_providerRegistry, _identity);
         __Admin2Step_init(_admin, _sanctionsOracle);
         identity = ICanonicalIdentity(_identity);
         providerRegistry = IProviderRegistry(_providerRegistry);
     }
-
-    // ── Service registration / management ────────────────────────────
 
     /// @inheritdoc IServiceRegistry
     function registerService(
@@ -75,7 +74,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         address serviceWallet
     ) external whenExternalDependencyOperational returns (bytes32 serviceId) {
         LibAgentAuth.requireAgentAuth(identity, providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(providerAgentId), identity.getAgentWallet(providerAgentId)
+        );
 
         // Inactive providers cannot add services; existing services remain queryable.
         require(providerRegistry.isRegistered(providerAgentId), "provider not registered");
@@ -119,7 +120,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         svc.serviceURI = newURI;
         emit ServiceURIUpdated(serviceId, newURI);
     }
@@ -134,7 +137,9 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         _setServiceWalletAuthorization(svc, newWallet);
         emit ServiceWalletUpdated(serviceId, newWallet);
     }
@@ -147,12 +152,12 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         Service storage svc = _services[serviceId];
         require(_serviceExists[serviceId], "service not found");
         LibAgentAuth.requireAgentAuth(identity, svc.providerAgentId, msg.sender);
-        _requireProviderParticipantsAllowed(svc.providerAgentId, msg.sender);
+        _requireAgentParticipantsAllowed(
+            msg.sender, identity.ownerOf(svc.providerAgentId), identity.getAgentWallet(svc.providerAgentId)
+        );
         svc.active = active;
         emit ServiceActiveStatusChanged(serviceId, active);
     }
-
-    // ── Views ────────────────────────────────────────────────────────
 
     /// @inheritdoc IServiceRegistry
     function getService(bytes32 serviceId) external view returns (Service memory) {
@@ -171,7 +176,8 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         require(_serviceExists[serviceId], "service not found");
 
         providerAgentId = svc.providerAgentId;
-        active = svc.active;
+        active = svc.active && providerRegistry.isRegistered(providerAgentId)
+            && providerRegistry.getProvider(providerAgentId).isActive;
         providerOwner = identity.ownerOf(providerAgentId);
         providerWallet = identity.getAgentWallet(providerAgentId);
         bool overrideCurrent = svc.serviceWallet != address(0) && svc.serviceWalletOwner == providerOwner
@@ -182,7 +188,8 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
     /// @inheritdoc IServiceRegistry
     function isActive(bytes32 serviceId) external view returns (bool) {
         Service storage svc = _services[serviceId];
-        return _serviceExists[serviceId] && svc.active;
+        return _serviceExists[serviceId] && svc.active && providerRegistry.isRegistered(svc.providerAgentId)
+            && providerRegistry.getProvider(svc.providerAgentId).isActive;
     }
 
     /// @inheritdoc IServiceRegistry
@@ -238,12 +245,6 @@ contract ServiceRegistry is Admin2StepUpgradeable, IServiceRegistry {
         svc.serviceWallet = newWallet;
         svc.serviceWalletOwner = owner;
         svc.serviceWalletAgentWallet = agentWallet;
-    }
-
-    function _requireProviderParticipantsAllowed(uint256 providerAgentId, address caller) private view {
-        _requireNotSanctioned(caller);
-        _requireNotSanctioned(identity.ownerOf(providerAgentId));
-        _requireNotSanctioned(identity.getAgentWallet(providerAgentId));
     }
 
     uint256[50] private __gap;

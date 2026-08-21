@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IAgentIndex} from "./interfaces/IAgentIndex.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 
 /// @notice Daski-local companion to the canonical ERC-8004 IdentityRegistry
 ///         (the 0x8004A... per-chain singleton). Daski no longer deploys an
@@ -16,8 +17,8 @@ import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 ///         open:
 ///
 ///         1. Reverse lookup. The canonical registry exposes
-///            getAgentWallet(agentId) but no wallet→agentId index. Payment
-///            adapters must resolve "which agent is this payer?" in one call,
+///            getAgentWallet(agentId) but no wallet→agentId index. Marketplace
+///            callers need to resolve a wallet's selected agent in one call,
 ///            so this contract maintains that index — as a HINT re-verified
 ///            against the canonical registry on every read (`resolve`). A
 ///            stale binding (NFT transferred away, wallet rotated out)
@@ -25,9 +26,8 @@ import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 ///            reputation.
 ///
 ///         2. Gasless onboarding. The canonical registry has no registerBySig.
-///            `registerWithSig` lets a relayer (the Daski gateway facilitator,
-///            or an adapter mid-settlement) mint a canonical agent for a fresh
-///            buyer wallet that holds USDC but no ETH: this contract registers
+///            `registerWithSig` lets an onboarding relayer mint a canonical
+///            agent for a fresh wallet that holds USDC but no ETH: this contract registers
 ///            on the canonical registry (minting to itself), transfers the NFT
 ///            to the wallet, and records the binding — one tx, gated on the
 ///            wallet's EIP-712 consent signature.
@@ -66,6 +66,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
 
     function initialize(address _identity, address _sanctionsOracle, address _admin) external initializer {
         require(_identity != address(0), "zero identity");
+        LibDependencyValidation.requireIdentity(_identity);
         __Admin2Step_init(_admin, _sanctionsOracle);
         __EIP712_init("Daski AgentIndex", "1");
         identity = ICanonicalIdentity(_identity);
@@ -124,7 +125,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     /// @inheritdoc IAgentIndex
     function claim(uint256 agentId) external nonReentrant whenExternalDependencyOperational {
         require(_controlsAgent(agentId, msg.sender), "not agent owner or wallet");
-        _requireAgentParticipantsAllowed(agentId, msg.sender);
+        _requireAgentParticipantsAllowed(msg.sender, identity.ownerOf(agentId), identity.getAgentWallet(agentId));
         _agentIdOf[msg.sender] = agentId;
         _hasBinding[msg.sender] = true;
         emit AgentClaimed(agentId, msg.sender);
@@ -134,7 +135,7 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
     function unbind() external nonReentrant whenExternalDependencyOperational {
         require(_hasBinding[msg.sender], "nothing bound");
         uint256 agentId = _agentIdOf[msg.sender];
-        _requireAgentParticipantsAllowed(agentId, msg.sender);
+        _requireAgentParticipantsAllowed(msg.sender, identity.ownerOf(agentId), identity.getAgentWallet(agentId));
         delete _agentIdOf[msg.sender];
         delete _hasBinding[msg.sender];
         emit AgentUnbound(msg.sender, agentId);
@@ -193,12 +194,6 @@ contract AgentIndex is Admin2StepUpgradeable, EIP712Upgradeable, ReentrancyGuard
         } catch {
             return false;
         }
-    }
-
-    function _requireAgentParticipantsAllowed(uint256 agentId, address caller) private view {
-        _requireNotSanctioned(caller);
-        _requireNotSanctioned(identity.ownerOf(agentId));
-        _requireNotSanctioned(identity.getAgentWallet(agentId));
     }
 
     uint256[50] private __gap;

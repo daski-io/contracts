@@ -6,6 +6,19 @@ import {ReputationStorageBase} from "../src/reputation/ReputationStorageBase.sol
 import {ReputationTestBase} from "./helpers/ReputationTestBase.sol";
 
 contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
+    function test_acceptsRegisteredProviderAgentZero() public {
+        providers.setRegistered(0, true);
+        services.setService(serviceId, 0);
+        ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("agent-zero"));
+        permit.providerAgentId = 0;
+        permit.providerIdentitySnapshotHash = reputation.providerIdentitySnapshotHash(permit);
+
+        _register(permit);
+
+        (,,,,, uint256 transactions) = reputation.getProviderStats(0);
+        assertEq(transactions, 1);
+    }
+
     function test_rejectsEveryZeroOrderFieldClass() public {
         ReputationStorageBase.StandardReputationOrderV1 memory permit = _permit(keccak256("zero-order"));
         permit.orderKey = bytes32(0);
@@ -15,13 +28,9 @@ contract ReputationStorageNegativeMatrixTest is ReputationTestBase {
         permit.authorizationKey = bytes32(0);
         _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroOrderIdentifier.selector));
 
-        permit = _permit(keccak256("zero-provider"));
-        permit.providerAgentId = 0;
-        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
-
         permit = _permit(keccak256("zero-service"));
         permit.serviceId = bytes32(0);
-        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroProviderOrService.selector));
+        _expectOrderRevert(permit, abi.encodeWithSelector(ReputationStorageBase.ZeroService.selector));
 
         permit = _permit(keccak256("zero-payer"));
         permit.payer = address(0);

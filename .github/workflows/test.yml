@@ -33,12 +33,15 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Check upgradeable storage layouts
+        run: python3 script/check_storage_layout.py
+
       - name: Run Forge tests
         run: forge test -vvv
 
       - name: Run Forge coverage
         run: >-
-          forge coverage --ir-minimum --exclude-tests
+          forge coverage --skip script --exclude-tests
           --no-match-coverage 'script/'
           --report summary
 

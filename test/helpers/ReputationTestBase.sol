@@ -6,7 +6,13 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {ReputationStorage} from "../../src/ReputationStorage.sol";
 import {ReputationStorageBase} from "../../src/reputation/ReputationStorageBase.sol";
 import {IServiceRegistry} from "../../src/interfaces/IServiceRegistry.sol";
-import {Attestation} from "../../src/interfaces/IEAS.sol";
+import {
+    Attestation,
+    AttestationRequest,
+    AttestationRequestData,
+    RevocationRequest,
+    RevocationRequestData
+} from "../../src/interfaces/IEAS.sol";
 import {MockEAS} from "./MockEAS.sol";
 import {MockSanctionsList} from "../mocks/MockSanctionsList.sol";
 
@@ -177,5 +183,28 @@ abstract contract ReputationTestBase is Test {
             revocable: revocable,
             data: abi.encode(orderKey, value)
         });
+    }
+
+    function _submitConfirmation(bytes32 orderKey, uint8 value, bytes32 refUid) internal returns (bytes32 uid) {
+        AttestationRequest memory request = AttestationRequest({
+            schema: confirmationSchema,
+            data: AttestationRequestData({
+                recipient: providerWallet,
+                expirationTime: 0,
+                revocable: true,
+                refUID: refUid,
+                data: abi.encode(orderKey, value),
+                value: 0
+            })
+        });
+        vm.prank(payer);
+        uid = eas.attest(request);
+    }
+
+    function _revokeConfirmation(bytes32 uid) internal {
+        RevocationRequest memory request =
+            RevocationRequest({schema: confirmationSchema, data: RevocationRequestData({uid: uid, value: 0})});
+        vm.prank(payer);
+        eas.revoke(request);
     }
 }

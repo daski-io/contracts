@@ -5,109 +5,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 import {IServiceRegistry} from "../interfaces/IServiceRegistry.sol";
 import {ReputationAdmin} from "./ReputationAdmin.sol";
 
-/// @notice Signed standard-order registration, refund accounting, and views.
+/// @notice Signed standard-order registration and refund accounting.
 abstract contract ReputationAccounting is ReputationAdmin {
     uint256 internal constant VALUE_WEIGHT_FLOOR = 250_000;
-
-    function registerOrder(StandardReputationOrderV1 calldata permit, bytes calldata signature)
-        external
-        whenExternalDependencyOperational
-    {
-        if (!_configured) revert ConfigurationNotFinalized();
-        if (block.timestamp > permit.validBefore) revert OrderPermitExpired();
-        if (!SignatureChecker.isValidSignatureNow(orderSigner, orderDigest(permit), signature)) {
-            revert InvalidOrderSignature();
-        }
-        _validateOrder(permit);
-        if (_records[permit.orderKey].orderKey != bytes32(0)) revert OrderAlreadyRecorded();
-        if (authorizationKeyUsed[permit.authorizationKey]) revert AuthorizationAlreadyRecorded();
-
-        _records[permit.orderKey] = ReputationRecord({
-            orderKey: permit.orderKey,
-            authorizationKey: permit.authorizationKey,
-            providerAgentId: permit.providerAgentId,
-            serviceId: permit.serviceId,
-            payer: permit.payer,
-            providerOwner: permit.providerOwner,
-            providerAgentWallet: permit.providerAgentWallet,
-            providerPayee: permit.providerPayee,
-            canonicalToken: permit.canonicalToken,
-            grossAmount: permit.grossAmount,
-            paidAt: permit.paidAt,
-            providerIdentitySnapshotHash: permit.providerIdentitySnapshotHash,
-            listingManifestHash: permit.listingManifestHash,
-            releaseEvidenceHash: permit.releaseEvidenceHash,
-            outcome: TransactionOutcome.Completed,
-            confirmation: BuyerConfirmation.Pending,
-            outcomeAttestationDelay: 0,
-            outcomeTimestamp: 0,
-            confirmationTimestamp: 0,
-            confirmationTransitions: 0,
-            outcomeRecorded: false,
-            reputationEligible: permit.reputationEligible,
-            currentConfirmationUid: bytes32(0)
-        });
-        authorizationKeyUsed[permit.authorizationKey] = true;
-        recordKeys.push(permit.orderKey);
-        if (permit.reputationEligible) _incrementOrderCounters(permit);
-
-        emit StandardOrderRegistered(
-            permit.orderKey,
-            permit.authorizationKey,
-            permit.providerAgentId,
-            permit.serviceId,
-            permit.payer,
-            permit.grossAmount,
-            permit.reputationEligible
-        );
-    }
-
-    function recordRefund(StandardReputationRefundV1 calldata permit, bytes calldata signature)
-        external
-        whenExternalDependencyOperational
-    {
-        if (!_configured) revert ConfigurationNotFinalized();
-        if (block.timestamp > permit.validBefore) revert RefundPermitExpired();
-        if (!SignatureChecker.isValidSignatureNow(orderSigner, refundDigest(permit), signature)) {
-            revert InvalidRefundSignature();
-        }
-        if (permit.refundEvidenceHash == bytes32(0)) revert ZeroRefundEvidence();
-        ReputationRecord storage record = _records[permit.orderKey];
-        if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
-        if (record.authorizationKey != permit.authorizationKey) revert AuthorizationMismatch();
-        uint256 previous = refundedAmount[permit.orderKey];
-        if (permit.cumulativeRefundedAmount <= previous) revert RefundNotMonotonic();
-        if (permit.cumulativeRefundedAmount > record.grossAmount) revert RefundExceedsGross();
-        uint256 delta = permit.cumulativeRefundedAmount - previous;
-        refundedAmount[permit.orderKey] = permit.cumulativeRefundedAmount;
-        if (record.reputationEligible) {
-            refundedAmountByProvider[record.providerAgentId] += delta;
-            refundedAmountByService[record.serviceId] += delta;
-            refundedAmountByPayer[record.payer] += delta;
-        }
-        emit ReputationRefunded(
-            permit.orderKey, record.serviceId, delta, permit.cumulativeRefundedAmount, permit.refundEvidenceHash
-        );
-    }
-
-    function orderDigest(StandardReputationOrderV1 calldata permit) public view returns (bytes32) {
-        return _hashTypedDataV4(keccak256(_encodeOrder(permit)));
-    }
-
-    function refundDigest(StandardReputationRefundV1 calldata permit) public view returns (bytes32) {
-        return _hashTypedDataV4(
-            keccak256(
-                abi.encode(
-                    REFUND_TYPEHASH,
-                    permit.orderKey,
-                    permit.authorizationKey,
-                    permit.cumulativeRefundedAmount,
-                    permit.refundEvidenceHash,
-                    permit.validBefore
-                )
-            )
-        );
-    }
 
     function providerIdentitySnapshotHash(StandardReputationOrderV1 calldata permit) public view returns (bytes32) {
         return keccak256(
@@ -167,9 +67,113 @@ abstract contract ReputationAccounting is ReputationAdmin {
         return (payerTransactionCount[payer], payerConfirmedCount[payer], payerNotConfirmedCount[payer]);
     }
 
+    function registerOrder(StandardReputationOrderV1 calldata permit, bytes calldata signature)
+        external
+        whenExternalDependencyOperational
+    {
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (block.timestamp > permit.validBefore) revert OrderPermitExpired();
+        if (!SignatureChecker.isValidSignatureNow(orderSigner, orderDigest(permit), signature)) {
+            revert InvalidOrderSignature();
+        }
+        _validateOrder(permit);
+        if (_records[permit.orderKey].orderKey != bytes32(0)) revert OrderAlreadyRecorded();
+        if (authorizationKeyUsed[permit.authorizationKey]) revert AuthorizationAlreadyRecorded();
+
+        _records[permit.orderKey] = ReputationRecord({
+            orderKey: permit.orderKey,
+            authorizationKey: permit.authorizationKey,
+            providerAgentId: permit.providerAgentId,
+            serviceId: permit.serviceId,
+            payer: permit.payer,
+            providerOwner: permit.providerOwner,
+            providerAgentWallet: permit.providerAgentWallet,
+            providerPayee: permit.providerPayee,
+            canonicalToken: permit.canonicalToken,
+            grossAmount: permit.grossAmount,
+            paidAt: permit.paidAt,
+            providerIdentitySnapshotHash: permit.providerIdentitySnapshotHash,
+            listingManifestHash: permit.listingManifestHash,
+            releaseEvidenceHash: permit.releaseEvidenceHash,
+            outcome: TransactionOutcome.Completed,
+            confirmation: BuyerConfirmation.Pending,
+            outcomeAttestationDelay: 0,
+            outcomeTimestamp: 0,
+            confirmationTimestamp: 0,
+            confirmationSubmissions: 0,
+            outcomeRecorded: false,
+            reputationEligible: permit.reputationEligible,
+            currentConfirmationUid: bytes32(0)
+        });
+        authorizationKeyUsed[permit.authorizationKey] = true;
+        recordKeys.push(permit.orderKey);
+        if (permit.reputationEligible) _incrementOrderCounters(permit);
+
+        emit StandardOrderRegistered(
+            permit.orderKey,
+            permit.authorizationKey,
+            permit.providerAgentId,
+            permit.serviceId,
+            permit.payer,
+            permit.grossAmount,
+            permit.reputationEligible
+        );
+    }
+
+    function recordRefund(StandardReputationRefundV1 calldata permit, bytes calldata signature)
+        external
+        whenExternalDependencyOperational
+    {
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (block.timestamp > permit.validBefore) revert RefundPermitExpired();
+        if (!SignatureChecker.isValidSignatureNow(orderSigner, refundDigest(permit), signature)) {
+            revert InvalidRefundSignature();
+        }
+        if (permit.refundEvidenceHash == bytes32(0)) revert ZeroRefundEvidence();
+        ReputationRecord storage record = _records[permit.orderKey];
+        if (record.orderKey == bytes32(0)) revert OrderNotRecorded();
+        if (record.authorizationKey != permit.authorizationKey) revert AuthorizationMismatch();
+        _requireNotSanctioned(record.payer);
+        _requireNotSanctioned(record.providerOwner);
+        _requireNotSanctioned(record.providerAgentWallet);
+        _requireNotSanctioned(record.providerPayee);
+        uint256 previous = refundedAmount[permit.orderKey];
+        if (permit.cumulativeRefundedAmount <= previous) revert RefundNotMonotonic();
+        if (permit.cumulativeRefundedAmount > record.grossAmount) revert RefundExceedsGross();
+        uint256 delta = permit.cumulativeRefundedAmount - previous;
+        refundedAmount[permit.orderKey] = permit.cumulativeRefundedAmount;
+        if (record.reputationEligible) {
+            refundedAmountByProvider[record.providerAgentId] += delta;
+            refundedAmountByService[record.serviceId] += delta;
+            refundedAmountByPayer[record.payer] += delta;
+        }
+        emit ReputationRefunded(
+            permit.orderKey, record.serviceId, delta, permit.cumulativeRefundedAmount, permit.refundEvidenceHash
+        );
+    }
+
+    function orderDigest(StandardReputationOrderV1 calldata permit) public view returns (bytes32) {
+        return _hashTypedDataV4(keccak256(_encodeOrder(permit)));
+    }
+
+    function refundDigest(StandardReputationRefundV1 calldata permit) public view returns (bytes32) {
+        return _hashTypedDataV4(
+            keccak256(
+                abi.encode(
+                    REFUND_TYPEHASH,
+                    permit.orderKey,
+                    permit.authorizationKey,
+                    permit.cumulativeRefundedAmount,
+                    permit.refundEvidenceHash,
+                    permit.validBefore
+                )
+            )
+        );
+    }
+
     function _validateOrder(StandardReputationOrderV1 calldata permit) private view {
         if (!(permit.orderKey != bytes32(0) && permit.authorizationKey != bytes32(0))) revert ZeroOrderIdentifier();
-        if (!(permit.providerAgentId != 0 && permit.serviceId != bytes32(0))) revert ZeroProviderOrService();
+        if (permit.serviceId == bytes32(0)) revert ZeroService();
         if (!(permit.payer != address(0) && permit.providerOwner != address(0)
                     && permit.providerAgentWallet != address(0))) revert ZeroParticipant();
         if (!(permit.providerPayee != address(0) && permit.canonicalToken == canonicalToken)) {
@@ -219,9 +223,7 @@ abstract contract ReputationAccounting is ReputationAdmin {
     }
 
     function _encodeOrder(StandardReputationOrderV1 calldata p) private pure returns (bytes memory) {
-        // A single 22-argument abi.encode cannot allocate its frame under
-        // --ir-minimum (the coverage build). Every argument is a static type,
-        // so two concatenated halves encode byte-identically.
+        // Static arguments let concatenated halves avoid the compiler's stack-frame limit.
         return bytes.concat(
             abi.encode(
                 ORDER_TYPEHASH,

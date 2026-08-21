@@ -79,7 +79,8 @@ interface IServiceRegistry {
 
     function getService(bytes32 serviceId) external view returns (Service memory);
     /// @notice Returns the settlement-critical service and payee state.
-    /// @dev A service-wallet override is state-bound rather than historical:
+    /// @dev `active` is true only while both the service and its registered
+    ///      provider are active. A service-wallet override is state-bound rather than historical:
     ///      restoring the exact authorizing owner and agentWallet restores the
     ///      authorization. Callers that require permanent revocation must
     ///      clear the override explicitly.
@@ -87,6 +88,7 @@ interface IServiceRegistry {
         external
         view
         returns (uint256 providerAgentId, bool active, address providerOwner, address providerWallet, address payee);
+    /// @notice Returns the effective activity of the service and its provider.
     function isActive(bytes32 serviceId) external view returns (bool);
     function exists(bytes32 serviceId) external view returns (bool);
     function getServicesByProviderPaginated(uint256 providerAgentId, uint256 offset, uint256 limit)

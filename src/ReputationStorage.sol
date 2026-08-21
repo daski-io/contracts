@@ -7,7 +7,7 @@ import {ReputationAccounting} from "./reputation/ReputationAccounting.sol";
 
 /// @notice EAS-backed reputation ledger for finalized standard Exact-EVM orders.
 contract ReputationStorage is ReputationAccounting, ISchemaResolver {
-    uint8 public constant MAX_CONFIRMATION_TRANSITIONS = 3;
+    uint8 public constant MAX_CONFIRMATION_SUBMISSIONS = 3;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -39,7 +39,7 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function version() external pure override returns (string memory) {
-        return "2.0.0";
+        return "2.1.0";
     }
 
     function attest(Attestation calldata attestation)
@@ -120,16 +120,22 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         if (!(a.expirationTime == 0 && a.revocationTime != 0 && a.revocable)) revert InvalidRevocation();
         _requireNotSanctioned(a.attester);
         _requireNotSanctioned(a.recipient);
-        (bytes32 encodedOrderKey,) = abi.decode(a.data, (bytes32, uint8));
-        bytes32 orderKey = orderKeyByConfirmationUid[a.uid];
-        if (!(orderKey != bytes32(0) && orderKey == encodedOrderKey)) revert UnknownConfirmation();
-        ReputationRecord storage record = _records[orderKey];
-        if (record.currentConfirmationUid != a.uid) revert StaleConfirmation();
+        (bytes32 orderKey, uint8 raw) = abi.decode(a.data, (bytes32, uint8));
+        if (!(raw == uint8(BuyerConfirmation.Confirmed) || raw == uint8(BuyerConfirmation.NotConfirmed))) {
+            revert BinaryConfirmationOnly();
+        }
+        ReputationRecord storage record = _eligibleRecord(orderKey);
         if (a.attester != record.payer) revert NotOrderPayer();
         if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
-        _transitionConfirmation(record, BuyerConfirmation.Pending, bytes32(0));
+
+        if (record.currentConfirmationUid != a.uid) return;
+        if (orderKeyByConfirmationUid[a.uid] != orderKey || confirmationByUid[a.uid] != BuyerConfirmation(raw)) {
+            revert UnknownConfirmation();
+        }
+
+        _applyConfirmation(record, BuyerConfirmation.Pending, bytes32(0));
         emit BuyerConfirmationRevoked(
-            orderKey, a.uid, record.providerAgentId, record.serviceId, record.payer, record.confirmationTransitions
+            orderKey, a.uid, record.providerAgentId, record.serviceId, record.payer, record.confirmationSubmissions
         );
     }
 
@@ -180,8 +186,10 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         } else {
             if (!(a.refUID == currentUid && a.refUID != a.uid)) revert MustReferenceCurrentConfirmation();
         }
+        if (record.confirmationSubmissions >= MAX_CONFIRMATION_SUBMISSIONS) revert ConfirmationSubmissionCap();
         BuyerConfirmation confirmation = BuyerConfirmation(raw);
-        _transitionConfirmation(record, confirmation, a.uid);
+        record.confirmationSubmissions++;
+        _applyConfirmation(record, confirmation, a.uid);
         emit BuyerConfirmationSubmitted(
             orderKey,
             record.providerAgentId,
@@ -190,19 +198,17 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
             confirmation,
             a.uid,
             a.refUID,
-            record.confirmationTransitions
+            record.confirmationSubmissions
         );
     }
 
-    function _transitionConfirmation(ReputationRecord storage record, BuyerConfirmation next, bytes32 nextUid) private {
-        if (record.confirmationTransitions >= MAX_CONFIRMATION_TRANSITIONS) revert ConfirmationTransitionCap();
+    function _applyConfirmation(ReputationRecord storage record, BuyerConfirmation next, bytes32 nextUid) private {
         bytes32 previousUid = record.currentConfirmationUid;
         if (previousUid != bytes32(0)) {
             _decrementConfirmation(record, confirmationByUid[previousUid]);
             delete confirmationByUid[previousUid];
             delete orderKeyByConfirmationUid[previousUid];
         }
-        record.confirmationTransitions++;
         record.confirmation = next;
         record.currentConfirmationUid = nextUid;
         record.confirmationTimestamp = nextUid == bytes32(0) ? 0 : uint64(block.timestamp);

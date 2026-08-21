@@ -10,6 +10,7 @@ import {ICanonicalIdentity} from "./interfaces/ICanonicalIdentity.sol";
 import {IProviderRegistry} from "./interfaces/IProviderRegistry.sol";
 import {Admin2StepUpgradeable} from "./utils/Admin2StepUpgradeable.sol";
 import {LibAgentAuth} from "./utils/LibAgentAuth.sol";
+import {LibDependencyValidation} from "./utils/LibDependencyValidation.sol";
 import {LibPagination} from "./utils/LibPagination.sol";
 
 /// @notice Daski-specific provider gate. A "provider" is the real-world
@@ -26,8 +27,8 @@ import {LibPagination} from "./utils/LibPagination.sol";
 /// canonical registry's `agentWallet` (service attribution and provider
 /// authorization read it live; providers MUST verify one there before they can
 /// be paid or authorize a per-service serviceWallet). Wallet→agent
-/// resolution for payment attribution goes through the Daski `AgentIndex`,
-/// off-chain callers resolve agentIds before calling `getProvider`.
+/// reverse lookup lives separately in the Daski `AgentIndex`; callers use
+/// explicit agentIds with this registry.
 ///
 /// Auth model on mutating functions other than `register`: the caller must be
 /// the NFT owner, an ERC-721 operator (`isApprovedForAll`), or per-token
@@ -67,6 +68,8 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
         require(_identity != address(0), "zero identity");
         require(_usdc != address(0), "zero usdc");
         require(_treasury != address(0), "zero treasury");
+        LibDependencyValidation.requireIdentity(_identity);
+        LibDependencyValidation.requireUsdc(_usdc);
         __Admin2Step_init(_admin, _sanctionsOracle);
         identity = ICanonicalIdentity(_identity);
         usdc = IERC20(_usdc);
@@ -97,9 +100,7 @@ contract ProviderRegistry is Admin2StepUpgradeable, ReentrancyGuard, IProviderRe
     function setActive(uint256 agentId, bool active) external whenExternalDependencyOperational {
         LibAgentAuth.requireAgentAuth(identity, agentId, msg.sender);
         require(_isRegistered(agentId), "not registered");
-        _requireNotSanctioned(msg.sender);
-        _requireNotSanctioned(identity.ownerOf(agentId));
-        _requireNotSanctioned(identity.getAgentWallet(agentId));
+        _requireAgentParticipantsAllowed(msg.sender, identity.ownerOf(agentId), identity.getAgentWallet(agentId));
         _providers[agentId].isActive = active;
         emit ProviderActiveStatusChanged(agentId, active);
     }
