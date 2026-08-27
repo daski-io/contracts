@@ -109,6 +109,44 @@ contract OutcomeSplitterPredictionTest is Test {
         _expectInvalidListing(config);
     }
 
+    function testArbitraryServiceScopedListingKeysRemainIndependent() public view {
+        uint256 agentA = 42;
+        uint256 agentB = 77;
+        bytes32 serviceA = keccak256(abi.encode(agentA, "orbital-logistics", "1"));
+        bytes32 serviceB = keccak256(abi.encode(agentB, "orbital-logistics", "1"));
+        bytes32 listingKeyA =
+            keccak256(abi.encode("DaskiListingKeyV1", block.chainid, agentA, serviceA, "reserve-orbit"));
+        bytes32 listingKeyB =
+            keccak256(abi.encode("DaskiListingKeyV1", block.chainid, agentB, serviceB, "reserve-orbit"));
+
+        assertTrue(listingKeyA != listingKeyB);
+
+        Config memory configA = _validConfig();
+        configA.outcomeHash = listingKeyA;
+        Config memory configB = _validConfig();
+        configB.outcomeHash = listingKeyB;
+        assertTrue(_compute(configA) != _compute(configB));
+    }
+
+    function testServiceVersionChangesListingKeyAndPredictedSplitter() public view {
+        uint256 agentId = 42;
+        bytes32 serviceV1 = keccak256(abi.encode(agentId, "orbital-logistics", "1"));
+        bytes32 serviceV2 = keccak256(abi.encode(agentId, "orbital-logistics", "2"));
+        bytes32 listingKeyV1 =
+            keccak256(abi.encode("DaskiListingKeyV1", block.chainid, agentId, serviceV1, "reserve-orbit"));
+        bytes32 listingKeyV2 =
+            keccak256(abi.encode("DaskiListingKeyV1", block.chainid, agentId, serviceV2, "reserve-orbit"));
+
+        assertTrue(serviceV1 != serviceV2);
+        assertTrue(listingKeyV1 != listingKeyV2);
+
+        Config memory configV1 = _validConfig();
+        configV1.outcomeHash = listingKeyV1;
+        Config memory configV2 = _validConfig();
+        configV2.outcomeHash = listingKeyV2;
+        assertTrue(_compute(configV1) != _compute(configV2));
+    }
+
     function testSharedValidationRejectsSplitterRecipients() public {
         Config memory config = _validConfig();
         address predicted = makeAddr("predicted-splitter");
