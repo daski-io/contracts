@@ -30,6 +30,13 @@ These contracts are independent of the standard payment route. Restoring them
 does not restore `PaymentRouter`, `X402Adapter`, `PermitAdapter`, or
 `ApprovalAdapter`.
 
+Provider and service registration on chain is canonical and permissionless
+subject to ownership, listing-fee, sanctions, and active-state checks. Gateway
+enrollment is optional metadata/orchestration policy: it cannot make an
+otherwise invalid service valid or invalidate a valid chain record. Skills
+remain in provider-hosted service cards; these contracts contain no provider,
+product, skill, jurisdiction, or gateway-visibility allowlist.
+
 The repository retains `RetireStack.s.sol` only as a kill-switch for already
 deployed legacy routers. It cannot deploy or activate the retired payment
 stack. `deployments/base-sepolia.json` distinguishes the retained marketplace
