@@ -64,17 +64,24 @@ with `DeployOutcomeSplitter.s.sol`. Validate and write the public artifact with
 against a Base Sepolia fork pinned to the claimed activation block:
 
 ```bash
+export STANDARD_RAIL_PRIMARY_RPC_URL="$BASE_SEPOLIA_RPC_URL"
+export STANDARD_RAIL_SECONDARY_RPC_URL="$INDEPENDENT_BASE_SEPOLIA_RPC_URL"
+
 forge script script/WriteOutcomeSplitterManifest.s.sol:WriteOutcomeSplitterManifest \
   --fork-url "$BASE_SEPOLIA_RPC_URL" \
   --fork-block-number "$STANDARD_RAIL_SPLITTER_ACTIVATION_BLOCK_NUMBER" \
   --no-storage-caching
 ```
 
-The script requires the fork block number to match the manifest input, verifies
-that block's canonical hash and finalized status through RPC, and checks Circle
-USDC readiness, starting balance, and release sequence using ordinary calls on
-that fork. The mandatory `--no-storage-caching` flag prevents cached pre-reorg
-fork state from being labeled with the finalized block hash.
+The two `STANDARD_RAIL_*_RPC_URL` values must be distinct endpoints operated by
+independent providers. The script hashes the activation block's raw RLP header
+on the executed fork and on both RPC views, requires every hash to match the
+manifest input, and requires both providers' `finalized` heads to cover the
+activation block. Each reported finalized-head hash is also checked against
+the raw header returned by that provider. Circle USDC readiness, starting
+balance, and release sequence are then checked using ordinary calls on the
+original activation fork. The mandatory `--no-storage-caching` flag prevents
+cached pre-reorg fork state from being labeled with the finalized block hash.
 
 The reputation deployment requires `STANDARD_REPUTATION_FINAL_ADMIN` to be a
 canonical SafeL2 v1.4.1 proxy with a threshold of at least two, no modules, a

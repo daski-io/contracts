@@ -4,19 +4,43 @@ pragma solidity ^0.8.24;
 import {OutcomeSplitter} from "../src/OutcomeSplitter.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "./OutcomeSplitterScriptBase.sol";
 import {StandardRailCircleUSDC} from "./StandardRailCircleUSDC.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
+/// @dev Forge v1.5.1 ABI-encodes JSON objects returned by `vm.rpc`. Declaring
+///      the stable Base block prefix gives Solidity the matching return type;
+///      later fields can be ignored because their offsets remain valid.
+interface IManifestBlockRpc {
+    struct BlockPrefix {
+        bytes baseFeePerGas;
+        bytes blobGasUsed;
+        bytes difficulty;
+        bytes excessBlobGas;
+        bytes extraData;
+        bytes gasLimit;
+        bytes gasUsed;
+        bytes hash;
+        bytes logsBloom;
+        bytes miner;
+        bytes mixHash;
+        bytes nonce;
+        bytes number;
+    }
+
+    function rpc(string calldata urlOrAlias, string calldata method, string calldata params)
+        external
+        returns (BlockPrefix memory blockPrefix);
+}
+
 /// @notice Sole activation gate for a splitter, run on the claimed finalized activation fork.
 contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
-    using Strings for uint256;
-
     bytes32 private constant OUTCOME_SPLITTER_DEPLOYED_TOPIC =
         keccak256("OutcomeSplitterDeployed(address,bytes32,bytes32,uint64,bytes32)");
     uint256 private constant MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991;
+    string private constant PRIMARY_RPC_URL_ENV = "STANDARD_RAIL_PRIMARY_RPC_URL";
+    string private constant SECONDARY_RPC_URL_ENV = "STANDARD_RAIL_SECONDARY_RPC_URL";
 
     /// @dev Carried in memory instead of stack locals: with every input live
     /// in one frame, solc 0.8.24 + via_ir fails Yul codegen ("memPtr … too
@@ -52,7 +76,7 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         ManifestInput memory input = _readInput();
         _validate(input);
         (input.deploymentTransactionIndex, input.deploymentLogIndex) = _deploymentPosition(input);
-        _validateActivationCheckpoint(input);
+        _validateActivationCheckpoint(input, vm.envString(PRIMARY_RPC_URL_ENV), vm.envString(SECONDARY_RPC_URL_ENV));
         json = _writeManifest(input);
     }
 
@@ -114,13 +138,23 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         );
     }
 
-    /// @dev The fork itself is the activation checkpoint: forge pins the
-    ///      fork at the reviewed block, so equality with the claimed number
-    ///      binds the manifest input to the executed state. The checkpoint's
-    ///      canonical hash and finalized status are verified across two
-    ///      independent RPC views by the release evidence capture.
-    function _validateActivationCheckpoint(ManifestInput memory input) internal {
+    function _validateActivationCheckpoint(
+        ManifestInput memory input,
+        string memory primaryRpcUrl,
+        string memory secondaryRpcUrl
+    ) internal {
         require(vm.getBlockNumber() == input.activationBlockNumber, "fork is not pinned at the activation block");
+        require(
+            _blockHeaderHash(input.activationBlockNumber) == input.activationBlockHash,
+            "fork activation block hash mismatch"
+        );
+        _validateRpcEndpoints(primaryRpcUrl, secondaryRpcUrl);
+
+        uint256 activationFork = vm.activeFork();
+        uint256 expectedChainId = vm.getChainId();
+        _validateRpcView(input, primaryRpcUrl, expectedChainId);
+        _validateRpcView(input, secondaryRpcUrl, expectedChainId);
+        vm.selectFork(activationFork);
 
         StandardRailCircleUSDC.validate(input.token, address(input.splitter), input.provider, input.daski);
 
@@ -130,6 +164,64 @@ contract WriteOutcomeSplitterManifest is OutcomeSplitterScriptBase {
         );
 
         require(input.splitter.releaseSequence() == input.startingReleaseSequence, "starting release sequence mismatch");
+    }
+
+    function _validateRpcEndpoints(string memory primaryRpcUrl, string memory secondaryRpcUrl) internal pure {
+        require(bytes(primaryRpcUrl).length != 0, "empty primary RPC URL");
+        require(bytes(secondaryRpcUrl).length != 0, "empty secondary RPC URL");
+        require(keccak256(bytes(primaryRpcUrl)) != keccak256(bytes(secondaryRpcUrl)), "RPC endpoints must be distinct");
+    }
+
+    function _validateRpcView(ManifestInput memory input, string memory rpcUrl, uint256 expectedChainId) internal {
+        vm.createSelectFork(rpcUrl, input.activationBlockNumber);
+        require(vm.getChainId() == expectedChainId, "RPC chain mismatch");
+
+        bytes32 observedActivationHash = _blockHeaderHash(input.activationBlockNumber);
+        IManifestBlockRpc.BlockPrefix memory finalizedBlock =
+            IManifestBlockRpc(address(vm)).rpc(rpcUrl, "eth_getBlockByNumber", "[\"finalized\",false]");
+        (uint256 finalizedBlockNumber, bytes32 reportedFinalizedHash) = _decodeFinalizedBlock(finalizedBlock);
+        bytes32 observedFinalizedHash = _blockHeaderHash(finalizedBlockNumber);
+        _validateActivationEvidence(
+            input, observedActivationHash, finalizedBlockNumber, reportedFinalizedHash, observedFinalizedHash
+        );
+    }
+
+    function _validateActivationEvidence(
+        ManifestInput memory input,
+        bytes32 observedActivationHash,
+        uint256 finalizedBlockNumber,
+        bytes32 reportedFinalizedHash,
+        bytes32 observedFinalizedHash
+    ) internal pure {
+        require(observedActivationHash == input.activationBlockHash, "activation block hash mismatch");
+        require(reportedFinalizedHash == observedFinalizedHash, "finalized block header mismatch");
+        require(input.activationBlockNumber <= finalizedBlockNumber, "activation block is not finalized");
+    }
+
+    function _decodeFinalizedBlock(IManifestBlockRpc.BlockPrefix memory blockPrefix)
+        internal
+        pure
+        returns (uint256 blockNumber, bytes32 blockHash)
+    {
+        blockNumber = _rpcQuantity(blockPrefix.number);
+        require(blockPrefix.hash.length == 32, "invalid RPC block hash encoding");
+        bytes memory encodedHash = blockPrefix.hash;
+        assembly ("memory-safe") {
+            blockHash := mload(add(encodedHash, 0x20))
+        }
+        require(blockHash != bytes32(0), "zero RPC block hash");
+    }
+
+    function _rpcQuantity(bytes memory value) internal pure returns (uint256 decoded) {
+        require(value.length != 0 && value.length <= 32, "invalid RPC block number encoding");
+        require(value.length == 1 || value[0] != bytes1(0), "noncanonical RPC block number");
+        for (uint256 i = 0; i < value.length; i++) {
+            decoded = (decoded << 8) | uint8(value[i]);
+        }
+    }
+
+    function _blockHeaderHash(uint256 blockNumber) internal view virtual returns (bytes32) {
+        return keccak256(vm.getRawBlockHeader(blockNumber));
     }
 
     function _deploymentPosition(ManifestInput memory input)

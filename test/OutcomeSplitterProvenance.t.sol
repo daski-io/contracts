@@ -6,7 +6,7 @@ import {OutcomeSplitter} from "../src/OutcomeSplitter.sol";
 import {OutcomeSplitterFactory} from "../src/OutcomeSplitterFactory.sol";
 import {OutcomeSplitterCreate2} from "../src/utils/OutcomeSplitterCreate2.sol";
 import {OutcomeSplitterScriptBase} from "../script/OutcomeSplitterScriptBase.sol";
-import {WriteOutcomeSplitterManifest} from "../script/WriteOutcomeSplitterManifest.s.sol";
+import {IManifestBlockRpc, WriteOutcomeSplitterManifest} from "../script/WriteOutcomeSplitterManifest.s.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 
@@ -31,6 +31,30 @@ contract OutcomeSplitterManifestHarness is WriteOutcomeSplitterManifest {
 
     function writeManifest(ManifestInput memory input) external returns (string memory) {
         return _writeManifest(input);
+    }
+
+    function validateRpcEndpoints(string memory primaryRpcUrl, string memory secondaryRpcUrl) external pure {
+        _validateRpcEndpoints(primaryRpcUrl, secondaryRpcUrl);
+    }
+
+    function validateActivationEvidence(
+        ManifestInput memory input,
+        bytes32 observedActivationHash,
+        uint256 finalizedBlockNumber,
+        bytes32 reportedFinalizedHash,
+        bytes32 observedFinalizedHash
+    ) external pure {
+        _validateActivationEvidence(
+            input, observedActivationHash, finalizedBlockNumber, reportedFinalizedHash, observedFinalizedHash
+        );
+    }
+
+    function decodeFinalizedBlock(IManifestBlockRpc.BlockPrefix memory blockPrefix)
+        external
+        pure
+        returns (uint256 blockNumber, bytes32 blockHash)
+    {
+        return _decodeFinalizedBlock(blockPrefix);
     }
 }
 
@@ -169,6 +193,80 @@ contract OutcomeSplitterProvenanceTest is Test {
         input.activationBlockNumber++;
         vm.expectRevert(bytes("manifest must run on activation fork"));
         manifestHarness.validate(input);
+    }
+
+    function testManifestRequiresDistinctRpcEndpoints() public {
+        manifestHarness.validateRpcEndpoints("https://primary.invalid", "https://secondary.invalid");
+
+        vm.expectRevert(bytes("empty primary RPC URL"));
+        manifestHarness.validateRpcEndpoints("", "https://secondary.invalid");
+
+        vm.expectRevert(bytes("empty secondary RPC URL"));
+        manifestHarness.validateRpcEndpoints("https://primary.invalid", "");
+
+        vm.expectRevert(bytes("RPC endpoints must be distinct"));
+        manifestHarness.validateRpcEndpoints("https://same.invalid", "https://same.invalid");
+    }
+
+    function testManifestBindsActivationHashAndFinalityEvidence() public {
+        OutcomeSplitter splitter = OutcomeSplitter(payable(_deploy()));
+        WriteOutcomeSplitterManifest.ManifestInput memory input = _manifestInput(splitter);
+        bytes32 finalizedHash = keccak256("finalized-block");
+
+        manifestHarness.validateActivationEvidence(
+            input, input.activationBlockHash, input.activationBlockNumber, finalizedHash, finalizedHash
+        );
+
+        vm.expectRevert(bytes("activation block hash mismatch"));
+        manifestHarness.validateActivationEvidence(
+            input, keccak256("attacker-supplied-block"), input.activationBlockNumber, finalizedHash, finalizedHash
+        );
+
+        vm.expectRevert(bytes("finalized block header mismatch"));
+        manifestHarness.validateActivationEvidence(
+            input,
+            input.activationBlockHash,
+            input.activationBlockNumber,
+            finalizedHash,
+            keccak256("different-finalized-block")
+        );
+
+        vm.expectRevert(bytes("activation block is not finalized"));
+        manifestHarness.validateActivationEvidence(
+            input, input.activationBlockHash, input.activationBlockNumber - 1, finalizedHash, finalizedHash
+        );
+    }
+
+    function testManifestDecodesTypedFinalizedBlockPrefix() public view {
+        IManifestBlockRpc.BlockPrefix memory blockPrefix;
+        bytes32 finalizedHash = keccak256("finalized-block");
+        blockPrefix.hash = abi.encodePacked(finalizedHash);
+        blockPrefix.number = hex"64";
+
+        (uint256 blockNumber, bytes32 blockHash) = manifestHarness.decodeFinalizedBlock(blockPrefix);
+        assertEq(blockNumber, 100);
+        assertEq(blockHash, finalizedHash);
+    }
+
+    function testManifestRejectsMalformedTypedFinalizedBlockPrefix() public {
+        IManifestBlockRpc.BlockPrefix memory blockPrefix;
+        blockPrefix.hash = abi.encodePacked(keccak256("finalized-block"));
+
+        vm.expectRevert(bytes("invalid RPC block number encoding"));
+        manifestHarness.decodeFinalizedBlock(blockPrefix);
+
+        blockPrefix.number = hex"0064";
+        vm.expectRevert(bytes("noncanonical RPC block number"));
+        manifestHarness.decodeFinalizedBlock(blockPrefix);
+
+        blockPrefix.number = hex"64";
+        blockPrefix.hash = new bytes(31);
+        vm.expectRevert(bytes("invalid RPC block hash encoding"));
+        manifestHarness.decodeFinalizedBlock(blockPrefix);
+
+        blockPrefix.hash = new bytes(32);
+        vm.expectRevert(bytes("zero RPC block hash"));
+        manifestHarness.decodeFinalizedBlock(blockPrefix);
     }
 
     function testManifestDerivesAndSerializesExactDeploymentPosition() public {
