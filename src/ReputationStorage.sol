@@ -259,7 +259,10 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
         if (!record.reputationEligible) revert OrderNotReputationEligible();
     }
 
+    /// The stored agent wallet is the recipient: registration rejects a zero
+    /// wallet (ReputationAccounting._validateOrder) and nothing rewrites the
+    /// stored snapshot afterwards, so no fallback exists.
     function _providerRecipient(ReputationRecord storage record) private view returns (address) {
-        return record.providerAgentWallet == address(0) ? record.providerOwner : record.providerAgentWallet;
+        return record.providerAgentWallet;
     }
 }
