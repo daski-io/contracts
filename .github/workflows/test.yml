@@ -33,6 +33,34 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Export contract ABIs
+        run: |
+          rm -rf abi-export
+          mkdir abi-export
+          for name in AgentIndex ProviderRegistry ServiceRegistry ValidationRegistry \
+            ReputationStorage OutcomeSplitter OutcomeSplitterFactory; do
+            forge inspect "$name" abi --json > "abi-export/$name.json"
+          done
+          python3 - abi-export/*.json <<'EOF'
+          import json
+          import sys
+
+          for path in sys.argv[1:]:
+              with open(path, encoding="utf-8") as handle:
+                  abi = json.load(handle)
+              if not isinstance(abi, list) or not abi:
+                  raise SystemExit(f"{path}: expected a non-empty ABI array")
+              print(f"{path}: {len(abi)} ABI entries")
+          EOF
+
+      - name: Upload contract ABIs
+        uses: actions/upload-artifact@v7
+        with:
+          name: contract-abi-${{ github.sha }}
+          path: abi-export/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Check upgradeable storage layouts
         run: python3 script/check_storage_layout.py
 
