@@ -52,6 +52,8 @@ forge test -vvv
 forge coverage --skip script --exclude-tests --no-match-coverage 'script/' --report summary
 ```
 
+Before pushing to `develop`, satisfy [docs/release-readiness.md](docs/release-readiness.md): `develop` must always be releasable, and the release coordinator only checks that CI passed on the exact commit.
+
 ## Testnet deployment inputs
 
 Deploy and finalize the fresh standard-order reputation resolver with

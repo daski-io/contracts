@@ -20,3 +20,5 @@ test with any reproducer.
 `main` is the release branch (deploys across the Daski stack key off it), so
 `develop` → `main` merges are deliberate, explicitly authorized release steps
 only.
+
+Every push to `develop` must satisfy the [release readiness](docs/release-readiness.md) definition of done, because the release coordinator only checks that CI passed on the exact `develop` commit it ships.
