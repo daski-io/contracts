@@ -37,8 +37,8 @@ A change may be pushed to `develop` only when all of the following hold.
 
 ## What CI proves
 
-The workflow is `.github/workflows/test.yml`. Both jobs run on every push and
-pull request.
+The workflow is `.github/workflows/test.yml`. All three jobs run on every push
+and pull request.
 
 | Job / step | Guarantee |
 | --- | --- |
@@ -50,11 +50,30 @@ pull request.
 | Foundry project / Run Forge tests | `forge test -vvv`: the unit, fuzz and invariant suites under `test/` pass, including the deployment-script and upgrade-safety tests. |
 | Foundry project / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. |
 | Slither analysis / Run Slither | Slither at the version pinned in the workflow finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered). |
+| Release hand-off / Release hand-off trailers | `node scripts/check-release-trailers.mjs` over the pushed commits (a pull request's commits, or the commits since the previous push): every `Release-*` trailer is a known key, well formed, and free of secrets. |
 
 CI does not execute the deployment scripts against a live network or a fork,
 does not deploy or upgrade anything, and does not compare the exported ABI
 against the gateway or provider. Those remain review steps and coordinator
 gates.
+
+## Hand-off to the release agent
+
+The release agent reads nothing but your commits. If a change needs anything at deploy time beyond merging, put it in git trailers on the commit that needs it, one per line at the end of the commit message:
+
+```
+Release-Requires: contract-upgrade
+Release-Owner-Task: Sign the Safe batch the release prepares for the ReputationStorage upgrade
+Release-Rollback: the previous implementation stays deployed; a Safe batch can point the proxy back
+```
+
+- `Release-Requires`: the environment operation the change needs and the owner must authorize: `contract-upgrade` for an in-place UUPS upgrade that keeps addresses and history, `new-epoch` for a fresh reputation resolver with a database reset.
+- `Release-Variable`: a variable a service must receive, written as `Release-Variable: gateway NAME=value before-deploy` (service `gateway`, `provider` or `daski-website`; value literal or `staged`; timing `before-deploy` or `after-deploy`). Never put a secret in a commit.
+- `Release-Scenarios`: the acceptance scenarios the change touches.
+- `Release-Owner-Task`: work only the owner can do after the release. It is listed once in the release summary and never asked during the release.
+- `Release-Rollback`: one line on how to undo the change if the release is rolled back.
+
+Do not write runbooks or instructions for the release agent anywhere else. CI runs `scripts/check-release-trailers.mjs` over every pushed commit.
 
 ## Follow-ups
 
