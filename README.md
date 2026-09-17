@@ -54,7 +54,7 @@ forge coverage --skip script --exclude-tests --no-match-coverage 'script/' --rep
 
 Before pushing to `develop`, satisfy [docs/release-readiness.md](docs/release-readiness.md): `develop` must always be releasable, and the release coordinator only checks that CI passed on the exact commit.
 
-## Testnet deployment inputs
+## Deployment inputs
 
 Deploy and finalize the fresh standard-order reputation resolver with
 `DeployReputationStorage.s.sol`. Deploy the shared factory with
@@ -62,8 +62,15 @@ Deploy and finalize the fresh standard-order reputation resolver with
 with `DeployOutcomeSplitter.s.sol`. Validate and write the public artifact with
 `WriteOutcomeSplitterManifest.s.sol`.
 
+The splitter scripts run on Base and Base Sepolia and refuse every other chain.
+They bind each splitter to the executing chain and to the reviewed canonical
+Circle USDC address for that chain, and the activation gate refuses any other
+token. The commands are the same on both chains; supply the RPC endpoints of
+the chain being deployed to.
+
 `WriteOutcomeSplitterManifest.s.sol` is the sole activation gate and must run
-against a Base Sepolia fork pinned to the claimed activation block:
+against a fork of that chain pinned to the claimed activation block (Base
+Sepolia shown):
 
 ```bash
 export STANDARD_RAIL_PRIMARY_RPC_URL="$BASE_SEPOLIA_RPC_URL"
@@ -122,13 +129,13 @@ construction, fee-on-transfer behavior, partial release, and reentrancy.
 The factory applies the same deployability checks before returning a predicted
 CREATE2 address.
 
-Base Sepolia release tooling requires Circle's canonical USDC address to contain
-token code and report six decimals. It refuses to activate a route while USDC is
-paused or the splitter or either recipient is blacklisted. Circle's pause and
-blacklist controls can still stop an existing immutable route; recipients cannot
-be rotated and the splitter has no rescue path. Direct native-currency transfers
-revert, while EVM-forced native currency remains outside token accounting and
-cannot be withdrawn.
+Release tooling requires Circle's canonical USDC address for the executing chain
+to contain token code and report six decimals. It refuses to activate a route
+while USDC is paused or the splitter or either recipient is blacklisted.
+Circle's pause and blacklist controls can still stop an existing immutable
+route; recipients cannot be rotated and the splitter has no rescue path. Direct
+native-currency transfers revert, while EVM-forced native currency remains
+outside token accounting and cannot be withdrawn.
 
 ## License
 
