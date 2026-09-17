@@ -17,8 +17,11 @@ test with any reproducer.
 ## Branching
 
 `develop` is the integration branch — all work and PRs target `develop`.
-`main` is the release branch (deploys across the Daski stack key off it), so
-`develop` → `main` merges are deliberate, explicitly authorized release steps
-only.
+`sandbox` is the testnet release branch: only the release coordinator writes
+it, through the `develop` → `sandbox` release pull request. `main` marks
+production and moves only by fast-forward to a release commit of `sandbox`,
+performed by the production coordinator. Nobody merges into `sandbox` or
+`main` by hand, and moving a branch never deploys a contract: on-chain actions
+stay separate governance steps.
 
 Every push to `develop` must satisfy the [release readiness](docs/release-readiness.md) definition of done, because the release coordinator only checks that CI passed on the exact `develop` commit it ships.
