@@ -27,8 +27,8 @@ A change may be pushed to `develop` only when all of the following hold.
       their own ABI fragments; they do not import this repository's build
       output.
 - [ ] Deployment scripts under `script/` remain runnable against a fork
-      (`forge script ... --fork-url ...` with the `STANDARD_RAIL_*` inputs
-      named in their source).
+      (`forge script ... --fork-url ...` with the environment inputs named in
+      their source).
 - [ ] Nothing is merged to `sandbox` or `main`, or tagged, by hand. The release
       coordinator writes `sandbox`, the testnet release branch, through the
       `develop` to `sandbox` release pull request; the production coordinator
