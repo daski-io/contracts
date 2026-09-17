@@ -54,7 +54,7 @@ forge coverage --skip script --exclude-tests --no-match-coverage 'script/' --rep
 
 Before pushing to `develop`, satisfy [docs/release-readiness.md](docs/release-readiness.md): `develop` must always be releasable, and the release coordinator only checks that CI passed on the exact commit.
 
-## Testnet deployment inputs
+## Deployment inputs
 
 Deploy and finalize the fresh standard-order reputation resolver with
 `DeployReputationStorage.s.sol`. Deploy the shared factory with
@@ -62,8 +62,15 @@ Deploy and finalize the fresh standard-order reputation resolver with
 with `DeployOutcomeSplitter.s.sol`. Validate and write the public artifact with
 `WriteOutcomeSplitterManifest.s.sol`.
 
+The splitter scripts run on Base and Base Sepolia and refuse every other chain.
+They bind each splitter to the executing chain and to the reviewed canonical
+Circle USDC address for that chain, and the activation gate refuses any other
+token. The commands are the same on both chains; supply the RPC endpoints of
+the chain being deployed to.
+
 `WriteOutcomeSplitterManifest.s.sol` is the sole activation gate and must run
-against a Base Sepolia fork pinned to the claimed activation block:
+against a fork of that chain pinned to the claimed activation block (Base
+Sepolia shown):
 
 ```bash
 export STANDARD_RAIL_PRIMARY_RPC_URL="$BASE_SEPOLIA_RPC_URL"
@@ -110,8 +117,35 @@ and pause the resolver immediately if signer integrity is in doubt.
 The deployment scripts default `MARKETPLACE_COMMISSION_BPS` to 500. A later
 fee change is represented by a new immutable splitter and listing epoch.
 
-The scripts require the `STANDARD_RAIL_*` values named in their source. They
-are deployment tooling only; running tests or pushing this repository does not
+Deploy the four marketplace registries with `DeployMarketplaceRegistries.s.sol`,
+on Base or Base Sepolia only. It deploys AgentIndex, ValidationRegistry,
+ProviderRegistry and ServiceRegistry as ERC-1967 UUPS proxies against
+`IDENTITY_REGISTRY_ADDRESS` and `SANCTIONS_ORACLE_ADDRESS`, with the reviewed
+canonical Circle USDC of the executing chain as the listing-fee token,
+`PROVIDER_REGISTRY_TREASURY` as the fee recipient and
+`PROVIDER_REGISTRY_LISTING_FEE` in atomic units. None of the identity registry,
+sanctions oracle and token has a setter, so review those addresses
+independently before deploying.
+`MARKETPLACE_REGISTRIES_FINAL_ADMIN` must satisfy the same Safe rules as the
+reputation deployment, and `MARKETPLACE_REGISTRIES_PAUSE_GUARDIAN` must be a
+nonzero address distinct from the Safe and the broadcaster. The broadcaster
+comes from the standard Foundry wallet options; the script reads no private
+key. It is only the bootstrap admin: the script pauses each registry, sets the
+guardian and proposes the Safe, so it ends with four paused proxies whose
+pending admin is the Safe. The Safe must accept administration before it can
+unpause a registry, and after acceptance the broadcaster holds no role.
+
+After the Safe has accepted, `VerifyMarketplaceRegistries.s.sol` checks the
+deployment without sending anything. Given the four proxy addresses, the
+identity registry, the sanctions oracle and the Safe, it requires code and an
+ERC-1967 implementation behind every proxy, the expected registry type at each
+address, one shared identity registry and sanctions oracle, the reviewed USDC
+as listing-fee token, ServiceRegistry pointing at the given ProviderRegistry,
+and the Safe as admin with no pending admin. It returns the implementation
+addresses for the release record.
+
+The scripts require the environment values named in their source. They are
+deployment tooling only; running tests or pushing this repository does not
 deploy contracts.
 
 ## Security
@@ -122,13 +156,13 @@ construction, fee-on-transfer behavior, partial release, and reentrancy.
 The factory applies the same deployability checks before returning a predicted
 CREATE2 address.
 
-Base Sepolia release tooling requires Circle's canonical USDC address to contain
-token code and report six decimals. It refuses to activate a route while USDC is
-paused or the splitter or either recipient is blacklisted. Circle's pause and
-blacklist controls can still stop an existing immutable route; recipients cannot
-be rotated and the splitter has no rescue path. Direct native-currency transfers
-revert, while EVM-forced native currency remains outside token accounting and
-cannot be withdrawn.
+Release tooling requires Circle's canonical USDC address for the executing chain
+to contain token code and report six decimals. It refuses to activate a route
+while USDC is paused or the splitter or either recipient is blacklisted.
+Circle's pause and blacklist controls can still stop an existing immutable
+route; recipients cannot be rotated and the splitter has no rescue path. Direct
+native-currency transfers revert, while EVM-forced native currency remains
+outside token accounting and cannot be withdrawn.
 
 ## License
 
