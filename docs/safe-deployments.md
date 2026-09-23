@@ -65,11 +65,12 @@ unknown/mixed runtimes, altered implementations/handlers, weak thresholds,
 enabled modules, and configured guards. Existing stub tests exercise malformed
 owner lists and other invalid governance inputs.
 
-An existing Base Mainnet Safe can additionally be checked without broadcasting:
+An existing Safe on Base Mainnet or Base Sepolia can additionally be checked
+without broadcasting:
 
 ```bash
 # Supply these in the process environment without printing endpoints or secrets:
-# SAFE_VALIDATION_RPC_URL: Base Mainnet archive RPC
+# SAFE_VALIDATION_RPC_URL: archive RPC for the Safe's Base network (8453 or 84532)
 # SAFE_VALIDATION_BLOCK: reviewed finalized block number
 # SAFE_VALIDATION_ADDRESS: public Safe address
 forge test --match-contract SafeForkCompatibilityTest -vv

@@ -39,7 +39,7 @@ abstract contract ReputationSafeValidation {
 
     error UnsupportedSafeChain(uint256 chainId);
     error FinalAdminMustBeReviewedSafe(address candidate);
-    error SafeProxyCodeHashMismatch(bytes32 actual, bytes32 expected);
+    error UnreviewedSafeProxyCodeHash(bytes32 actual);
     error SafeSingletonMismatch(address actual, address expected);
     error SafeSingletonCodeHashMismatch(bytes32 actual, bytes32 expected);
     error InvalidSafeOwners();
@@ -85,7 +85,7 @@ abstract contract ReputationSafeValidation {
         SafeDeployment memory reviewed = reviewedSafeDeployment(block.chainid, safe.codehash);
         if (safe.code.length == 0) revert FinalAdminMustBeReviewedSafe(safe);
         if (safe.codehash != reviewed.proxyCodeHash) {
-            revert SafeProxyCodeHashMismatch(safe.codehash, reviewed.proxyCodeHash);
+            revert UnreviewedSafeProxyCodeHash(safe.codehash);
         }
 
         address singleton;

@@ -41,7 +41,7 @@ contract ReputationSafeValidationTest is Test {
 
     function test_rejectsAbiOnlySpoofAndWrongSingleton() public {
         AbiOnlySafeSpoof spoof = new AbiOnlySafeSpoof();
-        vm.expectPartialRevert(ReputationSafeValidation.SafeProxyCodeHashMismatch.selector);
+        vm.expectPartialRevert(ReputationSafeValidation.UnreviewedSafeProxyCodeHash.selector);
         validator.validateGovernance(_config(address(spoof)));
 
         ThresholdSafeStub safe = _defaultSafe();

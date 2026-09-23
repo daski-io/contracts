@@ -52,13 +52,38 @@ and pull request.
 | Foundry project / Check upgradeable storage layouts | `python3 script/check_storage_layout.py`: the storage layout of each UUPS-upgradeable contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`) equals the reviewed baseline in `storage-layout/baseline.json`. An implementation cannot move, retype or reorder storage behind the permanent proxies without a reviewed baseline change. |
 | Foundry project / Run Forge tests | `forge test -vvv`: the unit, fuzz and invariant suites under `test/` pass, including the deployment-script and upgrade-safety tests. |
 | Foundry project / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. |
-| Slither analysis / Run Slither | Slither 0.11.5 on the runner's Python 3.12 and pinned Foundry finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered; `--fail-high`). |
+| Slither analysis / Run Slither | Slither 0.11.5 with hash-locked Python dependencies, Python 3.12 and pinned Foundry finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered; `--fail-high`). |
 | Release hand-off / Release hand-off trailers | `node scripts/check-release-trailers.mjs` over the pushed commits (a pull request's commits, or the commits since the previous push): every `Release-*` trailer is a known key, well formed, and free of secrets. |
 
 CI does not execute the deployment scripts against a live network or a fork,
 does not deploy or upgrade anything, and does not compare the exported ABI
 against the gateway or provider. Those remain review steps and coordinator
 gates.
+
+## Slither dependency lock
+
+The Slither job installs `scripts/requirements-slither.txt` with
+`--require-hashes --only-binary=:all:` and runs `pip check`. The lock pins
+Slither and every transitive Python dependency; wheels avoid unpinned source
+build dependencies. It targets Linux with Python 3.12, matching CI. See
+[pip's hash-checking mode](https://pip.pypa.io/en/stable/topics/secure-installs/).
+
+To update the lock, use an isolated Python 3.12 environment on Linux and
+[pip-tools](https://pip-tools.readthedocs.io/en/stable/):
+
+```bash
+python3.12 -m venv /tmp/daski-slither-lock
+/tmp/daski-slither-lock/bin/python -m pip install pip==26.2.1 pip-tools==7.6.1
+/tmp/daski-slither-lock/bin/pip-compile --generate-hashes --allow-unsafe --no-header \
+  --no-emit-index-url --no-emit-trusted-host --pip-args='--only-binary=:all:' \
+  --output-file=scripts/requirements-slither.txt scripts/requirements-slither.in
+```
+
+Edit the `.in` file when changing Slither itself. Existing dependency pins are
+retained unless an update is requested with `--upgrade-package <name>` or
+`--upgrade`. Review the resulting versions and hashes, install the lock in a
+fresh environment with the CI flags, and pass Slither and the full CI gates
+before pushing to `develop`.
 
 ## Hand-off to the release agent
 

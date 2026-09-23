@@ -32,12 +32,19 @@ contract CanonicalSafeValidationTest is CanonicalSafeFixture {
     }
 
     function test_rejectsUnknownProxyRuntimeAndMixedVersions() public {
+        for (uint256 version; version < 2; ++version) {
+            address candidate = _canonicalSafe(version == 1);
+            bytes memory unreviewedCode = abi.encodePacked(candidate.code, hex"00");
+            vm.etch(candidate, unreviewedCode);
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    ReputationSafeValidation.UnreviewedSafeProxyCodeHash.selector, keccak256(unreviewedCode)
+                )
+            );
+            validator.validate(candidate);
+        }
+
         address safe = _canonicalSafe(true);
-        bytes memory code = safe.code;
-        vm.etch(safe, abi.encodePacked(code, hex"00"));
-        vm.expectPartialRevert(ReputationSafeValidation.SafeProxyCodeHashMismatch.selector);
-        validator.validate(safe);
-        vm.etch(safe, code);
         vm.store(safe, bytes32(0), bytes32(uint256(uint160(0x29fcB43b46531BcA003ddC8FCB67FFE91900C762))));
         vm.expectPartialRevert(ReputationSafeValidation.SafeSingletonMismatch.selector);
         validator.validate(safe);

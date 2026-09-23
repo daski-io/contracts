@@ -27,7 +27,7 @@ contract SafeForkCompatibilityTest is Test {
         uint256 blockNumber = vm.envUint("SAFE_VALIDATION_BLOCK");
         address safe = vm.envAddress("SAFE_VALIDATION_ADDRESS");
         vm.createSelectFork(rpc, blockNumber);
-        assertEq(block.chainid, 8453);
+        assertTrue(block.chainid == 8453 || block.chainid == 84532, "Expected Base or Base Sepolia");
         address guardian = makeAddr("fork-only-guardian");
         DeployMarketplaceRegistries.Config memory registries = DeployMarketplaceRegistries.Config({
             identityRegistry: address(new MockCanonicalIdentityRegistry()),

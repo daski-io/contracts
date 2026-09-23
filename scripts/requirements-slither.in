@@ -1,0 +1,3 @@
+# Slither runtime dependencies for the Linux Python 3.12 CI job.
+# Regeneration instructions: docs/release-readiness.md.
+slither-analyzer==0.11.5

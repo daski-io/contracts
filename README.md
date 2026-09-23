@@ -171,4 +171,9 @@ outside token accounting and cannot be withdrawn.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Daski code is MIT licensed; see [LICENSE](LICENSE). The vendored Safe bytecode
+fixtures in `test/vectors/safe-1.4.1.json` and `test/vectors/safe-1.5.0.json`
+are LGPL-3.0-only, with their license in [test/vectors/LICENSE.safe](test/vectors/LICENSE.safe).
+See [Safe artifact provenance](docs/safe-deployments.md#exact-identities) for
+upstream source links and package integrity records. Other third-party
+components retain their own licenses.
