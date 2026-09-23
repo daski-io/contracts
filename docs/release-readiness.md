@@ -52,7 +52,7 @@ and pull request.
 | Foundry project / Check upgradeable storage layouts | `python3 script/check_storage_layout.py`: the storage layout of each UUPS-upgradeable contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`) equals the reviewed baseline in `storage-layout/baseline.json`. An implementation cannot move, retype or reorder storage behind the permanent proxies without a reviewed baseline change. |
 | Foundry project / Run Forge tests | `forge test -vvv`: the unit, fuzz and invariant suites under `test/` pass, including the deployment-script and upgrade-safety tests. |
 | Foundry project / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. |
-| Slither analysis / Run Slither | Slither at the version pinned in the workflow finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered). |
+| Slither analysis / Run Slither | Slither 0.11.5 on the runner's Python 3.12 and pinned Foundry finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered; `--fail-high`). |
 | Release hand-off / Release hand-off trailers | `node scripts/check-release-trailers.mjs` over the pushed commits (a pull request's commits, or the commits since the previous push): every `Release-*` trailer is a known key, well formed, and free of secrets. |
 
 CI does not execute the deployment scripts against a live network or a fork,

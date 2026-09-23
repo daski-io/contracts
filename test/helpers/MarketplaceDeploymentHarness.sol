@@ -3,7 +3,11 @@ pragma solidity ^0.8.24;
 
 import {DeployMarketplaceRegistries} from "../../script/DeployMarketplaceRegistries.s.sol";
 import {VerifyMarketplaceRegistries} from "../../script/VerifyMarketplaceRegistries.s.sol";
-import {ReputationSafeSingletonStub, ThresholdSafeStub} from "./ReputationDeploymentHarness.sol";
+import {
+    ReputationSafeSingletonStub,
+    ReputationSafeFallbackHandlerStub,
+    ThresholdSafeStub
+} from "./ReputationDeploymentHarness.sol";
 
 /// @dev Both harnesses swap only the reviewed Safe identities for the local
 ///      stubs. The production chain gate of `reviewedSafeDeployment` still runs.
@@ -16,14 +20,20 @@ contract DeployMarketplaceRegistriesHarness is DeployMarketplaceRegistries {
         _reviewedSafeHandler = handler;
     }
 
-    function reviewedSafeDeployment(uint256 chainId) public view override returns (bytes32, address, bytes32, address) {
-        super.reviewedSafeDeployment(chainId);
-        return (
-            keccak256(type(ThresholdSafeStub).runtimeCode),
-            _reviewedSafeSingleton,
-            keccak256(type(ReputationSafeSingletonStub).runtimeCode),
-            _reviewedSafeHandler
-        );
+    function reviewedSafeDeployment(uint256 chainId, bytes32 proxyCodeHash)
+        public
+        view
+        override
+        returns (SafeDeployment memory)
+    {
+        super.reviewedSafeDeployment(chainId, proxyCodeHash);
+        return SafeDeployment({
+            proxyCodeHash: keccak256(type(ThresholdSafeStub).runtimeCode),
+            singleton: _reviewedSafeSingleton,
+            singletonCodeHash: keccak256(type(ReputationSafeSingletonStub).runtimeCode),
+            fallbackHandler: _reviewedSafeHandler,
+            fallbackHandlerCodeHash: keccak256(type(ReputationSafeFallbackHandlerStub).runtimeCode)
+        });
     }
 
     function deploy(Config memory config) external returns (Registries memory) {
@@ -44,14 +54,20 @@ contract VerifyMarketplaceRegistriesHarness is VerifyMarketplaceRegistries {
         _reviewedSafeHandler = handler;
     }
 
-    function reviewedSafeDeployment(uint256 chainId) public view override returns (bytes32, address, bytes32, address) {
-        super.reviewedSafeDeployment(chainId);
-        return (
-            keccak256(type(ThresholdSafeStub).runtimeCode),
-            _reviewedSafeSingleton,
-            keccak256(type(ReputationSafeSingletonStub).runtimeCode),
-            _reviewedSafeHandler
-        );
+    function reviewedSafeDeployment(uint256 chainId, bytes32 proxyCodeHash)
+        public
+        view
+        override
+        returns (SafeDeployment memory)
+    {
+        super.reviewedSafeDeployment(chainId, proxyCodeHash);
+        return SafeDeployment({
+            proxyCodeHash: keccak256(type(ThresholdSafeStub).runtimeCode),
+            singleton: _reviewedSafeSingleton,
+            singletonCodeHash: keccak256(type(ReputationSafeSingletonStub).runtimeCode),
+            fallbackHandler: _reviewedSafeHandler,
+            fallbackHandlerCodeHash: keccak256(type(ReputationSafeFallbackHandlerStub).runtimeCode)
+        });
     }
 
     function verify(Registries memory registries, address identityRegistry, address sanctionsOracle, address safe)

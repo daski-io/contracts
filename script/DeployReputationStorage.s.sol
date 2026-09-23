@@ -49,7 +49,13 @@ contract DeployReputationStorage is
             canonicalToken: vm.envAddress("STANDARD_RAIL_CANONICAL_TOKEN"),
             eas: canonicalEAS(block.chainid)
         });
+        return _deploy(config, adminPrivateKey);
+    }
 
+    function _deploy(DeploymentConfig memory config, uint256 adminPrivateKey)
+        internal
+        returns (address proxyAddress, bytes32 outcomeSchema, bytes32 confirmationSchema)
+    {
         _validateDependencies(
             config.identityRegistry,
             config.providerRegistry,
