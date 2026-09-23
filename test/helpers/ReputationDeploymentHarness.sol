@@ -119,13 +119,14 @@ contract DeployReputationStorageHarness is DeployReputationStorage {
         _reviewedSafeHandler = handler;
     }
 
-    function reviewedSafeDeployment(uint256) public view override returns (bytes32, address, bytes32, address) {
-        return (
-            keccak256(type(ThresholdSafeStub).runtimeCode),
-            _reviewedSafeSingleton,
-            keccak256(type(ReputationSafeSingletonStub).runtimeCode),
-            _reviewedSafeHandler
-        );
+    function reviewedSafeDeployment(uint256, bytes32) public view override returns (SafeDeployment memory) {
+        return SafeDeployment({
+            proxyCodeHash: keccak256(type(ThresholdSafeStub).runtimeCode),
+            singleton: _reviewedSafeSingleton,
+            singletonCodeHash: keccak256(type(ReputationSafeSingletonStub).runtimeCode),
+            fallbackHandler: _reviewedSafeHandler,
+            fallbackHandlerCodeHash: keccak256(type(ReputationSafeFallbackHandlerStub).runtimeCode)
+        });
     }
 
     function validateGovernance(DeploymentConfig calldata config) external view {

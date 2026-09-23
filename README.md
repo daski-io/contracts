@@ -92,11 +92,16 @@ balance, and release sequence are then checked using ordinary calls on the
 original activation fork. The mandatory `--no-storage-caching` flag prevents
 cached pre-reorg fork state from being labeled with the finalized block hash.
 
-The reputation deployment requires `STANDARD_REPUTATION_FINAL_ADMIN` to be a
-canonical SafeL2 v1.4.1 proxy with a threshold of at least two, no modules, a
-zero guard, and the canonical compatibility fallback handler. The Safe must
-have at least two unique nonzero owners and its threshold cannot exceed the
-owner count.
+Both reputation and marketplace registry deployment require their final admin
+(`STANDARD_REPUTATION_FINAL_ADMIN` / `MARKETPLACE_REGISTRIES_FINAL_ADMIN`) to be
+a reviewed canonical SafeL2 v1.4.1 or v1.5.0 deployment. Each version's proxy
+bytecode, singleton address and bytecode, and compatibility fallback handler
+address and bytecode must match the explicit allowlist. Mixed-version or
+unreviewed deployments are rejected. The Safe must have at least two unique
+nonzero owners, a threshold of at least two and no greater than the owner count,
+no modules, and zero transaction and module guards. See
+[reviewed Safe deployments](docs/safe-deployments.md) for artifact provenance,
+compatibility scope, and the optional read-only fork check.
 `STANDARD_REPUTATION_PAUSE_GUARDIAN` must be a distinct nonzero address. Review
 the Safe address and owners independently as part of the release process. The
 script leaves the configured proxy paused with the Safe as pending admin; the
