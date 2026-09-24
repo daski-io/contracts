@@ -1,0 +1,139 @@
+{
+  "chainId": 8453,
+  "name": "base-mainnet",
+  "status": "deployed-paused",
+  "note": "Genesis of 2026-09-24. Every proxy is administered by the Safe and stays paused until the phase 2 registration bootstrap; the Safe unpauses.",
+  "usage": "marketplace-identity-catalog-validation-and-standard-order-reputation; standard-rail splitters through the factory",
+  "deployedAt": "2026-09-24",
+  "sourceCommit": "b73781090a55b8f3db83b97b2d437cf4958a91b1",
+  "sourceCommitShort": "b737810",
+  "sourceTag": "v0.11.6",
+  "canonical": {
+    "IdentityRegistry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+    "EAS": "0x4200000000000000000000000000000000000021",
+    "SchemaRegistry": "0x4200000000000000000000000000000000000020"
+  },
+  "governance": {
+    "Safe": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+    "safeOwners": [
+      "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962",
+      "0x83620c2FB3d695594D9E7Ddb70c271eE8f3d525F",
+      "0x5ae93F39F67b441DE85b4D3a45aAde298e013B3B"
+    ],
+    "safeThreshold": 2,
+    "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962",
+    "orderSigner": "0xfB3B08Ed9149283e83fA233D05c2fB40f5EB99b7",
+    "treasury": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+    "listingFeeAtomicUsdc": "50000000",
+    "acceptance": {
+      "description": "Safe batch: acceptAdmin() on the five proxies",
+      "transactionHash": "0x6a0a2d3a275bcd09f0004d86a1a7a973fc6d5609a3ba96a8540b32c857a239f2",
+      "safeTxHash": "0x1e5636c713e9c00c8d5d803b462887d6c52aba14f996a87fa09930a6a6faaa97",
+      "block": 51748713
+    }
+  },
+  "contracts": {
+    "USDC": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "SanctionsOracle": "0x3a91a31cb3dc49b4db9ce721f50a9d076c8d739b",
+    "AgentIndex": "0x4cb9f24FB37C9AF9EbC8Ba7E1E2A17292969eE56",
+    "ValidationRegistry": "0xA1464604fE8f58aa0BB3D58e9aebA0e53562C9F5",
+    "ProviderRegistry": "0x0c9cF40cAcAD6aEE3D416864B5d28Db529dEaE02",
+    "ServiceRegistry": "0xd23071717fd63Bf474F671045B0753f992526542",
+    "ReputationStorage": "0x371314059bdeCDeB87DDb9a632f37b4ccf1CaDe3",
+    "OutcomeSplitterFactory": "0xe9E26EddabA616aC4eaB2a7de16961899119f10e",
+    "EAS": "0x4200000000000000000000000000000000000021",
+    "SchemaRegistry": "0x4200000000000000000000000000000000000020"
+  },
+  "implementations": {
+    "AgentIndex": "0xc8fe0ec04f158f85f5e4f66b6a5f347c83716916",
+    "ValidationRegistry": "0x309e80ab2bf0112d1dafbefcd9c34ca13a87e5da",
+    "ProviderRegistry": "0xb8ed20fe699de2710f2dfda0e182a6ab0924578b",
+    "ServiceRegistry": "0x0f01752ecc7d864539669cb584e213470d5fd068",
+    "ReputationStorage": "0xe0e0bb55bf08c5fe751ff6c69fb7e2464d0da239"
+  },
+  "codeHashes": {
+    "AgentIndex": "0x0f7afd2811e94a727265de1787f9df1b470785d4fd0e3324fe0c3f03e97cc5a3",
+    "ValidationRegistry": "0x0f7afd2811e94a727265de1787f9df1b470785d4fd0e3324fe0c3f03e97cc5a3",
+    "ProviderRegistry": "0x0f7afd2811e94a727265de1787f9df1b470785d4fd0e3324fe0c3f03e97cc5a3",
+    "ServiceRegistry": "0x0f7afd2811e94a727265de1787f9df1b470785d4fd0e3324fe0c3f03e97cc5a3",
+    "ReputationStorage": "0x0f7afd2811e94a727265de1787f9df1b470785d4fd0e3324fe0c3f03e97cc5a3",
+    "OutcomeSplitterFactory": "0xb5b5079febe06407b48d47e6a92ee786a8e2be22d9fa21e60dc7412964ff883e"
+  },
+  "administration": {
+    "AgentIndex": {
+      "admin": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+      "pendingAdmin": "0x0000000000000000000000000000000000000000",
+      "paused": true,
+      "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962"
+    },
+    "ValidationRegistry": {
+      "admin": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+      "pendingAdmin": "0x0000000000000000000000000000000000000000",
+      "paused": true,
+      "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962"
+    },
+    "ProviderRegistry": {
+      "admin": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+      "pendingAdmin": "0x0000000000000000000000000000000000000000",
+      "paused": true,
+      "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962"
+    },
+    "ServiceRegistry": {
+      "admin": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+      "pendingAdmin": "0x0000000000000000000000000000000000000000",
+      "paused": true,
+      "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962"
+    },
+    "ReputationStorage": {
+      "admin": "0xe21AcBf86dF0a4B1F3edD56BB1C314670BF43902",
+      "pendingAdmin": "0x0000000000000000000000000000000000000000",
+      "paused": true,
+      "pauseGuardian": "0xC7995391306038db5bbA6C8fb1c2e6cb5C46F962"
+    }
+  },
+  "schemas": {
+    "outcome": "0x18674356a057b649d374cab4e94c373662f34f10f0aa29535c1f34826b5c4e23",
+    "confirmation": "0xe07e2769cfb810e9f9e5a2111fcbc1fc579f6dd697fc42eb021143aaf848b1fa"
+  },
+  "deployBlock": 51747780,
+  "transactions": {
+    "registries": [
+      "0xdb757dfa54cd0ccd96d501620d29b34648e9ef03a242b41d7ae6395a4359d49a",
+      "0xdd76b8d5fd2a4a32d6d8df07df5fd80244ed413bc22ef45517244947a568f9d2",
+      "0x989a5bc893bdb668ce7e299dd4581cea6f5f8e5ee92bbe079a9c2b0252a6f6f0",
+      "0x5ef065822920c3a5fcfd1f6ce26163cc03baf55db9d55e06864d460c5512b34b",
+      "0xf4305cae629401e072de6685fb4d035f0d804442428c784092c6cef32da39883",
+      "0x4ebba9f45f7b42d8dbda30f57724682e29ce7f0d231dbdd43900923a52fb3443",
+      "0x8ebe87ae618a21c8d91297f529834b3b08a305516fc9f63db725466e4cf4b572",
+      "0xd7cf5b30c120bb980d5c1907792014df397836ef0365e15edd0dc0744e1ce82f",
+      "0x8c5be5b01ea2196fce7629a0efda080fec6ac946ac85ba333e0f7706997f2abb",
+      "0xb25896b8378c64f8ff88f0dc1d88438578fd429c79a35112ff56dd7a5902e7b8",
+      "0x4883fe3e82d80279c9ac0f58b70ab1d1c9bbd711642f2926b894f3e57f92e946",
+      "0x0e58ad81cedec8769f5d127fee2be6b59d573d29b3dfc53e192d227271b0cc34",
+      "0x7df53fcd2b7c0434855681f2992c6c2d8f981e95a746b04f8fc20d6568d07114",
+      "0xda00784d3a5559b2252a74b18775cda779308b48940458d13c7ff2681a7ee6ff",
+      "0x37475e65e8098dfa208c45b97bea6154b8f93123a80cb1dc2232a7ef6597ccf0",
+      "0x123f569e22e396bbe4b2635f1aae06d33886fdaa3a6c93b4d96a914bb17b1aea",
+      "0xd1a22da428e15b579b375310ca6470538416cfbe35b01f522d62af2f4c03a5be",
+      "0x2eef4910b785eff9a28692ab044291148194bba65a63b518b272a2706b2bbdff",
+      "0x7558469f33965843a8d688d823363dc4d40afb9d194f7ea1053cb60479bf417e",
+      "0x66cbd97176f1701c835d64137d197724e6048396cf1d0179e2a98d9d01a8efa4"
+    ],
+    "reputation": [
+      "0x8ce3e0654d6ddb2634284f117e22a4ce9379f7b73757ec49ee30c04d216b7c2b",
+      "0x126db4cf6077d3e01ebc185d574cdf91f978cbf491ead0cba5cc1bbf089e836b",
+      "0x0551510e3df065309192c9652da7d02ea5168fa37fcd6e1c814bbe8c58ab9f76",
+      "0x0402f90764bb78fb6ad6496ea43774f73ad8d13e7d8b3d7c71a5dceec6e1b66a",
+      "0x4369be7018c6c26fcdfce753b32cb74ffc3c5a18c4c5085e6368aec513e95198",
+      "0x75330ba07073f23b4ce7215d2015c3df850e821f2693d7d0019e038bac2435d0",
+      "0x5f06e5dfb6e1790677f28e530240d76c00a87babfcb1e1cd66be789a019c3a40",
+      "0xaeb7410b4ff88908799c8556ada4f1c711305e1592f43a24458784280c9b9a97",
+      "0x0d7a1530b90d013f26c3c1bfbf08cbe1bc3d5ece5dacfe9460b4069c745efb42",
+      "0x639159ee8275d63ffb41c1e9892d03780d2083163bb4134774a97fc6ec61b995",
+      "0x944b2563ff1bf27387d6bb1b3895149d013b7f0502c32e510367788b2b40fc3a"
+    ],
+    "factory": [
+      "0x460df47916a9687f44947f96a6083b049e8f07f7a46496c6c09361af00f31b62"
+    ]
+  }
+}
