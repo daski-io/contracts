@@ -23,17 +23,23 @@ abstract contract ReputationSafeValidation {
     bytes32 private constant GUARD_STORAGE_SLOT = keccak256("guard_manager.guard.address");
     bytes32 private constant FALLBACK_HANDLER_STORAGE_SLOT = keccak256("fallback_manager.handler.address");
 
-    // Canonical Safe v1.4.1 identities from safe-global/safe-deployments.
-    bytes32 private constant SAFE_PROXY_RUNTIME_CODE_HASH =
-        0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
-    address private constant SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
-    bytes32 private constant SAFE_L2_SINGLETON_RUNTIME_CODE_HASH =
-        0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff;
-    address private constant COMPATIBILITY_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+    bytes32 private constant MODULE_GUARD_STORAGE_SLOT = keccak256("module_manager.module_guard.address");
+
+    struct SafeDeployment {
+        bytes32 proxyCodeHash;
+        address singleton;
+        bytes32 singletonCodeHash;
+        address fallbackHandler;
+        bytes32 fallbackHandlerCodeHash;
+    }
+
+    // Canonical identities and artifact provenance: docs/safe-deployments.md.
+    bytes32 private constant SAFE_141_PROXY_HASH = 0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
+    bytes32 private constant SAFE_150_PROXY_HASH = 0x4e381985ca68b3e5d27b4425fa581c19cf33146d3f887a3cfca96f55528ea46f;
 
     error UnsupportedSafeChain(uint256 chainId);
     error FinalAdminMustBeReviewedSafe(address candidate);
-    error SafeProxyCodeHashMismatch(bytes32 actual, bytes32 expected);
+    error UnreviewedSafeProxyCodeHash(bytes32 actual);
     error SafeSingletonMismatch(address actual, address expected);
     error SafeSingletonCodeHashMismatch(bytes32 actual, bytes32 expected);
     error InvalidSafeOwners();
@@ -42,29 +48,45 @@ abstract contract ReputationSafeValidation {
     error InvalidSafeGuard(address actual);
     error InvalidSafeFallbackHandler(address actual);
     error SafeFallbackHandlerHasNoCode(address handler);
+    error SafeFallbackHandlerCodeHashMismatch(bytes32 actual, bytes32 expected);
+    error InvalidSafeModuleGuard(address actual);
 
-    function reviewedSafeDeployment(uint256 chainId)
+    /// @dev Select an exact reviewed deployment by proxy bytecode, never by a reported VERSION string.
+    ///      Each proxy version is paired with its reviewed singleton and handler.
+    function reviewedSafeDeployment(uint256 chainId, bytes32 proxyCodeHash)
         public
         view
         virtual
-        returns (bytes32 proxyCodeHash, address singleton, bytes32 singletonCodeHash, address fallbackHandler)
+        returns (SafeDeployment memory)
     {
         if (chainId != BASE_CHAIN_ID && chainId != BASE_SEPOLIA_CHAIN_ID) {
             revert UnsupportedSafeChain(chainId);
         }
-        return (
-            SAFE_PROXY_RUNTIME_CODE_HASH,
-            SAFE_L2_SINGLETON,
-            SAFE_L2_SINGLETON_RUNTIME_CODE_HASH,
-            COMPATIBILITY_FALLBACK_HANDLER
-        );
+        if (proxyCodeHash == SAFE_150_PROXY_HASH) {
+            return SafeDeployment({
+                proxyCodeHash: SAFE_150_PROXY_HASH,
+                singleton: 0xEdd160fEBBD92E350D4D398fb636302fccd67C7e,
+                singletonCodeHash: 0x180193227186ccb85316c94db1f0d156ed932b14712cfaac78901899178572dc,
+                fallbackHandler: 0x3EfCBb83A4A7AfcB4F68D501E2c2203a38be77f4,
+                fallbackHandlerCodeHash: 0x3c6a85bcf7b563daa624b884b4e9a1b9fa5371edde7be945d998071a48f28bbc
+            });
+        }
+        // Unknown proxy runtimes fail the comparison in _validateSafe.
+        return SafeDeployment({
+            proxyCodeHash: SAFE_141_PROXY_HASH,
+            singleton: 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762,
+            singletonCodeHash: 0xb1f926978a0f44a2c0ec8fe822418ae969bd8c3f18d61e5103100339894f81ff,
+            fallbackHandler: 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99,
+            fallbackHandlerCodeHash: 0x7c6007a5d711cea8dfd5d91f5940ec29c7f200fe511eb1fc1397b367af3c42f9
+        });
     }
 
     function _validateSafe(address safe) internal view {
-        (bytes32 proxyHash, address reviewedSingleton, bytes32 singletonHash, address reviewedHandler) =
-            reviewedSafeDeployment(block.chainid);
+        SafeDeployment memory reviewed = reviewedSafeDeployment(block.chainid, safe.codehash);
         if (safe.code.length == 0) revert FinalAdminMustBeReviewedSafe(safe);
-        if (safe.codehash != proxyHash) revert SafeProxyCodeHashMismatch(safe.codehash, proxyHash);
+        if (safe.codehash != reviewed.proxyCodeHash) {
+            revert UnreviewedSafeProxyCodeHash(safe.codehash);
+        }
 
         address singleton;
         try IReviewedSafeProxy(safe).masterCopy() returns (address value) {
@@ -72,9 +94,9 @@ abstract contract ReputationSafeValidation {
         } catch {
             revert FinalAdminMustBeReviewedSafe(safe);
         }
-        if (singleton != reviewedSingleton) revert SafeSingletonMismatch(singleton, reviewedSingleton);
-        if (singleton.codehash != singletonHash) {
-            revert SafeSingletonCodeHashMismatch(singleton.codehash, singletonHash);
+        if (singleton != reviewed.singleton) revert SafeSingletonMismatch(singleton, reviewed.singleton);
+        if (singleton.codehash != reviewed.singletonCodeHash) {
+            revert SafeSingletonCodeHashMismatch(singleton.codehash, reviewed.singletonCodeHash);
         }
 
         address[] memory owners;
@@ -115,9 +137,16 @@ abstract contract ReputationSafeValidation {
 
         address guard = _storageAddress(safe, GUARD_STORAGE_SLOT);
         if (guard != address(0)) revert InvalidSafeGuard(guard);
+        address moduleGuard = _storageAddress(safe, MODULE_GUARD_STORAGE_SLOT);
+        if (moduleGuard != address(0)) revert InvalidSafeModuleGuard(moduleGuard);
         address handler = _storageAddress(safe, FALLBACK_HANDLER_STORAGE_SLOT);
-        if (handler != reviewedHandler) revert InvalidSafeFallbackHandler(handler);
-        if (reviewedHandler.code.length == 0) revert SafeFallbackHandlerHasNoCode(reviewedHandler);
+        if (handler != reviewed.fallbackHandler) revert InvalidSafeFallbackHandler(handler);
+        if (reviewed.fallbackHandler.code.length == 0) revert SafeFallbackHandlerHasNoCode(reviewed.fallbackHandler);
+        if (reviewed.fallbackHandler.codehash != reviewed.fallbackHandlerCodeHash) {
+            revert SafeFallbackHandlerCodeHashMismatch(
+                reviewed.fallbackHandler.codehash, reviewed.fallbackHandlerCodeHash
+            );
+        }
     }
 
     function _storageAddress(address safe, bytes32 slot) private view returns (address value) {
