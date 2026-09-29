@@ -54,6 +54,9 @@ forge coverage --skip script --exclude-tests --no-match-coverage 'script/' --rep
 
 Before pushing to `develop`, satisfy [docs/release-readiness.md](docs/release-readiness.md): `develop` must always be releasable, and the release coordinator only checks that CI passed on the exact commit.
 
+Actual native EAS verifier compatibility is covered offline using pinned Base
+and Base Sepolia implementation bytecode; see [EAS profile fixtures](docs/eas-native-profiles.md).
+
 ## Deployment inputs
 
 Deploy and finalize the fresh standard-order reputation resolver with
