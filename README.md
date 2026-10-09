@@ -24,11 +24,49 @@ USDC authorizations whose `to` address is the outcome splitter.
   responses.
 - `ReputationStorage` is the fresh EAS-backed standard-order reputation
   ledger. The gateway registers finalized paid orders, the provider records
-  terminal outcomes, and payers can submit or revoke delivery confirmation.
+  terminal outcomes and can later record the recovery of a Failed order, and
+  payers can submit or revoke delivery confirmation.
 
 These contracts are independent of the standard payment route. Restoring them
 does not restore `PaymentRouter`, `X402Adapter`, `PermitAdapter`, or
 `ApprovalAdapter`.
+
+### Recovery attestations
+
+From version 2.2.0, a provider can record that a paid order whose outcome it
+attested as Failed was later recovered. A recovery is an additional fact
+beside the outcome: the order stays Failed.
+
+- Schema: `bytes32 orderKey,bytes32 recoveryEvidenceHash`, irrevocable, with
+  the `ReputationStorage` proxy as resolver. After configuration is finalized,
+  the admin binds it once with `configureRecoverySchema(uid)`, which checks the
+  registered definition, resolver and irrevocability. The call also works as
+  the data of the admin's `upgradeToAndCall`.
+- Attesters: the order's provider owner or provider agent wallet, with the
+  agent wallet as recipient. The attester and recipient are screened for
+  sanctions, and the external-dependency pause stops recoveries as it stops
+  every other write.
+- Admission: submissions must be enabled; the attestation must be
+  irrevocable, reference no other attestation and carry exactly the two
+  fields with a nonzero evidence hash; the order must be recorded,
+  reputation-eligible, carry a recorded Failed outcome, have no earlier
+  recovery and no refund. An order is recovered at most once, and a recovery
+  cannot be revoked.
+- Reads: `getRecovery(orderKey)` returns `(recoveredAt, evidenceHash,
+  attestationUid)`, where `recoveredAt == 0` means not recovered.
+  `recoveredCount(providerAgentId)` and `recoveredByService(serviceId)` count
+  recovered orders and never exceed the matching Failed counts.
+  `recoverySchema()` and `recoverySubmissionsEnabled()` expose the
+  configuration, and each recovery emits `OrderRecoveryRecorded`.
+- Unchanged: the outcome, its timestamp and attestation delay,
+  `outcomeDelayTotalByProvider`, the completed, failed and canceled counters,
+  confirmations, refunds, totals and `getRecord` read exactly as before a
+  recovery.
+- Controls: submissions start disabled. `setRecoverySubmissionsEnabled` lets
+  the admin enable or disable them and the pause guardian disable them.
+
+The recovery state is appended from the reserved storage gap, so an existing
+2.1.0 proxy upgrades in place and keeps its address, records and counters.
 
 Provider and service registration on chain is canonical and permissionless
 subject to ownership, listing-fee, sanctions, and active-state checks. Gateway
@@ -115,6 +153,13 @@ canonical EAS and SchemaRegistry addresses for the selected chain and verifies
 that both have code and that EAS reports the canonical registry. Implementation
 versions are recorded during release review rather than hard-coded in the
 deployment script.
+
+The reputation script registers the outcome, confirmation and recovery schemas
+with the new proxy as resolver, finalizes the configuration and binds the
+recovery schema before it proposes the Safe. Recovery submissions stay disabled
+unless the optional `STANDARD_REPUTATION_RECOVERY_SUBMISSIONS_ENABLED` is
+`true`, in which case the script also enables them. It returns the proxy and
+the three schema UIDs.
 
 Standard-order reputation treats the configured order signer as the settlement
 evidence authority. Signed snapshot block numbers and hashes are evidence, not

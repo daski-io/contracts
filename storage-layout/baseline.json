@@ -2108,10 +2108,127 @@
           }
         },
         {
-          "label": "__gap",
+          "label": "recoverySchema",
           "offset": 0,
           "order": 48,
           "slot": "140",
+          "type": {
+            "encoding": "inplace",
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          }
+        },
+        {
+          "label": "recoverySubmissionsEnabled",
+          "offset": 0,
+          "order": 49,
+          "slot": "141",
+          "type": {
+            "encoding": "inplace",
+            "label": "bool",
+            "numberOfBytes": "1"
+          }
+        },
+        {
+          "label": "_recoveries",
+          "offset": 0,
+          "order": 50,
+          "slot": "142",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => struct ReputationStorageBase.OrderRecovery)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "struct ReputationStorageBase.OrderRecovery",
+              "members": [
+                {
+                  "label": "recoveredAt",
+                  "offset": 0,
+                  "slot": "0",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "uint64",
+                    "numberOfBytes": "8"
+                  }
+                },
+                {
+                  "label": "evidenceHash",
+                  "offset": 0,
+                  "slot": "1",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                },
+                {
+                  "label": "attestationUid",
+                  "offset": 0,
+                  "slot": "2",
+                  "type": {
+                    "encoding": "inplace",
+                    "label": "bytes32",
+                    "numberOfBytes": "32"
+                  }
+                }
+              ],
+              "numberOfBytes": "96"
+            }
+          }
+        },
+        {
+          "label": "recoveredCount",
+          "offset": 0,
+          "order": 51,
+          "slot": "143",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "recoveredByService",
+          "offset": 0,
+          "order": 52,
+          "slot": "144",
+          "type": {
+            "encoding": "mapping",
+            "key": {
+              "encoding": "inplace",
+              "label": "bytes32",
+              "numberOfBytes": "32"
+            },
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32",
+            "value": {
+              "encoding": "inplace",
+              "label": "uint256",
+              "numberOfBytes": "32"
+            }
+          }
+        },
+        {
+          "label": "__gap",
+          "offset": 0,
+          "order": 53,
+          "slot": "145",
           "type": {
             "base": {
               "encoding": "inplace",
@@ -2119,8 +2236,8 @@
               "numberOfBytes": "32"
             },
             "encoding": "inplace",
-            "label": "uint256[41]",
-            "numberOfBytes": "1312"
+            "label": "uint256[36]",
+            "numberOfBytes": "1152"
           }
         }
       ]

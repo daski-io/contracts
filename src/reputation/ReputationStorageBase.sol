@@ -79,6 +79,14 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         bytes32 currentConfirmationUid;
     }
 
+    /// @dev A provider's later recovery of an order whose recorded outcome is Failed.
+    ///      `recoveredAt == 0` means the order has not been recovered.
+    struct OrderRecovery {
+        uint64 recoveredAt;
+        bytes32 evidenceHash;
+        bytes32 attestationUid;
+    }
+
     bytes32 public constant ORDER_TYPEHASH = keccak256(
         "StandardReputationOrderV1(bytes32 orderKey,bytes32 authorizationKey,uint256 providerAgentId,bytes32 serviceId,address payer,address providerOwner,address providerAgentWallet,address providerPayee,address identityRegistry,address providerRegistry,address serviceRegistry,uint256 blockNumber,bytes32 blockHash,address canonicalToken,uint256 grossAmount,uint64 paidAt,bytes32 providerIdentitySnapshotHash,bytes32 listingManifestHash,bytes32 releaseEvidenceHash,bool reputationEligible,uint64 validBefore)"
     );
@@ -136,6 +144,13 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     bool internal _configured;
     address public canonicalToken;
 
+    // Recovery attestations: appended state, taken from the trailing gap.
+    bytes32 public recoverySchema;
+    bool public recoverySubmissionsEnabled;
+    mapping(bytes32 => OrderRecovery) internal _recoveries;
+    mapping(uint256 => uint256) public recoveredCount;
+    mapping(bytes32 => uint256) public recoveredByService;
+
     event StandardOrderRegistered(
         bytes32 indexed orderKey,
         bytes32 indexed authorizationKey,
@@ -191,6 +206,15 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         address serviceRegistry,
         bytes32 outcomeSchema,
         bytes32 confirmationSchema
+    );
+    event RecoverySchemaConfigured(bytes32 indexed schema);
+    event RecoverySubmissionsEnabledUpdated(bool enabled, address indexed account);
+    event OrderRecoveryRecorded(
+        bytes32 indexed orderKey,
+        uint256 indexed providerAgentId,
+        bytes32 indexed serviceId,
+        bytes32 evidenceHash,
+        bytes32 attestationUid
     );
 
     error NotEAS();
@@ -255,6 +279,15 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
     error MustReferenceCurrentConfirmation();
     error ConfirmationSubmissionCap();
     error OrderNotReputationEligible();
+    error RecoverySubmissionsDisabled();
+    error InvalidRecoverySemantics();
+    error InvalidRecoveryEncoding();
+    error RecoveryRequiresFailedOutcome();
+    error RecoveryAlreadyRecorded();
+    error RecoveryOfRefundedOrder();
+    error RecoverySchemaAlreadyConfigured();
+    error RecoveryEnableRequiresAdmin();
+    error NotAdminOrPauseGuardian();
 
     modifier onlyEAS() {
         if (msg.sender != address(eas)) revert NotEAS();
@@ -290,5 +323,5 @@ abstract contract ReputationStorageBase is Admin2StepUpgradeable, EIP712Upgradea
         if (candidate == orderSigner) revert AdminCannotBeOrderSigner();
     }
 
-    uint256[41] private __gap;
+    uint256[36] private __gap;
 }

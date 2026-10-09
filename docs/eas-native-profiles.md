@@ -36,6 +36,14 @@ direct path is identical on both versions; they differ only in delegation.
 The Base 1.0.1 runtime contains no ERC-1271 `isValidSignature` selector at
 all, so a contract wallet there can review only directly.
 
+`test/ReputationRecovery.t.sol` sends provider recovery attestations through
+the same two runtimes, single and batched: EAS-assigned uids and times, each
+admission refusal, EAS's own refusal of a revocable recovery under the
+irrevocable schema, and its refusal to revoke a recorded recovery.
+`test/ReputationUpgradePreservation.t.sol` populates a 2.1.0 resolver through
+them before upgrading it in place, and `test/DeployReputationStorage.t.sol`
+runs the whole deployment script against them.
+
 **The deployed Base Sepolia runtime expires only when timestamp > deadline.**
 Equality still succeeds; zero remains nonexpiring. This differs from the
 [`eas-contracts` v1.2.0 verifier source](https://github.com/ethereum-attestation-service/eas-contracts/blob/d89635a1c82fe4518d18bf8dcb622cf0dd535ba0/contracts/eip1271/EIP1271Verifier.sol),

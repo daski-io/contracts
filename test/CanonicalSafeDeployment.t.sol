@@ -30,7 +30,7 @@ contract CanonicalMarketplaceVerification is VerifyMarketplaceRegistries {
 
 contract CanonicalReputationDeployment is DeployReputationStorage {
     function deploy(DeploymentConfig memory config, uint256 key) external returns (address proxy) {
-        (proxy,,) = _deploy(config, key);
+        (proxy,,,) = _deploy(config, key);
     }
 }
 

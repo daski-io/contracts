@@ -171,7 +171,7 @@ contract ReputationStorageTest is ReputationTestBase {
         assertEq(fields, bytes1(0x0f));
         assertEq(name, "Daski Reputation");
         assertEq(domainVersion, "1");
-        assertEq(reputation.version(), "2.1.0");
+        assertEq(reputation.version(), "2.2.0");
     }
 
     function test_refundIsSignedMonotonicAndCappedAtGross() public {
