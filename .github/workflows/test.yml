@@ -61,6 +61,19 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      # The release engine deploys and verifies implementations from exactly
+      # these bytes (script/export_release_build.py); it never rebuilds them.
+      - name: Export the release build
+        run: python3 script/export_release_build.py --commit "${{ github.sha }}"
+
+      - name: Upload the release build
+        uses: actions/upload-artifact@v7
+        with:
+          name: contract-build-${{ github.sha }}
+          path: build-export/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Check upgradeable storage layouts
         run: python3 script/check_storage_layout.py
 
