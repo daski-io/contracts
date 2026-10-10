@@ -5,7 +5,7 @@ import {IEAS, ISchemaRegistry, SchemaRecord} from "../interfaces/IEAS.sol";
 import {ReputationSchemas} from "./ReputationSchemas.sol";
 import {ReputationStorageBase} from "./ReputationStorageBase.sol";
 
-/// @notice One-time EAS configuration and explicit order-signer governance.
+/// @notice One-time EAS configuration, recovery controls, and explicit order-signer governance.
 abstract contract ReputationAdmin is ReputationStorageBase {
     function isConfigured() external view returns (bool) {
         return _configured;
@@ -73,6 +73,29 @@ abstract contract ReputationAdmin is ReputationStorageBase {
             outcomeSchema,
             confirmationSchema
         );
+    }
+
+    /// @notice Binds the irrevocable recovery schema once, after configuration is
+    ///         finalized. Also callable by the admin through `upgradeToAndCall`.
+    function configureRecoverySchema(bytes32 schema) external onlyAdmin {
+        if (!_configured) revert ConfigurationNotFinalized();
+        if (recoverySchema != bytes32(0)) revert RecoverySchemaAlreadyConfigured();
+        if (schema == bytes32(0)) revert ZeroSchema();
+        if (schema == outcomeSchema || schema == confirmationSchema) revert SchemasMustDiffer();
+        _requireSchema(eas.getSchemaRegistry(), schema, ReputationSchemas.recoverySchemaHash(), false);
+        recoverySchema = schema;
+        emit RecoverySchemaConfigured(schema);
+    }
+
+    /// @notice The admin may enable or disable recovery submissions; the pause
+    ///         guardian may only disable them.
+    function setRecoverySubmissionsEnabled(bool enabled) external {
+        if (msg.sender != admin) {
+            if (msg.sender != pauseGuardian) revert NotAdminOrPauseGuardian();
+            if (enabled) revert RecoveryEnableRequiresAdmin();
+        }
+        recoverySubmissionsEnabled = enabled;
+        emit RecoverySubmissionsEnabledUpdated(enabled, msg.sender);
     }
 
     function _requireSchema(ISchemaRegistry registry, bytes32 uid, bytes32 expectedHash, bool expectedRevocable)

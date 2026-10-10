@@ -39,7 +39,17 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
     }
 
     function version() external pure override returns (string memory) {
-        return "2.1.0";
+        return "2.2.0";
+    }
+
+    /// @notice The recovery recorded for an order; `recoveredAt == 0` means not recovered.
+    function getRecovery(bytes32 orderKey)
+        external
+        view
+        returns (uint64 recoveredAt, bytes32 evidenceHash, bytes32 attestationUid)
+    {
+        OrderRecovery storage recovery = _recoveries[orderKey];
+        return (recovery.recoveredAt, recovery.evidenceHash, recovery.attestationUid);
     }
 
     function attest(Attestation calldata attestation)
@@ -109,6 +119,8 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
             _onOutcomeAttest(a);
         } else if (a.schema == confirmationSchema) {
             _onConfirmationAttest(a);
+        } else if (recoverySchema != bytes32(0) && a.schema == recoverySchema) {
+            _onRecoveryAttest(a);
         } else {
             revert UnknownSchema();
         }
@@ -169,6 +181,34 @@ contract ReputationStorage is ReputationAccounting, ISchemaResolver {
             canceledByService[record.serviceId]++;
         }
         emit OutcomeRecorded(orderKey, record.providerAgentId, record.payer, record.serviceId, outcome, delay, a.uid);
+    }
+
+    /// One recovery per Failed order, recorded beside the outcome. It never changes
+    /// the outcome, its timing, confirmations, refunds or any existing counter.
+    function _onRecoveryAttest(Attestation calldata a) private {
+        if (!recoverySubmissionsEnabled) revert RecoverySubmissionsDisabled();
+        if (!(!a.revocable && a.refUID == bytes32(0))) revert InvalidRecoverySemantics();
+        if (a.data.length != 64) revert InvalidRecoveryEncoding();
+        (bytes32 orderKey, bytes32 evidenceHash) = abi.decode(a.data, (bytes32, bytes32));
+        if (evidenceHash == bytes32(0)) revert InvalidRecoveryEncoding();
+        ReputationRecord storage record = _eligibleRecord(orderKey);
+        if (!(record.outcomeRecorded && record.outcome == TransactionOutcome.Failed)) {
+            revert RecoveryRequiresFailedOutcome();
+        }
+        OrderRecovery storage recovery = _recoveries[orderKey];
+        if (recovery.recoveredAt != 0) revert RecoveryAlreadyRecorded();
+        if (refundedAmount[orderKey] != 0) revert RecoveryOfRefundedOrder();
+        if (!(a.attester == record.providerOwner || a.attester == record.providerAgentWallet)) {
+            revert NotOrderProvider();
+        }
+        if (a.recipient != _providerRecipient(record)) revert WrongReputationRecipient();
+
+        recovery.recoveredAt = a.time;
+        recovery.evidenceHash = evidenceHash;
+        recovery.attestationUid = a.uid;
+        recoveredCount[record.providerAgentId]++;
+        recoveredByService[record.serviceId]++;
+        emit OrderRecoveryRecorded(orderKey, record.providerAgentId, record.serviceId, evidenceHash, a.uid);
     }
 
     function _onConfirmationAttest(Attestation calldata a) private {

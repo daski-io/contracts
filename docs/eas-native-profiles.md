@@ -25,6 +25,25 @@ consumption, invalid-signature rollback, replay rejection, the three-attestation
 cap and final revocation. Base 1.0.1 has no delegation deadline and no
 `increaseNonce` cancellation entry point. Its deadline-bearing selector fails.
 
+`test/EASNativeDirectReviews.t.sol` runs the direct path on the same two
+runtimes: a contract account that is the order's payer, standing in for an
+ERC-4337 wallet such as a Circle agent wallet, calls EAS `attest` and
+`revoke` itself with the exact calls the buyer CLI validates. The tests check
+the `Attested` and `Revoked` topics the buyer binds, attester attribution,
+refUID chaining, the cap, revocation, an untouched delegated nonce, and the
+resolver's own refusals of a stale reference and of another account. The
+direct path is identical on both versions; they differ only in delegation.
+The Base 1.0.1 runtime contains no ERC-1271 `isValidSignature` selector at
+all, so a contract wallet there can review only directly.
+
+`test/ReputationRecovery.t.sol` sends provider recovery attestations through
+the same two runtimes, single and batched: EAS-assigned uids and times, each
+admission refusal, EAS's own refusal of a revocable recovery under the
+irrevocable schema, and its refusal to revoke a recorded recovery.
+`test/ReputationUpgradePreservation.t.sol` populates a 2.1.0 resolver through
+them before upgrading it in place, and `test/DeployReputationStorage.t.sol`
+runs the whole deployment script against them.
+
 **The deployed Base Sepolia runtime expires only when timestamp > deadline.**
 Equality still succeeds; zero remains nonexpiring. This differs from the
 [`eas-contracts` v1.2.0 verifier source](https://github.com/ethereum-attestation-service/eas-contracts/blob/d89635a1c82fe4518d18bf8dcb622cf0dd535ba0/contracts/eip1271/EIP1271Verifier.sol),

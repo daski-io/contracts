@@ -137,12 +137,20 @@ contract DeployReputationStorageHarness is DeployReputationStorage {
         return address(_validateEAS(easAddress));
     }
 
+    function deploy(DeploymentConfig calldata config, uint256 adminPrivateKey)
+        external
+        returns (address proxyAddress, bytes32 outcomeSchema, bytes32 confirmationSchema, bytes32 recoverySchema)
+    {
+        return _deploy(config, adminPrivateKey);
+    }
+
     function requireHandoffReady(
         ReputationStorage reputation,
         DeploymentConfig calldata config,
         bytes32 outcomeSchema,
-        bytes32 confirmationSchema
+        bytes32 confirmationSchema,
+        bytes32 recoverySchema
     ) external view {
-        _requireHandoffReady(reputation, config, outcomeSchema, confirmationSchema);
+        _requireHandoffReady(reputation, config, outcomeSchema, confirmationSchema, recoverySchema);
     }
 }

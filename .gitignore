@@ -3,8 +3,9 @@ cache/
 out/
 __pycache__/
 
-# CI ABI export (uploaded as a workflow artifact, never tracked)
+# CI ABI and release build exports (uploaded as workflow artifacts, never tracked)
 abi-export/
+build-export/
 
 # Ignores development broadcast logs
 /broadcast
