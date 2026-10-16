@@ -1,3 +1,17 @@
+---
+title: "Daski Standard-Rail Contracts"
+status: canonical
+authority: current repository implementation and approved maintainer workflow
+owner: repository maintainers
+effective-date: 2026-10-16
+last-verified: 2026-10-16 (documentation placement; no live release verification)
+supersedes: repository-wide agent files as the home of general repository guidance
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/contracts
+review-trigger: setup, architecture, interface or workflow change
+---
+
 # Daski Standard-Rail Contracts
 
 This repository contains Daski's marketplace identity, catalog, validation,
@@ -216,6 +230,33 @@ Circle's pause and blacklist controls can still stop an existing immutable
 route; recipients cannot be rotated and the splitter has no rescue path. Direct
 native-currency transfers revert, while EVM-forced native currency remains
 outside token accounting and cannot be withdrawn.
+
+## Compatibility and governance
+
+- Preserve proxy storage, deployed addresses and recorded history. State whether a
+  change is history-compatible and provide reviewed storage/upgrade evidence. Mainnet
+  is never reset; a fresh test environment is not a production upgrade strategy.
+- Pair every consumed ABI change with gateway/provider and any other actual consumers.
+  Consumers own their ABI fragments; verify them against the exact exported artifact.
+- Contract upgrades ride on the authorized Daski release through deploy-mainnet. The engine
+  proposes the reviewed governance Safe batch; the authorized Safe owner signs and
+  executes it. Never broadcast from a local development session or infer signing
+  authority from permission to implement, test, push or prepare documentation.
+- Do not invent fallback deployments, replacement identities or compatibility paths to
+  bypass an upgrade failure. Resolve the owning compatibility or governance requirement.
+
+## Development verification
+
+Use the Foundry/solc pins in CI and `foundry.toml`. Required gates are
+`forge fmt --check`, `forge build --sizes`, `python3 script/check_storage_layout.py`,
+`forge test`, coverage, pinned Slither and ABI export. The readiness guide defines the
+full evidence. Use disposable local/fork state for explicitly scoped checks; a test
+or push never authorizes a live transaction. Do not copy private audits, incident
+material, keys or deployment state into this public repository.
+
+The managed sandbox and production release process is described in
+[release readiness](docs/release-readiness.md); integration into `develop`
+does not deploy or authorize a transaction.
 
 ## License
 
