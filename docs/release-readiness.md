@@ -1,14 +1,28 @@
+---
+title: Release readiness
+status: canonical
+authority: current release-engine implementation and approved owner decisions
+owner: repository maintainers
+effective-date: 2026-10-16
+last-verified: 2026-10-16
+supersedes: split-coordinator and pre-handover descriptions where inconsistent
+superseded-by: none
+sensitivity: public-safe
+related-repositories: daski-io/contracts; daski-io/deploy-mainnet
+review-trigger: release process, interface or CI change
+---
+
 # Release readiness
 
-Daski releases are driven by a two-command coordinator that lives outside this
-repository. `prep` makes the next release green: it takes the tip of `develop`
-as the candidate, runs the release gates, and whatever blocks the release is
-fixed in the repository that owns the problem, which for contract issues is
-this one, rather than patched around in the coordinator. `go` ships what
-`prep` sealed. The coordinator does not rerun this repository's checks; it
-only verifies that CI passed on the exact `develop` commit being shipped.
-Every release-critical check for the contracts therefore lives in this
-repository's CI, and `develop` must be releasable at every commit.
+The engine in [daski-io/deploy-mainnet](https://github.com/daski-io/deploy-mainnet)
+owns sandbox and production releases, including contract upgrades. Read its
+current `README.md` and engine runbook for authorization and governance. The
+sandbox takes the green develop contract candidate; production promotes the
+contract state recorded by the settled, accepted sandbox release. The engine
+prepares the exact CI-built implementation in a governance Safe batch; an
+authorized Safe owner signs and executes it, and the engine verifies the result.
+A code push, local test or generic PR merge never authorizes a broadcast.
+Fix contract blockers here and compatibility blockers in their owning consumers.
 
 ## Definition of done for develop
 
@@ -19,9 +33,9 @@ A change may be pushed to `develop` only when all of the following hold.
       Slither, and the ABI export.
 - [ ] A contract change states in its PR or commit message whether it is
       history-compatible (an in-place UUPS implementation upgrade behind the
-      existing proxies, keeping addresses, storage and recorded history) or
-      requires a new environment epoch (new addresses, a database reset and
-      re-registration, always together).
+      existing proxies, keeping addresses, storage and recorded history).
+      Any incompatible change needs a reviewed governance/compatibility plan;
+      a fresh sandbox epoch is separately scoped and is never a mainnet reset.
 - [ ] A change to an ABI that the gateway or provider consumes opens the
       paired consumer change in the same change set. Both consumers keep
       their own ABI fragments; they do not import this repository's build
@@ -31,12 +45,13 @@ A change may be pushed to `develop` only when all of the following hold.
       their source).
 - [ ] Nothing is merged to `sandbox` or `main`, or tagged, by hand. The release
       coordinator writes `sandbox`, the testnet release branch, through the
-      `develop` to `sandbox` release pull request; the production coordinator
-      moves `main` only by fast-forward to a release commit of `sandbox`.
+      `develop` to `sandbox` release pull request after serving; the same
+      engine advances production history under its current contract rules.
 - [ ] On-chain actions (deploy, upgrade, Safe batches) happen only through the
-      coordinator's epoch or upgrade runbooks with explicit owner
-      authorization. Running tests or pushing this repository never
-      broadcasts a transaction.
+      current engine governance path and applicable owner authorization.
+      Prep can propose a Safe batch; the authorized Safe owner signs and
+      executes it. Running tests or pushing this repository never broadcasts
+      a transaction.
 
 ## What CI proves
 
@@ -95,7 +110,7 @@ Release-Owner-Task: Sign the Safe batch the release prepares for the ReputationS
 Release-Rollback: the previous implementation stays deployed; a Safe batch can point the proxy back
 ```
 
-- `Release-Requires`: the environment operation the change needs and the owner must authorize: `contract-upgrade` for an in-place UUPS upgrade that keeps addresses and history, `new-epoch` for a fresh reputation resolver with a database reset.
+- `Release-Requires`: the environment operation the change needs and the owner must authorize: `contract-upgrade` for an in-place UUPS upgrade that keeps addresses and history, `new-epoch` only for an expressly scoped sandbox operation. Mainnet never resets; an incompatible trailer requires a reviewed engine disposition.
 - `Release-Variable`: a variable a service must receive, written as `Release-Variable: gateway NAME=value before-deploy` (service `gateway`, `provider` or `daski-website`; value literal or `staged`; timing `before-deploy` or `after-deploy`). Never put a secret in a commit.
 - `Release-Scenarios`: the acceptance scenarios the change touches.
 - `Release-Owner-Task`: work only the owner can do after the release. It is listed once in the release summary and never asked during the release.

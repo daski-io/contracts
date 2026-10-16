@@ -45,3 +45,9 @@ build-export/
 # Local helper scripts (created on the fly to work around WSL bash -c quoting)
 .run-*.sh
 .balance-check.sh
+
+# Repository-wide agent instructions are private workspace material.
+# Public setup and contributor guidance belongs in README.md.
+AGENTS.md
+AGENT.md
+CLAUDE.md
