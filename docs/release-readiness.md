@@ -16,7 +16,7 @@ review-trigger: release process, interface or CI change
 
 The engine in [daski-io/deploy-mainnet](https://github.com/daski-io/deploy-mainnet)
 owns sandbox and production releases, including contract upgrades. Read its
-current `AGENTS.md` and engine runbook for authorization and governance. The
+current `README.md` and engine runbook for authorization and governance. The
 sandbox takes the green develop contract candidate; production promotes the
 contract state recorded by the settled, accepted sandbox release. The engine
 prepares the exact CI-built implementation in a governance Safe batch; an
