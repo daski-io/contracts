@@ -1,6 +1,8 @@
 # Compiler files
 cache/
 out/
+coverage-out/
+coverage-cache/
 __pycache__/
 
 # CI ABI and release build exports (uploaded as workflow artifacts, never tracked)

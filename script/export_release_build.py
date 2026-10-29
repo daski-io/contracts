@@ -22,6 +22,23 @@ CONTRACTS = (
     "ReputationStorage",
 )
 
+ABI_CONTRACTS = (*CONTRACTS, "OutcomeSplitter", "OutcomeSplitterFactory")
+
+
+def export_abis(out: Path, target: Path) -> None:
+    """Read the compiled ABI without changing Forge's compiler output selection."""
+    abis = {}
+    for name in ABI_CONTRACTS:
+        artifact = json.loads((out / f"{name}.sol" / f"{name}.json").read_text(encoding="utf-8"))
+        abi = artifact["abi"]
+        if not isinstance(abi, list) or not abi:
+            raise SystemExit(f"{name}: expected a non-empty ABI array")
+        abis[name] = abi
+    target.mkdir(parents=True, exist_ok=True)
+    for name, abi in abis.items():
+        (target / f"{name}.json").write_text(json.dumps(abi) + "\n", encoding="utf-8")
+        print(f"{name}: {len(abi)} ABI entries")
+
 
 def export(out: Path, target: Path, commit: str) -> dict:
     if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
@@ -55,8 +72,11 @@ def main() -> None:
     parser.add_argument("--out", default="out", type=Path, help="forge build output")
     parser.add_argument("--target", default="build-export", type=Path)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--abi-target", type=Path, help="also export the seven public ABIs")
     args = parser.parse_args()
     manifest = export(args.out, args.target, args.commit)
+    if args.abi_target is not None:
+        export_abis(args.out, args.abi_target)
     for name in manifest["contracts"]:
         print(f"{name}: exported")
 
