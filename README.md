@@ -4,7 +4,7 @@ status: canonical
 authority: current repository implementation and approved maintainer workflow
 owner: repository maintainers
 effective-date: 2026-10-16
-last-verified: 2026-10-16 (documentation placement; no live release verification)
+last-verified: 2026-10-29 (CI compiler reuse); 2026-10-16 (documentation placement; no live release verification)
 supersedes: repository-wide agent files as the home of general repository guidance
 superseded-by: none
 sensitivity: public-safe
@@ -108,6 +108,16 @@ Before pushing to `develop`, satisfy [docs/release-readiness.md](docs/release-re
 
 Actual native EAS verifier compatibility is covered offline using pinned Base
 and Base Sepolia implementation bytecode; see [EAS profile fixtures](docs/eas-native-profiles.md).
+
+### CI compiler reuse
+
+The normal CI build emits ABI, IR and storage-layout outputs. ABI export and the
+storage gate read those artifacts; they do not run `forge inspect` between
+build and tests. The reviewed storage baseline and release artifact formats
+remain unchanged. Compiler outputs are cached by OS, architecture, pinned
+Foundry version, configuration and Solidity inputs; Forge still checks inputs
+on every build. Coverage uses separate output and cache directories so its
+compiler settings cannot replace the normal build cache.
 
 ## Deployment inputs
 

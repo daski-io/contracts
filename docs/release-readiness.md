@@ -4,7 +4,7 @@ status: canonical
 authority: current release-engine implementation and approved owner decisions
 owner: repository maintainers
 effective-date: 2026-10-16
-last-verified: 2026-10-16
+last-verified: 2026-10-29 (CI compiler reuse); 2026-10-16 (release routing)
 supersedes: split-coordinator and pre-handover descriptions where inconsistent
 superseded-by: none
 sensitivity: public-safe
@@ -29,7 +29,7 @@ Fix contract blockers here and compatibility blockers in their owning consumers.
 A change may be pushed to `develop` only when all of the following hold.
 
 - [ ] CI is green on the commit: `forge fmt --check`, `forge build --sizes`,
-      `python3 script/check_storage_layout.py`, `forge test`, `forge coverage`,
+      `python3 script/check_storage_layout.py --artifacts out`, `forge test`, `forge coverage`,
       Slither, and the ABI export.
 - [ ] A contract change states in its PR or commit message whether it is
       history-compatible (an in-place UUPS implementation upgrade behind the
@@ -63,8 +63,8 @@ and pull request.
 | Foundry project / Install Foundry | Every step below runs on the Forge release pinned in the workflow, so a local run on the same pin reproduces CI. |
 | Foundry project / Run Forge fmt | `forge fmt --check`: sources match the repository formatting; a diff on `develop` is a code change, never a reformat. |
 | Foundry project / Run Forge build | `forge build --sizes`: every contract, script and test compiles with the `solc` version and settings in `foundry.toml`, and every deployable contract stays under the EIP-170 runtime size limit. |
-| Foundry project / Export contract ABIs | `forge inspect <Name> abi --json` for each active marketplace and payment contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`, `OutcomeSplitter`, `OutcomeSplitterFactory`), each checked to be a non-empty ABI array and uploaded as the `contract-abi-<commit sha>` artifact with 90-day retention. The ABI a consumer builds against is the ABI of the exact commit. |
-| Foundry project / Check upgradeable storage layouts | `python3 script/check_storage_layout.py`: the storage layout of each UUPS-upgradeable contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`) equals the reviewed baseline in `storage-layout/baseline.json`. An implementation cannot move, retype or reorder storage behind the permanent proxies without a reviewed baseline change. |
+| Foundry project / Export contract ABIs | `python3 script/export_release_build.py --commit <sha> --abi-target abi-export` reads the existing normal-build artifact for each active marketplace and payment contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`, `OutcomeSplitter`, `OutcomeSplitterFactory`), each checked to be a non-empty ABI array and uploaded as the `contract-abi-<commit sha>` artifact with 90-day retention. The ABI a consumer builds against is the ABI of the exact commit. |
+| Foundry project / Check upgradeable storage layouts | `python3 script/check_storage_layout.py --artifacts out`: the compiled storage layout of each UUPS-upgradeable contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`) equals the reviewed baseline in `storage-layout/baseline.json`. An implementation cannot move, retype or reorder storage behind the permanent proxies without a reviewed baseline change. |
 | Foundry project / Run Forge tests | `forge test -vvv`: the unit, fuzz and invariant suites under `test/` pass, including the deployment-script and upgrade-safety tests. |
 | Foundry project / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. |
 | Slither analysis / Run Slither | Slither 0.11.5 with hash-locked Python dependencies, Python 3.12 and pinned Foundry finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered; `--fail-high`). |
@@ -125,3 +125,15 @@ Do not write runbooks or instructions for the release agent anywhere else. CI ru
   against a Base Sepolia fork. CI has no RPC secret today, and none should be
   added without an owner decision on the endpoint and how the secret is
   handled; until then the fork run stays a local, pre-release step.
+
+## Compiler reuse in CI
+
+The normal build emits `storageLayout` alongside its existing outputs.
+`script/export_release_build.py --commit <sha> --abi-target abi-export` reads
+all seven ABIs and the five deployment artifacts from that build.
+`python3 script/check_storage_layout.py --artifacts out` compares the same
+compiled layouts with the reviewed baseline, including the guard checks. The
+original inspection mode remains available for local use. Coverage runs in
+`coverage-out/` and `coverage-cache/`; release artifacts always come from the
+normal optimized build. The job still runs the sizes, storage, test, coverage
+and Slither gates and retains the same artifact names and schemas.
