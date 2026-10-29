@@ -8,7 +8,9 @@ via_ir = true
 optimizer = true
 # The reputation tree uses custom errors, so the sizes gate has headroom at 200 runs.
 optimizer_runs = 200
-extra_output = ["ir"]
+# ABI and layout checks read this build's artifacts, without forge inspect
+# replacing the compiler cache's output selection between build and test.
+extra_output = ["ir", "storageLayout"]
 fs_permissions = [
     { access = "read", path = "./test/vectors" },
     { access = "read", path = "/tmp" },

@@ -106,9 +106,15 @@ def _require_guard_layout(contract: str, storage: list[dict[str, Any]]) -> None:
     )
 
 
-def inspect(repo: Path, forge: str) -> dict[str, Any]:
+def inspect(repo: Path, forge: str, artifacts: Path | None = None) -> dict[str, Any]:
     normalized = []
     for contract in CONTRACTS:
+        if artifacts is not None:
+            artifact = json.loads(
+                (artifacts / f"{contract}.sol" / f"{contract}.json").read_text(encoding="utf-8")
+            )
+            normalized.append(normalize(contract, artifact["storageLayout"]))
+            continue
         result = subprocess.run(
             [forge, "inspect", contract, "storage-layout", "--json"],
             cwd=repo,
@@ -127,6 +133,7 @@ def inspect(repo: Path, forge: str) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--forge", default="forge")
+    parser.add_argument("--artifacts", type=Path, help="read storageLayout from an existing forge build")
     parser.add_argument(
         "--baseline",
         type=Path,
@@ -140,7 +147,10 @@ def main() -> None:
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     baseline = args.baseline if args.baseline.is_absolute() else repo / args.baseline
-    actual = inspect(repo, args.forge)
+    artifacts = args.artifacts
+    if artifacts is not None and not artifacts.is_absolute():
+        artifacts = repo / artifacts
+    actual = inspect(repo, args.forge, artifacts)
     rendered = json.dumps(actual, indent=2, sort_keys=True) + "\n"
     if args.write_baseline:
         baseline.parent.mkdir(parents=True, exist_ok=True)
