@@ -2,15 +2,36 @@ name: CI
 
 permissions: {}
 
+# Push runs are release evidence: the release engine reads the push run of the
+# exact contracts commit and its contract-build-<commit> artifact. They run only
+# on the integration and release branches; a task branch is checked by its
+# pull request instead.
 on:
   push:
+    branches:
+      - develop
+      - sandbox
+      - main
+      - 'hotfix/**'
+  # GitHub's merge queue retests each pull request on top of develop and the
+  # pull requests queued ahead of it, then merges only if this run passes.
+  merge_group:
+    types: [checks_requested]
   pull_request:
   workflow_dispatch:
+
+# Every push run has its own group and is never cancelled. A newer pull request
+# or manual run on the same ref cancels the superseded one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && format('push-{0}', github.run_id) || format('{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   check:
     name: Foundry project
-    runs-on: ubuntu-latest
+    # The repository variable CONTRACTS_BUILD_RUNNER may name a larger
+    # GitHub-hosted runner for the via-IR build; unset, this is ubuntu-latest.
+    runs-on: ${{ vars.CONTRACTS_BUILD_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -33,8 +54,12 @@ jobs:
       - name: Check build export tooling
         run: python3 -m unittest discover -s script -p 'test_*.py'
 
+      # A pull request restores its own cache, else its base branch's (develop
+      # for task branches): the exact inputs first, else the newest cache with
+      # the same configuration, from which Forge recompiles only changed inputs.
       - name: Restore compiler outputs
-        uses: actions/cache@v4
+        id: compiler-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             cache
@@ -45,6 +70,19 @@ jobs:
 
       - name: Run Forge build
         run: forge build --sizes
+
+      # Saved as soon as the build succeeds, so a later failing step still
+      # leaves the compiled inputs for the next run on this ref. A merge queue
+      # ref is temporary, so its run saves nothing that would only evict
+      # develop's cache.
+      - name: Save compiler outputs
+        if: steps.compiler-cache.outputs.cache-hit != 'true' && github.event_name != 'merge_group'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       - name: Export contract ABIs
         run: python3 script/export_release_build.py --commit "${{ github.sha }}" --abi-target abi-export
@@ -73,9 +111,26 @@ jobs:
       - name: Run Forge tests
         run: forge test -vvv
 
+  coverage:
+    name: Forge coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+
+      # Coverage compiles with its own settings and, on Forge v1.5.1, without
+      # reading or writing a compiler cache, so there is nothing to restore; the
+      # separate directories keep it away from the normal build's outputs.
       - name: Run Forge coverage
-        # Coverage uses different compiler settings; preserve the normal build
-        # and its cache for the next run rather than caching coverage artifacts.
         env:
           FOUNDRY_OUT: coverage-out
           FOUNDRY_CACHE_PATH: coverage-cache
@@ -133,11 +188,11 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "pull_request" ]; then
+          if [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "merge_group" ]; then
             range="$BASE..HEAD"
           elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
             range="$BEFORE..HEAD"

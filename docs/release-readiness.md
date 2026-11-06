@@ -4,7 +4,7 @@ status: canonical
 authority: current release-engine implementation and approved owner decisions
 owner: repository maintainers
 effective-date: 2026-10-16
-last-verified: 2026-10-29 (CI compiler reuse); 2026-10-16 (release routing)
+last-verified: 2026-11-05 (CI triggers, cache scope and coverage job); 2026-10-29 (CI compiler reuse); 2026-10-16 (release routing)
 supersedes: split-coordinator and pre-handover descriptions where inconsistent
 superseded-by: none
 sensitivity: public-safe
@@ -55,8 +55,12 @@ A change may be pushed to `develop` only when all of the following hold.
 
 ## What CI proves
 
-The workflow is `.github/workflows/test.yml`. All three jobs run on every push
-and pull request.
+The workflow is `.github/workflows/test.yml`. Its four jobs run on every pull
+request, in the merge queue for `develop`, on manual dispatch and on pushes to
+`develop`, `sandbox`, `main` and `hotfix/**`. A task branch is checked by its pull request, not by its own push
+run. The release engine reads the push run of the exact commit, so push runs are
+never cancelled; a newer run of the same pull request or manual ref cancels the
+superseded one. The run succeeds only when every job succeeds.
 
 | Job / step | Guarantee |
 | --- | --- |
@@ -66,7 +70,7 @@ and pull request.
 | Foundry project / Export contract ABIs | `python3 script/export_release_build.py --commit <sha> --abi-target abi-export` reads the existing normal-build artifact for each active marketplace and payment contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`, `OutcomeSplitter`, `OutcomeSplitterFactory`), each checked to be a non-empty ABI array and uploaded as the `contract-abi-<commit sha>` artifact with 90-day retention. The ABI a consumer builds against is the ABI of the exact commit. |
 | Foundry project / Check upgradeable storage layouts | `python3 script/check_storage_layout.py --artifacts out`: the compiled storage layout of each UUPS-upgradeable contract (`AgentIndex`, `ProviderRegistry`, `ServiceRegistry`, `ValidationRegistry`, `ReputationStorage`) equals the reviewed baseline in `storage-layout/baseline.json`. An implementation cannot move, retype or reorder storage behind the permanent proxies without a reviewed baseline change. |
 | Foundry project / Run Forge tests | `forge test -vvv`: the unit, fuzz and invariant suites under `test/` pass, including the deployment-script and upgrade-safety tests. |
-| Foundry project / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. |
+| Forge coverage / Run Forge coverage | `forge coverage` over `src/` (scripts and tests excluded) succeeds and prints a summary in the job log. Coverage is measured, not thresholded. It runs as its own job in parallel with the build, in `coverage-out/` and `coverage-cache/`. |
 | Slither analysis / Run Slither | Slither 0.11.5 with hash-locked Python dependencies, Python 3.12 and pinned Foundry finds no high-severity issue in `src/` (`lib/`, `test/` and `script/` are filtered; `--fail-high`). |
 | Release hand-off / Release hand-off trailers | `node scripts/check-release-trailers.mjs` over the pushed commits (a pull request's commits, or the commits since the previous push): every `Release-*` trailer is a known key, well formed, and free of secrets. |
 
@@ -133,7 +137,20 @@ The normal build emits `storageLayout` alongside its existing outputs.
 all seven ABIs and the five deployment artifacts from that build.
 `python3 script/check_storage_layout.py --artifacts out` compares the same
 compiled layouts with the reviewed baseline, including the guard checks. The
-original inspection mode remains available for local use. Coverage runs in
-`coverage-out/` and `coverage-cache/`; release artifacts always come from the
-normal optimized build. The job still runs the sizes, storage, test, coverage
-and Slither gates and retains the same artifact names and schemas.
+original inspection mode remains available for local use. Coverage runs in its
+own job, in parallel with the build, with `coverage-out/` and
+`coverage-cache/`; Forge v1.5.1 compiles coverage without its compiler cache,
+so that job restores none. Release artifacts always come from the normal
+optimized build. CI still runs the sizes, storage, test, coverage and Slither
+gates and retains the same artifact names and schemas.
+
+Compiler caches are scoped to a branch. A pull request restores its own cache,
+else its base branch's, so a pull request into `develop` starts from the cache
+the latest `develop` push run saved: the exact Solidity inputs first, else the
+newest cache with the same Foundry version and configuration, from which Forge
+recompiles only the changed inputs. The build job saves its outputs right after
+a successful build when it did not restore an exact match, except in a merge
+queue run, whose temporary ref would only evict `develop`'s cache. The build job's
+runner is the repository variable `CONTRACTS_BUILD_RUNNER` when it is set,
+otherwise `ubuntu-latest`; a larger GitHub-hosted runner is billed per minute,
+and the cache key includes the runner's OS and architecture.

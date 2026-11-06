@@ -4,7 +4,7 @@ status: canonical
 authority: current repository implementation and approved maintainer workflow
 owner: repository maintainers
 effective-date: 2026-10-16
-last-verified: 2026-10-29 (CI compiler reuse); 2026-10-16 (documentation placement; no live release verification)
+last-verified: 2026-11-05 (CI triggers, cache scope and coverage job); 2026-10-29 (CI compiler reuse); 2026-10-16 (documentation placement; no live release verification)
 supersedes: repository-wide agent files as the home of general repository guidance
 superseded-by: none
 sensitivity: public-safe
@@ -116,8 +116,12 @@ storage gate read those artifacts; they do not run `forge inspect` between
 build and tests. The reviewed storage baseline and release artifact formats
 remain unchanged. Compiler outputs are cached by OS, architecture, pinned
 Foundry version, configuration and Solidity inputs; Forge still checks inputs
-on every build. Coverage uses separate output and cache directories so its
-compiler settings cannot replace the normal build cache.
+on every build. A pull request into `develop` restores the cache of the latest
+`develop` push run. Coverage runs as a separate parallel job with its own output
+and cache directories, so its compiler settings cannot replace the normal build
+cache. CI push runs are limited to `develop`, `sandbox`, `main` and `hotfix/**`;
+task branches are checked through their pull requests. See
+[docs/release-readiness.md](docs/release-readiness.md#compiler-reuse-in-ci).
 
 ## Deployment inputs
 
