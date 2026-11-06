@@ -56,8 +56,8 @@ A change may be pushed to `develop` only when all of the following hold.
 ## What CI proves
 
 The workflow is `.github/workflows/test.yml`. Its four jobs run on every pull
-request, on manual dispatch and on pushes to `develop`, `sandbox`, `main` and
-`hotfix/**`. A task branch is checked by its pull request, not by its own push
+request, in the merge queue for `develop`, on manual dispatch and on pushes to
+`develop`, `sandbox`, `main` and `hotfix/**`. A task branch is checked by its pull request, not by its own push
 run. The release engine reads the push run of the exact commit, so push runs are
 never cancelled; a newer run of the same pull request or manual ref cancels the
 superseded one. The run succeeds only when every job succeeds.
@@ -149,7 +149,8 @@ else its base branch's, so a pull request into `develop` starts from the cache
 the latest `develop` push run saved: the exact Solidity inputs first, else the
 newest cache with the same Foundry version and configuration, from which Forge
 recompiles only the changed inputs. The build job saves its outputs right after
-a successful build when it did not restore an exact match. The build job's
+a successful build when it did not restore an exact match, except in a merge
+queue run, whose temporary ref would only evict `develop`'s cache. The build job's
 runner is the repository variable `CONTRACTS_BUILD_RUNNER` when it is set,
 otherwise `ubuntu-latest`; a larger GitHub-hosted runner is billed per minute,
 and the cache key includes the runner's OS and architecture.

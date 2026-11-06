@@ -13,6 +13,10 @@ on:
       - sandbox
       - main
       - 'hotfix/**'
+  # GitHub's merge queue retests each pull request on top of develop and the
+  # pull requests queued ahead of it, then merges only if this run passes.
+  merge_group:
+    types: [checks_requested]
   pull_request:
   workflow_dispatch:
 
@@ -68,9 +72,11 @@ jobs:
         run: forge build --sizes
 
       # Saved as soon as the build succeeds, so a later failing step still
-      # leaves the compiled inputs for the next run on this ref.
+      # leaves the compiled inputs for the next run on this ref. A merge queue
+      # ref is temporary, so its run saves nothing that would only evict
+      # develop's cache.
       - name: Save compiler outputs
-        if: steps.compiler-cache.outputs.cache-hit != 'true'
+        if: steps.compiler-cache.outputs.cache-hit != 'true' && github.event_name != 'merge_group'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -182,11 +188,11 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "pull_request" ]; then
+          if [ "$EVENT" = "pull_request" ] || [ "$EVENT" = "merge_group" ]; then
             range="$BASE..HEAD"
           elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
             range="$BEFORE..HEAD"
